@@ -228,6 +228,202 @@ zend_native_status zend_native_execution_finish_direct_frame(
 	return status;
 }
 
+/*
+ * Releasing CVs, the receiver or a discarded return value may run a
+ * destructor that bails out, for example on an uncaught exception during
+ * shutdown. Report that as this frame's bailout so callers still release
+ * their activation state before propagating it.
+ */
+static void zend_native_execute_frame_release(
+	zend_execute_data *execute_data, zend_native_execution_state *state,
+	bool frame_returned, bool observer_already_started)
+{
+	zend_try {
+		if (state->status != ZEND_NATIVE_BAILOUT) {
+			zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
+		}
+		if (observer_already_started
+				&& state->status != ZEND_NATIVE_BAILOUT) {
+			uint32_t call_info = ZEND_CALL_INFO(execute_data);
+
+			if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+				OBJ_RELEASE(Z_OBJ(execute_data->This));
+			} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+				OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
+			}
+		}
+		if (state->original_return_value == NULL
+				&& state->status != ZEND_NATIVE_BAILOUT
+				&& !Z_ISUNDEF(state->discarded_return)) {
+			zval_ptr_dtor(&state->discarded_return);
+		}
+	} zend_catch {
+		state->status = ZEND_NATIVE_BAILOUT;
+	} zend_end_try();
+}
+
+/* The status a frame returned with: unwind or abandon its pending calls,
+ * initialize its result and verify its return type. */
+static zend_always_inline bool zend_native_execute_frame_returned(
+	zend_execute_data *execute_data, zend_native_execution_state *state)
+{
+	bool frame_returned = state->status == ZEND_NATIVE_RETURNED
+		&& EG(exception) == NULL;
+
+	if (state->status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+		state->status = ZEND_NATIVE_EXCEPTION;
+	}
+	if (state->status == ZEND_NATIVE_EXCEPTION) {
+		zend_native_call_direct_unwind(execute_data);
+	} else if (state->status == ZEND_NATIVE_BAILOUT) {
+		zend_native_call_direct_abandon(execute_data);
+	}
+	zend_native_execution_initialize_return_value(
+		execute_data, state->status);
+	if (state->status == ZEND_NATIVE_RETURNED
+			&& (execute_data->func->common.fn_flags
+				& ZEND_ACC_HAS_RETURN_TYPE) != 0) {
+		const zend_arg_info *return_info =
+			execute_data->func->common.arg_info - 1;
+		uint32_t type_mask = ZEND_TYPE_FULL_MASK(return_info->type);
+		zval *return_value = execute_data->return_value;
+
+		if ((type_mask & MAY_BE_NEVER) != 0) {
+			zend_verify_never_error(execute_data->func);
+			state->status = ZEND_NATIVE_EXCEPTION;
+		} else if ((type_mask & MAY_BE_VOID) == 0
+				&& (Z_ISUNDEF_P(return_value)
+					|| !zend_check_type_ex(
+						&return_info->type, return_value, true, false))) {
+			zend_verify_return_error(execute_data->func,
+				Z_ISUNDEF_P(return_value) ? NULL : return_value);
+			state->status = ZEND_NATIVE_EXCEPTION;
+		}
+	}
+	if (state->status == ZEND_NATIVE_BAILOUT) {
+		zend_native_call_direct_abandon(execute_data);
+	}
+	return frame_returned;
+}
+
+/* What follows a bailout out of the entry of a lean frame, as
+ * zend_native_execute_frame_state() continues after it. */
+static void zend_native_execute_frame_settle(
+	zend_execute_data *execute_data, zend_native_execution_state *state,
+	bool observer_already_started)
+{
+	const bool frame_returned =
+		zend_native_execute_frame_returned(execute_data, state);
+
+	if (state->status != ZEND_NATIVE_BAILOUT
+			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+		zend_try {
+			zend_fcall_interrupt(execute_data);
+			if (EG(exception) != NULL) {
+				state->status = ZEND_NATIVE_EXCEPTION;
+			}
+		} zend_catch {
+			state->status = EG(exception) != NULL
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+		} zend_end_try();
+	}
+	zend_native_execute_frame_release(execute_data, state, frame_returned,
+		observer_already_started);
+}
+
+/*
+ * The common entry from C (a callback, an include, a magic method): no
+ * generator, no observer, no DTrace probe. One zend_try covers the frame;
+ * a bailout continues as zend_native_execute_frame_state() would at the
+ * point where it happened, and one out of the return processing, which
+ * that function leaves unprotected, propagates.
+ */
+static zend_never_inline zend_native_status zend_native_execute_frame_lean(
+	zend_native_frame_entry_t entry, zend_execute_data *execute_data,
+	bool observer_already_started, zend_native_execution_state *state)
+{
+	zend_native_execution_context context;
+	volatile uint32_t phase = 0;
+	volatile bool frame_returned = false;
+
+	zend_native_execution_state_init(state, false);
+	state->status = ZEND_NATIVE_BAILOUT;
+	state->original_return_value = execute_data->return_value;
+	state->observer_started = observer_already_started;
+	state->observer_finished = true;
+#ifdef HAVE_DTRACE
+	state->dtrace_frame_started = false;
+#endif
+	zend_native_execution_context_init(&context);
+	if (state->original_return_value == NULL) {
+		ZVAL_UNDEF(&state->discarded_return);
+		execute_data->return_value = &state->discarded_return;
+	}
+	zend_try {
+		state->status = zend_native_frame_prepare(execute_data) == FAILURE
+			? (EG(exception) != NULL
+				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT)
+			: entry(execute_data, &context);
+		phase = 1;
+		frame_returned =
+			zend_native_execute_frame_returned(execute_data, state);
+		phase = 2;
+		if (state->status != ZEND_NATIVE_BAILOUT
+				&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+			zend_fcall_interrupt(execute_data);
+			if (EG(exception) != NULL) {
+				state->status = ZEND_NATIVE_EXCEPTION;
+			}
+		}
+		phase = 3;
+		if (state->status != ZEND_NATIVE_BAILOUT) {
+			zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
+			if (observer_already_started) {
+				uint32_t call_info = ZEND_CALL_INFO(execute_data);
+
+				if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+					OBJ_RELEASE(Z_OBJ(execute_data->This));
+				} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+					OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
+				}
+			}
+			if (state->original_return_value == NULL
+					&& !Z_ISUNDEF(state->discarded_return)) {
+				zval_ptr_dtor(&state->discarded_return);
+			}
+		}
+		phase = 4;
+	} zend_catch {
+		switch (phase) {
+			case 0:
+				state->status = EG(exception) != NULL
+					? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+				zend_native_execute_frame_settle(
+					execute_data, state, observer_already_started);
+				break;
+			case 2:
+				state->status = EG(exception) != NULL
+					? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
+				zend_native_execute_frame_release(execute_data, state,
+					frame_returned, observer_already_started);
+				break;
+			case 3:
+				state->status = ZEND_NATIVE_BAILOUT;
+				break;
+			default:
+				zend_bailout();
+		}
+	} zend_end_try();
+	if (state->original_return_value == NULL) {
+		execute_data->return_value = NULL;
+	}
+	{
+		zend_native_status status = state->status;
+		zend_native_execution_state_free(state);
+		return status;
+	}
+}
+
 static zend_never_inline zend_native_status zend_native_execute_frame_state(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
@@ -460,7 +656,22 @@ static zend_native_status zend_native_execute_frame_impl(
 	bool observer_already_started)
 {
 	zend_native_execution_state state;
+	zend_native_frame_entry_t entry;
 
+	/* The common entry skips the general frame state machine. */
+	if (EXPECTED(code != NULL && execute_data != NULL
+			&& execute_data->func != NULL
+			&& (ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) == 0
+			&& (execute_data->func->common.fn_flags & ZEND_ACC_GENERATOR) == 0
+			&& !ZEND_OBSERVER_ENABLED
+#ifdef HAVE_DTRACE
+			&& !zend_dtrace_enabled
+#endif
+			&& (entry = zend_native_code_frame_entry(code)) != NULL
+			&& zend_native_code_is_executable(code))) {
+		return zend_native_execute_frame_lean(entry, execute_data,
+			observer_already_started, &state);
+	}
 	return zend_native_execute_frame_state(code, execute_data, diagnostic,
 		observer_already_started, &state);
 }

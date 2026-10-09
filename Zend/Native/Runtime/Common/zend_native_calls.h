@@ -166,6 +166,9 @@ typedef struct _zend_native_reentry_scope {
 	zend_native_reentry_resolver_t resolver;
 	void *resolver_context;
 	struct _zend_native_reentry_scope *previous;
+	/* Identifies the chain of resolvers from this scope on, which keys the
+	 * reentry cache across leaving and entering it again. */
+	uint64_t signature;
 } zend_native_reentry_scope;
 
 typedef enum _zend_native_internal_receiver_kind {
@@ -961,6 +964,12 @@ void zend_native_call_fast_undefined_argument(
  * native code copies the element its byte selects. */
 extern zval zend_native_char_strings[256];
 
+/* Persistent code was retired or replaced: forget the reentry cells kept
+ * across requests. */
+void zend_native_reentry_invalidate_persistent(void);
+/* A few persistent cells go away: forget only them. */
+void zend_native_reentry_forget_cells(
+	const zend_native_entry_cell *const *cells, uint32_t count);
 void zend_native_execution_context_init(
 	zend_native_execution_context *context);
 /*
