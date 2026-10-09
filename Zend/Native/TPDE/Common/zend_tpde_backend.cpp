@@ -9600,6 +9600,9 @@ bool initialize_plan(
 							ZEND_NATIVE_HELPER_CALL_FAST_DYNAMIC_INIT);
 						require_runtime_helper(
 							plan,
+							ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT);
+						require_runtime_helper(
+							plan,
 							ZEND_NATIVE_HELPER_CALL_FAST_SEND);
 						require_runtime_helper(
 							plan,

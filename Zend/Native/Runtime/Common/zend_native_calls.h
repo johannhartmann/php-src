@@ -907,6 +907,9 @@ typedef struct _zend_native_call_dynamic_init_result {
 zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor);
+zend_native_call_dynamic_init_result zend_native_call_fast_method_init(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor);
 uint32_t zend_native_call_fast_send(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,
