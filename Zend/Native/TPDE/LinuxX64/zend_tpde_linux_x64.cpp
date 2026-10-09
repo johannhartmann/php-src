@@ -15092,6 +15092,10 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto left_reg = left.alloc_gp();
 		auto right_reg = right.alloc_gp();
 		auto decision_reg = decision.alloc_gp();
+		/* A lazy mutation leaves its result in the register only when it
+		 * read the previous value from the register too: a value read
+		 * from the slot is the slot's, which the result must update. */
+		bool left_from_register = false;
 
 			if (node.assign_op_left_operand_index < node.operands.size()
 					&& adaptor->representation(
@@ -15107,6 +15111,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					val_ref_single(
 						node.operands[node.assign_op_left_operand_index]);
 				ASM(MOV64rr, left_reg, left_value.load_to_reg());
+				left_from_register = true;
 			} else if (node.assign_op_left_operand_index < node.operands.size()
 					&& adaptor->machine_kind(
 						node.operands[node.assign_op_left_operand_index])
@@ -15118,6 +15123,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(MOV64rr, left_reg, payload.load_to_reg());
 			ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
 			generate_raw_jump(Jump::jne, slow);
+			left_from_register = true;
 		} else {
 			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
@@ -15250,7 +15256,8 @@ bool ZendCompilerX64::compile_inst_impl(
 				return false;
 			}
 		}
-		if (!(node.mutation_result && mir.mutation_lazy_scalar)) {
+		if (!(node.mutation_result && mir.mutation_lazy_scalar
+				&& left_from_register)) {
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(layout.left_offset)),
@@ -15338,6 +15345,20 @@ bool ZendCompilerX64::compile_inst_impl(
 		/* Address of the updated integer when it is not the CV slot itself. */
 		ScratchReg target{this};
 		AsmReg target_reg{};
+		/* As for ASSIGN_OP: only a value read from the register may leave
+		 * the slot behind. */
+		const bool lazy_register_operand =
+			node.mutation_result && mir.mutation_lazy_scalar
+			&& !node.operands.empty()
+			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+			&& ((adaptor->representation(node.operands[0])
+						== ZEND_MIR_REPRESENTATION_I64
+					&& adaptor->exact_type(node.operands[0])
+						== ZEND_MIR_SCALAR_TYPE_I64
+					&& adaptor->machine_kind(node.operands[0])
+						== ZEND_TPDE_MACHINE_VALUE_I64)
+				|| adaptor->machine_kind(node.operands[0])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 
 		if (!node.operands.empty()
 				&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
@@ -15401,7 +15422,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				generate_raw_jump(Jump::jne, slow);
 			});
 			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
-		} else if (!(node.mutation_result && mir.mutation_lazy_scalar)) {
+		} else if (!lazy_register_operand) {
 			/*
 			 * The CV may hold a reference, as for an int &$value parameter.
 			 * Update an untyped reference's integer in place; typed
@@ -15511,7 +15532,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (target.has_reg()) {
 			ASM(MOV64mr, FE_MEM(target_reg, 0, FE_NOREG, 0), value_reg);
-		} else if (!(node.mutation_result && mir.mutation_lazy_scalar)) {
+		} else if (!lazy_register_operand) {
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(layout.operand_offset)),
