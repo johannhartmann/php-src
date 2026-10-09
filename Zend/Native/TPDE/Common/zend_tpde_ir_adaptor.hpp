@@ -11476,14 +11476,24 @@ public:
 	}
 	bool block_is_cold(IRBlockRef block) const {
 		const uint32_t index = static_cast<uint32_t>(block);
-		return (index < profile_cold_blocks_.size()
-				&& profile_cold_blocks_[index] != 0)
-			|| active_->block_is_cold(block);
+		if (index < profile_cold_blocks_.size()
+				&& profile_cold_blocks_[index] != profile_block_default) {
+			return profile_cold_blocks_[index] == profile_block_cold;
+		}
+		return active_->block_is_cold(block);
 	}
-	/* Blocks a layout profile found rarely entered: the cold area holds
-	 * them (Linux x86-64), as it holds guarded cold blocks. */
+	/* A layout profile's placement of each block: rarely entered blocks
+	 * go to the cold area (Linux x86-64), as guarded cold blocks do, and
+	 * often entered guarded cold blocks stay in the hot stream. */
+	static constexpr uint8_t profile_block_default = 0;
+	static constexpr uint8_t profile_block_cold = 1;
+	static constexpr uint8_t profile_block_hot = 2;
 	void set_profile_cold_blocks(std::vector<uint8_t> blocks) {
 		profile_cold_blocks_ = std::move(blocks);
+	}
+	/* The block kinds placed in the cold area without a profile. */
+	bool block_kind_is_cold(IRBlockRef block) const {
+		return active_->block_is_cold(block);
 	}
 	std::span<const IRValueRef> block_phis(IRBlockRef block) const {
 		return active_->block_phis(block);
