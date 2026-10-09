@@ -1393,6 +1393,40 @@ zend_string *accel_make_persistent_key(zend_string *str)
 	return str;
 }
 
+#ifdef HAVE_NATIVE_ENGINE
+/*
+ * Whether no other script's native code can bind to this one: it declares
+ * no function, class or constant, so only its own main code and closures
+ * run from it, and its replacement has its own opcodes.
+ */
+static bool zend_accel_script_binds_nothing(
+	const zend_persistent_script *persistent_script)
+{
+	const zend_op_array *main = &persistent_script->script.main_op_array;
+
+	if (zend_hash_num_elements(&persistent_script->script.function_table) != 0
+			|| zend_hash_num_elements(&persistent_script->script.class_table) != 0) {
+		return false;
+	}
+	for (uint32_t i = 0; i < main->last; i++) {
+		switch (main->opcodes[i].opcode) {
+			case ZEND_DECLARE_CONST:
+			case ZEND_DECLARE_FUNCTION:
+			case ZEND_DECLARE_CLASS:
+			case ZEND_DECLARE_CLASS_DELAYED:
+			case ZEND_DECLARE_ANON_CLASS:
+				return false;
+		}
+	}
+	return true;
+}
+
+static bool accel_native_owner_discarded(const zend_script *owner)
+{
+	return ((const zend_persistent_script *) owner)->corrupted;
+}
+#endif
+
 /**
  * Discard a #zend_persistent_script currently stored in shared
  * memory.
@@ -1414,10 +1448,16 @@ static void zend_accel_discard_script(zend_persistent_script *persistent_script)
 	 * generation. Every process observes this shared generation before its
 	 * next userland entry, retires its process-local mapping after
 	 * quiescence and publishes a fresh generation for the replacement
-	 * script.
+	 * script. A script nothing binds to, such as a cache file rewritten
+	 * every request, retires only its own generation.
 	 */
-	(void) __atomic_add_fetch(
-		&ZCSG(native_generation), 1, __ATOMIC_RELEASE);
+	if (zend_accel_script_binds_nothing(persistent_script)) {
+		(void) __atomic_add_fetch(
+			&ZCSG(native_discards), 1, __ATOMIC_RELEASE);
+	} else {
+		(void) __atomic_add_fetch(
+			&ZCSG(native_generation), 1, __ATOMIC_RELEASE);
+	}
 #endif
 	ZSMMG(wasted_shared_memory) += persistent_script->dynamic_members.memory_consumption;
 	if (ZSMMG(memory_exhausted)) {
@@ -3063,9 +3103,16 @@ ZEND_RINIT_FUNCTION(zend_accelerator)
 		uint64_t native_generation = __atomic_load_n(
 			&ZCSG(native_generation), __ATOMIC_ACQUIRE);
 
+		uint64_t native_discards = __atomic_load_n(
+			&ZCSG(native_discards), __ATOMIC_ACQUIRE);
+
 		if (ZCG(native_generation) != native_generation) {
 			ZCG(native_generation) = native_generation;
+			ZCG(native_discards) = native_discards;
 			zend_native_executor_invalidate();
+		} else if (ZCG(native_discards) != native_discards) {
+			ZCG(native_discards) = native_discards;
+			zend_native_executor_retire_owners(accel_native_owner_discarded);
 		}
 		/* A finished layout training: recompile with its profile. */
 		if (zend_native_executor_take_layout_restart()
@@ -3632,6 +3679,8 @@ static zend_result accel_post_startup(void)
 #ifdef HAVE_NATIVE_ENGINE
 		ZCG(native_generation) = __atomic_load_n(
 			&ZCSG(native_generation), __ATOMIC_ACQUIRE);
+		ZCG(native_discards) = __atomic_load_n(
+			&ZCSG(native_discards), __ATOMIC_ACQUIRE);
 #endif
 
 		zend_shared_alloc_lock();

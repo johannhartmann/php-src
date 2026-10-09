@@ -26,6 +26,9 @@ typedef struct _zend_native_executor_generation {
 	uint32_t indexed_publication_count;
 	uint32_t active_requests;
 	bool persistent;
+	/* Retired for its discarded script, not by an epoch: reaped once no
+	 * request holds it. */
+	bool owner_retired;
 	bool owns_script_tables;
 	/* See zend_native_executor_script_links_at_runtime(). */
 	bool links_at_runtime;
@@ -1315,8 +1318,9 @@ static void zend_native_executor_reap_retired_locked(void)
 		zend_native_executor_generation *generation = *link;
 
 		if (generation->active_requests != 0
-				|| zend_native_executor_epoch_is_active_locked(
-					generation->epoch)
+				|| (!generation->owner_retired
+					&& zend_native_executor_epoch_is_active_locked(
+						generation->epoch))
 				|| !zend_native_compiler_is_quiescent(
 				generation->compiler)) {
 			link = &generation->next;
@@ -1348,6 +1352,41 @@ static void zend_native_executor_retire_stale(uint64_t epoch)
 				generation->compiler)) {
 			zend_native_executor_destroy_generation(generation);
 		} else {
+			generation->next = zend_native_executor_retired_generations;
+			zend_native_executor_retired_generations = generation;
+		}
+	}
+	zend_native_executor_reap_retired_locked();
+	zend_native_executor_generation_unlock();
+}
+
+void zend_native_executor_retire_owners(
+	bool (*discarded)(const zend_script *owner))
+{
+	zend_native_executor_generation **link =
+		&zend_native_executor_persistent_generations;
+
+	if (discarded == NULL) {
+		return;
+	}
+	zend_native_executor_generation_lock();
+	while (*link != NULL) {
+		zend_native_executor_generation *generation = *link;
+
+		if (generation->owner == NULL || !discarded(generation->owner)) {
+			link = &generation->next;
+			continue;
+		}
+		*link = generation->next;
+		/* No lookup finds it again; the replacement script has its own
+		 * opcodes and owner. */
+		zend_native_executor_unregister_generation_locked(generation);
+		if (generation->active_requests == 0
+				&& zend_native_compiler_is_quiescent(
+					generation->compiler)) {
+			zend_native_executor_destroy_generation(generation);
+		} else {
+			generation->owner_retired = true;
 			generation->next = zend_native_executor_retired_generations;
 			zend_native_executor_retired_generations = generation;
 		}
