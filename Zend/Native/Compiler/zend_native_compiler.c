@@ -2984,7 +2984,10 @@ static zend_op_array *zend_native_compiler_retain_runtime_source(
 	 * retaining that object would incorrectly extend the lifetime of bound
 	 * values.  Keep an independent metadata copy and one shared-code refcount
 	 * lease so native code never points through the ephemeral closure object. */
-	if (resolved->refcount == NULL) {
+	/* A closure of a cached script shares immutable code without a
+	 * refcount, but its op_array is still the copy inside the closure. */
+	if (resolved->refcount == NULL
+			&& (resolved->fn_flags & ZEND_ACC_CLOSURE) == 0) {
 		return zend_hash_index_add_ptr(
 			&compiler->source_op_arrays_by_opcodes, key, resolved) != NULL
 			? resolved : NULL;
@@ -2995,7 +2998,9 @@ static zend_op_array *zend_native_compiler_retain_runtime_source(
 	if (retained->op_array.function_name != NULL) {
 		zend_string_addref(retained->op_array.function_name);
 	}
-	(*retained->op_array.refcount)++;
+	if (retained->op_array.refcount != NULL) {
+		(*retained->op_array.refcount)++;
+	}
 	retained->op_array.fn_flags &= ~ZEND_ACC_HEAP_RT_CACHE;
 	ZEND_MAP_PTR_INIT(retained->op_array.run_time_cache, NULL);
 	ZEND_MAP_PTR_INIT(retained->op_array.static_variables_ptr, NULL);
