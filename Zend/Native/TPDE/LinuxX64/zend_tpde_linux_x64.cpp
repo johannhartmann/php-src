@@ -3192,23 +3192,55 @@ public:
 				static_cast<uint32_t>(block) + 1);
 		}
 		if (layout_profile.all) {
-			cold.assign(block_count, 0);
+			/* Every other block cold, every fourth guarded slow path
+			 * hot. */
+			cold.assign(block_count, Adaptor::profile_block_default);
 			for (uint32_t block = 1; block < block_count; block += 2) {
-				cold[block] = block != entry ? 1 : 0;
+				cold[block] = block != entry
+					? Adaptor::profile_block_cold
+					: Adaptor::profile_block_default;
+			}
+			for (IRBlockRef ref : adaptor->cur_blocks()) {
+				const uint32_t block = static_cast<uint32_t>(ref);
+				if (block % 4 == 0 && block != entry
+						&& adaptor->block_kind_is_cold(ref)) {
+					cold[block] = Adaptor::profile_block_hot;
+				}
 			}
 		} else if (const auto counted = layout_profile.blocks.find(key);
 				counted != layout_profile.blocks.end()) {
 			const auto calls = counted->second.find(entry);
 			if (calls != counted->second.end()
 					&& calls->second >= layout_minimum_calls) {
-				cold.assign(block_count, 0);
-				for (uint32_t block = 0; block < block_count; ++block) {
-					const auto entered = counted->second.find(block);
-					const uint64_t entries =
-						entered == counted->second.end()
-							? 0 : entered->second;
-					cold[block] = block != entry
-						&& entries * 100 < calls->second ? 1 : 0;
+				std::vector<uint64_t> entries(block_count, 0);
+				for (const auto &[block, count] : counted->second) {
+					if (block < block_count) {
+						entries[block] = count;
+					}
+				}
+				std::vector<uint64_t> predecessor_entries(block_count, 0);
+				for (IRBlockRef block : adaptor->cur_blocks()) {
+					for (IRBlockRef successor : adaptor->block_succs(block)) {
+						predecessor_entries[static_cast<uint32_t>(successor)]
+							+= entries[static_cast<uint32_t>(block)];
+					}
+				}
+				cold.assign(block_count, Adaptor::profile_block_default);
+				for (IRBlockRef ref : adaptor->cur_blocks()) {
+					const uint32_t block = static_cast<uint32_t>(ref);
+					if (block == entry) {
+						continue;
+					}
+					if (entries[block] * 100 < calls->second) {
+						cold[block] = Adaptor::profile_block_cold;
+					} else if (adaptor->block_kind_is_cold(ref)
+							&& entries[block] * 3
+								>= predecessor_entries[block]) {
+						/* A slow path taken in a third of the runs or more
+						 * costs fewer taken jumps inline than out of line:
+						 * one for the fast path against two for it. */
+						cold[block] = Adaptor::profile_block_hot;
+					}
 				}
 			}
 		}
