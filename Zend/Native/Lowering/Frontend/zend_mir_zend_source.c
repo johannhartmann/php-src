@@ -3200,6 +3200,10 @@ static uint32_t zend_mir_frontend_return_type_mask(
 			|| (function->common.fn_flags & ZEND_ACC_RETURN_REFERENCE) != 0) {
 		return 0;
 	}
+	/* A class name in the type admits objects the mask does not show. */
+	if (!ZEND_TYPE_IS_ONLY_MASK(function->common.arg_info[-1].type)) {
+		return 0;
+	}
 	type = ZEND_TYPE_PURE_MASK(function->common.arg_info[-1].type);
 	switch (type) {
 		case MAY_BE_NULL:
