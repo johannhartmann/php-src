@@ -4519,6 +4519,86 @@ zend_native_call_fast_receive_prepare(
 }
 
 /*
+ * An argument a fast frame passes to a by-reference parameter
+ * (fast_ref_mask): a CV sent with SEND_VAR_EX or SEND_REF, or a property or
+ * element fetched for writing (SEND_REF, or SEND_FUNC_ARG of the FUNC_ARG
+ * fetch's VAR), at its own position. The sends store the CV's value or move
+ * the VAR; the fast Do passes the reference instead.
+ */
+static bool zend_native_call_fast_reference_argument(
+	const zend_native_direct_internal_call_argument *argument,
+	const zend_native_user_call_placement *placement,
+	uint32_t index, uint32_t extra_flags)
+{
+	const zend_mir_source_slot_kind slot_kind =
+		argument->source_operand.slot_kind;
+
+	return index < 32
+		&& argument->auxiliary_operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+		&& (argument->source_operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| argument->source_operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& (argument->source_opcode == ZEND_SEND_REF
+			? argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+				&& (slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+					|| slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+			: argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+				&& ((argument->source_opcode == ZEND_SEND_VAR_EX
+						&& slot_kind == ZEND_MIR_SOURCE_SLOT_CV)
+					|| (argument->source_opcode == ZEND_SEND_FUNC_ARG
+						&& slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)))
+		&& placement->source_index == index
+		&& placement->target_index == index
+		&& (placement->flags
+			& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
+				| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
+				| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_SHOULD_REF
+				| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF
+				| extra_flags)) == 0;
+}
+
+/*
+ * The fast Do of a site with by-reference parameters: the sends stored the
+ * argument by value (a CV's copy) or moved the FUNC_ARG fetch's result (an
+ * INDIRECT to the property or element, a reference, or a temporary); pass
+ * references instead, as the VM's SEND_VAR_EX and SEND_FUNC_ARG make them
+ * (an undefined CV becoming null, a temporary a new reference).
+ */
+static void zend_native_call_fast_pass_references(
+	zend_execute_data *caller, zend_execute_data *call,
+	const zend_native_user_call_descriptor *descriptor, uint32_t mask)
+{
+	do {
+		const uint32_t index = (uint32_t) __builtin_ctz(mask);
+		const zend_mir_source_operand_ref *source =
+			&descriptor->arguments[index].source_operand;
+		zval *argument = ZEND_CALL_ARG(call, index + 1);
+		zval *variable;
+
+		if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			variable = ZEND_CALL_VAR_NUM(caller, source->index);
+			zval_ptr_dtor_nogc(argument);
+			if (Z_ISUNDEF_P(variable)) {
+				ZVAL_NULL(variable);
+			}
+		} else if (Z_TYPE_P(argument) == IS_INDIRECT) {
+			variable = Z_INDIRECT_P(argument);
+		} else {
+			/* A reference or a temporary result: the argument owns it. */
+			ZVAL_MAKE_REF_EX(argument, 1);
+			mask &= mask - 1;
+			continue;
+		}
+		if (Z_ISREF_P(variable)) {
+			Z_ADDREF_P(variable);
+		} else {
+			ZVAL_MAKE_REF_EX(variable, 2);
+		}
+		ZVAL_REF(argument, Z_REF_P(variable));
+		mask &= mask - 1;
+	} while (mask != 0);
+}
+
+/*
  * Whether an internal function outlives the request: one of a module, or a
  * method of a persistent class (an enum's arena-allocated cases(), from()
  * and tryFrom() live as long as the immutable enum).
@@ -4698,6 +4778,18 @@ static void zend_native_call_fast_publish_internal(
 		const bool variadic_flag = variadic_target
 			&& index + 1 >= function->common.num_args;
 
+		if (ARG_MAY_BE_SENT_BY_REF(function, index + 1)) {
+			return;
+		}
+		if (ARG_SHOULD_BE_SENT_BY_REF(function, index + 1)) {
+			if (!zend_native_call_fast_reference_argument(argument,
+					placement, index, variadic_flag
+						? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC : 0)) {
+				return;
+			}
+			header->fast_ref_mask |= UINT32_C(1) << index;
+			continue;
+		}
 		if (placement->source_index != index
 				|| (!variadic && placement->target_index != index)
 				|| argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
@@ -4709,38 +4801,13 @@ static void zend_native_call_fast_publish_internal(
 					&& argument->source_opcode != ZEND_SEND_VAR_EX
 					&& argument->source_opcode != ZEND_SEND_FUNC_ARG
 					&& argument->source_opcode != ZEND_SEND_VAR_NO_REF_EX)
-				|| ARG_MAY_BE_SENT_BY_REF(function, index + 1)) {
-			return;
-		}
-		if (!ARG_SHOULD_BE_SENT_BY_REF(function, index + 1)) {
-			if ((placement->flags
-					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
-						| (variadic_flag
-							? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC
-							: 0))) != 0) {
-				return;
-			}
-			continue;
-		}
-		if (index >= 32
-				|| argument->source_opcode != ZEND_SEND_VAR_EX
-				|| (argument->source_operand.kind
-						!= ZEND_MIR_SOURCE_OPERAND_SLOT
-					&& argument->source_operand.kind
-						!= ZEND_MIR_SOURCE_OPERAND_SSA)
-				|| argument->source_operand.slot_kind
-					!= ZEND_MIR_SOURCE_SLOT_CV
 				|| (placement->flags
 					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
-						| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
-						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_SHOULD_REF
-						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF
 						| (variadic_flag
 							? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC
 							: 0))) != 0) {
 			return;
 		}
-		header->fast_ref_mask |= UINT32_C(1) << index;
 	}
 	header->fast_key = key;
 	header->fast_function = function;
@@ -4885,29 +4952,11 @@ static void zend_native_call_fast_publish(
 		const zend_native_direct_internal_call_argument *argument =
 			&descriptor->arguments[index];
 
-		/* A CV sent with SEND_VAR_EX to a declared by-reference parameter:
-		 * the resolution leaves it to the runtime tail, and the fast Do
-		 * passes the reference instead (fast_ref_mask). */
-		if (index < 32 && index < op_array->num_args
+		/* A declared by-reference parameter (fast_ref_mask). */
+		if (index < op_array->num_args
 				&& ZEND_ARG_SEND_MODE(&op_array->arg_info[index]) != 0
-				&& argument->source_opcode == ZEND_SEND_VAR_EX
-				&& argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-				&& argument->auxiliary_operand.kind
-					== ZEND_MIR_SOURCE_OPERAND_UNUSED
-				&& (argument->source_operand.kind
-						== ZEND_MIR_SOURCE_OPERAND_SLOT
-					|| argument->source_operand.kind
-						== ZEND_MIR_SOURCE_OPERAND_SSA)
-				&& argument->source_operand.slot_kind
-					== ZEND_MIR_SOURCE_SLOT_CV
-				&& placement->source_index == index
-				&& placement->target_index == index
-				&& (placement->flags
-					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
-						| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
-						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_SHOULD_REF
-						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF))
-					== 0) {
+				&& zend_native_call_fast_reference_argument(
+					argument, placement, index, 0)) {
 			header->fast_ref_mask |= UINT32_C(1) << index;
 			continue;
 		}
@@ -8925,29 +8974,8 @@ uint32_t zend_native_call_fast_do(
 		return ZEND_NATIVE_RETURNED;
 	}
 	if (UNEXPECTED(dynamic_entry == NULL && header->fast_ref_mask != 0)) {
-		/* SEND_VAR_EX to by-reference parameters: the sends copied the
-		 * CVs; pass references to them instead, as the VM's send makes
-		 * them (an undefined CV becoming null). */
-		uint32_t mask = header->fast_ref_mask;
-
-		do {
-			const uint32_t index = (uint32_t) __builtin_ctz(mask);
-			zval *argument = ZEND_CALL_ARG(callee, index + 1);
-			zval *variable = ZEND_CALL_VAR_NUM(caller,
-				descriptor->arguments[index].source_operand.index);
-
-			zval_ptr_dtor_nogc(argument);
-			if (Z_ISREF_P(variable)) {
-				Z_ADDREF_P(variable);
-			} else {
-				if (Z_ISUNDEF_P(variable)) {
-					ZVAL_NULL(variable);
-				}
-				ZVAL_MAKE_REF_EX(variable, 2);
-			}
-			ZVAL_REF(argument, Z_REF_P(variable));
-			mask &= mask - 1;
-		} while (mask != 0);
+		zend_native_call_fast_pass_references(caller, callee, descriptor,
+			header->fast_ref_mask);
 	}
 	const bool discard = result_offset == UINT32_MAX;
 	zval discarded;
@@ -9045,26 +9073,8 @@ uint32_t zend_native_call_fast_do_internal(
 	(void) context;
 	(void) dynamic_entry;
 	if (UNEXPECTED(header->fast_ref_mask != 0)) {
-		uint32_t mask = header->fast_ref_mask;
-
-		do {
-			const uint32_t index = (uint32_t) __builtin_ctz(mask);
-			zval *argument = ZEND_CALL_ARG(call, index + 1);
-			zval *variable = ZEND_CALL_VAR_NUM(caller,
-				descriptor->arguments[index].source_operand.index);
-
-			zval_ptr_dtor_nogc(argument);
-			if (Z_ISREF_P(variable)) {
-				Z_ADDREF_P(variable);
-			} else {
-				if (Z_ISUNDEF_P(variable)) {
-					ZVAL_NULL(variable);
-				}
-				ZVAL_MAKE_REF_EX(variable, 2);
-			}
-			ZVAL_REF(argument, Z_REF_P(variable));
-			mask &= mask - 1;
-		} while (mask != 0);
+		zend_native_call_fast_pass_references(caller, call, descriptor,
+			header->fast_ref_mask);
 	}
 	caller->call = call->prev_execute_data;
 	call->prev_execute_data = caller;

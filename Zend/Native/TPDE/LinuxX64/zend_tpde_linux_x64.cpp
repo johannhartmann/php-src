@@ -927,6 +927,24 @@ class ZendCompilerX64 final
 				descriptor->arguments[index];
 			const zend_mir_source_operand_ref &source =
 				argument.source_operand;
+			/* SEND_REF of a CV or a VAR (a fetch for writing): the send
+			 * stores the CV's value or moves the VAR, and the fast Do of
+			 * the published site makes the reference (fast_ref_mask). */
+			if (argument.mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+					&& argument.source_opcode == ZEND_SEND_REF
+					&& argument.auxiliary_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					&& argument.ordinal == index
+					&& index < 32
+					&& frame_slot(source)
+					&& (source.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+						|| source.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
+				if (zend_tpde_source_call_phase_at(
+						plan, argument.source_position) == nullptr) {
+					return false;
+				}
+				continue;
+			}
 			if (argument.mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 					|| argument.auxiliary_operand.kind
 						!= ZEND_MIR_SOURCE_OPERAND_UNUSED
@@ -7818,7 +7836,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				 * the undefined CV without a warning; the fast Do makes it
 				 * a null reference. */
 				auto undefined_null = text_writer.label_create();
-				if (argument.source_opcode == ZEND_SEND_VAR_EX
+				if (argument.source_opcode == ZEND_SEND_REF) {
+					generate_raw_jump(Jump::jmp, undefined_null);
+				} else if (argument.source_opcode == ZEND_SEND_VAR_EX
 						&& node.argument_index < 32) {
 					auto descriptor_value = image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
@@ -8080,10 +8100,55 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| node.argument_index >= call.user_call->argument_count) {
 				return false;
 			}
-			/* A fast frame's target takes the argument by value and its
-			 * call info has no by-reference send: nothing to check. */
+			/* A fast frame's target takes the argument by reference
+			 * exactly where its publication set fast_ref_mask: the
+			 * FUNC_ARG fetch and send read the call's by-reference flag.
+			 * The universal check below sets the flag of its own frame
+			 * again. */
 			std::optional<TargetBranchState> check_spilled;
 			auto checked_done = text_writer.label_create();
+			if (fast_site) {
+				auto descriptor_value = image_symbol_value(
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
+				auto descriptor_scratch =
+					std::move(descriptor_value).into_scratch(this);
+				ScratchReg callee{this};
+				ScratchReg info{this};
+				auto callee_reg = callee.alloc_gp();
+				auto info_reg = info.alloc_gp();
+				auto by_value = text_writer.label_create();
+				ASM(MOV64rm, callee_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, call))));
+				ASM(MOV32rm, info_reg,
+					FE_MEM(callee_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))));
+				ASM(AND32ri, info_reg,
+					static_cast<int32_t>(~ZEND_CALL_SEND_ARG_BY_REF));
+				if (node.argument_index < 32
+						&& !source_call_fast_dynamic(call)) {
+					ASM(TEST32mi,
+						FE_MEM(descriptor_scratch.cur_reg(), 0, FE_NOREG,
+							-static_cast<int32_t>(sizeof(
+								zend_native_user_call_site_header))
+							+ static_cast<int32_t>(offsetof(
+								zend_native_user_call_site_header,
+								fast_ref_mask))),
+						static_cast<int32_t>(
+							UINT32_C(1) << node.argument_index));
+					generate_raw_jump(Jump::je, by_value);
+					ASM(OR32ri, info_reg,
+						static_cast<int32_t>(ZEND_CALL_SEND_ARG_BY_REF));
+				}
+				label_place(by_value);
+				ASM(MOV32mr,
+					FE_MEM(callee_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_execute_data, This)
+							+ offsetof(zval, u1.type_info))),
+					info_reg);
+			}
 			if (fast_site) {
 				check_spilled.emplace(spill_target_branch_state());
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
