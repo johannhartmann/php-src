@@ -29,7 +29,7 @@ typedef void (*zend_native_frame_probe_t)(
  * check or coercion (untyped parameters accept every type), and a missing
  * parameter takes the immutable RECV_INIT literal defaults[i] as is.
  */
-#define ZEND_NATIVE_CALL_FAST_RECEIVE_MAX 8
+#define ZEND_NATIVE_CALL_FAST_RECEIVE_MAX 16
 
 typedef enum _zend_native_call_fast_receive_state {
 	ZEND_NATIVE_CALL_FAST_RECEIVE_UNKNOWN = 0,
@@ -40,8 +40,15 @@ typedef enum _zend_native_call_fast_receive_state {
 typedef struct _zend_native_call_fast_receive {
 	uint32_t state;
 	uint32_t num_args;
+	/* Bit n: parameter n names a class, which type_masks cannot express. */
+	uint32_t class_mask;
 	uint32_t type_masks[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 	const zval *defaults[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
+	/* Per class-typed parameter: the class of the last object argument the
+	 * parameter's check accepted without coercion. The check depends only
+	 * on that class, so an object of it is accepted again without the
+	 * generic check; only classes that outlive the request are kept. */
+	const zend_class_entry *classes[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 } zend_native_call_fast_receive;
 
 /*

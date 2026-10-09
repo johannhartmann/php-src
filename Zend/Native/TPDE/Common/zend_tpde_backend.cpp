@@ -6045,6 +6045,7 @@ bool freeze_fast_call_receive(
 		return false;
 	}
 	plan->fast_call_min_arguments = 0;
+	plan->fast_call_class_mask = 0;
 	plan->fast_call_variadic =
 		(op_array->fn_flags & ZEND_ACC_VARIADIC) != 0;
 	if (plan->fast_call_variadic) {
@@ -6068,6 +6069,11 @@ bool freeze_fast_call_receive(
 
 		plan->fast_call_type_masks[index] = mask;
 		plan->fast_call_default_literals[index] = UINT32_MAX;
+		if (ZEND_TYPE_IS_SET(info->type)
+				&& (ZEND_TYPE_HAS_NAME(info->type)
+					|| ZEND_TYPE_HAS_LIST(info->type))) {
+			plan->fast_call_class_mask |= UINT32_C(1) << index;
+		}
 		if (ZEND_ARG_SEND_MODE(info) != 0) {
 			/* A by-reference parameter is received by the general Do. */
 			return false;

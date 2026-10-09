@@ -2396,6 +2396,9 @@ struct zend_tpde_plan {
 	 * (UINT32_MAX untyped). */
 	uint32_t fast_call_default_literals[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 	uint32_t fast_call_type_masks[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
+	/* Bit n: parameter n names a class; an object argument of the class
+	 * the parameter last accepted (the target cell's fast_receive) fits. */
+	uint32_t fast_call_class_mask;
 	/* Bit n: CV n may hold a counted value when the function returns (by
 	 * Zend's type inference); the entry releases only those. */
 	uint64_t fast_call_counted_cvs;
