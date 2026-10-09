@@ -4519,40 +4519,168 @@ zend_native_call_fast_receive_prepare(
 }
 
 /*
- * A by-name site whose target is an internal function (a namespaced call
- * of strlen(), say): its Init pushes the frame from the header as for a
- * user target, the sends store the arguments by value, and the Do runs the
- * handler (zend_native_call_fast_do_internal()). A by-reference parameter
- * takes only a CV sent with SEND_VAR_EX (fast_ref_mask), as for a user
- * target; a deprecated or #[\NoDiscard] function keeps the universal
+ * Whether an internal function outlives the request: one of a module, or a
+ * method of a persistent class (an enum's arena-allocated cases(), from()
+ * and tryFrom() live as long as the immutable enum).
+ */
+static bool zend_native_call_internal_function_persistent(
+	const zend_function *function)
+{
+	const zend_class_entry *scope = function->common.scope;
+
+	if ((function->common.fn_flags & ZEND_ACC_ARENA_ALLOCATED) == 0) {
+		return scope == NULL || scope->type == ZEND_INTERNAL_CLASS
+			|| (scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0;
+	}
+	return scope != NULL && (scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0;
+}
+
+/* A class that outlives the request: internal or immutable (cached). */
+static zend_always_inline bool zend_native_call_class_persistent(
+	const zend_class_entry *ce)
+{
+	return ce != NULL && (ce->type == ZEND_INTERNAL_CLASS
+		|| (ce->ce_flags & ZEND_ACC_IMMUTABLE) != 0);
+}
+
+/*
+ * A site whose target is an internal function or method (a namespaced call
+ * of strlen(), $statement->fetch(), parent::__construct() of an internal
+ * class, new ArrayIterator(...)): its Init pushes the frame from the header
+ * as for a user target, the sends store the arguments by value, and the Do
+ * runs the handler (zend_native_call_fast_do_internal()). Arguments past the
+ * declared parameters of a variadic function stay positional, as
+ * ZEND_DO_ICALL passes them. A by-reference parameter takes only a CV sent
+ * with SEND_VAR_EX (fast_ref_mask), as for a user target. Method sites key
+ * the receiver class, whose standard method and constructor lookup the
+ * resolution ran; a deprecated or #[\NoDiscard] function keeps the universal
  * protocol, whose preflight reports it.
  */
 static void zend_native_call_fast_publish_internal(
+	const zend_execute_data *caller,
 	zend_native_user_call_site_header *header,
 	const zend_native_user_call_descriptor *descriptor,
 	const zend_native_call_resolution_cache_entry *entry)
 {
 	const zend_native_user_call_resolution *resolution = &entry->resolution;
 	zend_function *function = resolution->function;
+	const void *key = NULL;
+	uint32_t static_mode = 0;
 	uint32_t index;
 
 	if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION
-			|| (descriptor->init_opcode != ZEND_INIT_FCALL
-				&& descriptor->init_opcode != ZEND_INIT_FCALL_BY_NAME
-				&& descriptor->init_opcode != ZEND_INIT_NS_FCALL_BY_NAME)
-			|| descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-			|| resolution->object_or_called_scope != NULL
-			|| resolution->call_info != ZEND_CALL_NESTED_FUNCTION
 			|| resolution->extra_named_params != NULL
 			|| (resolution->placement_flags
-				& ~ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS) != 0
+				& ~(ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS
+					| ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_EXPANSION)) != 0
 			|| entry->argument_count != descriptor->argument_count
 			|| entry->argument_count != resolution->placement_count
 			|| descriptor->initial_argument_count
 				!= descriptor->argument_count
+			|| (resolution->call_info & ~(ZEND_CALL_NESTED_FUNCTION
+				| ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS)) != 0
 			|| (function->common.fn_flags
-				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD)) != 0) {
+				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
+					| ZEND_ACC_CALL_VIA_TRAMPOLINE
+					| ZEND_ACC_FAKE_CLOSURE)) != 0) {
 		return;
+	}
+	switch (descriptor->init_opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+			if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| resolution->object_or_called_scope != NULL
+					|| resolution->call_info != ZEND_CALL_NESTED_FUNCTION) {
+				return;
+			}
+			break;
+		case ZEND_INIT_METHOD_CALL: {
+			const zend_object *object = resolution->object_or_called_scope;
+			const zend_mir_source_operand_ref *receiver = &descriptor->init_op1;
+
+			/* $this keeps its receiver; a CV receiver is retained by the
+			 * call, a temporary one moves into it. */
+			if (object == NULL
+					|| descriptor->init_op2.kind
+						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| (function->common.fn_flags & ZEND_ACC_STATIC) != 0
+					|| (resolution->call_info & ZEND_CALL_HAS_THIS) == 0
+					|| object->handlers != object->ce->default_object_handlers
+					|| object->handlers->get_method != zend_std_get_method
+					|| (receiver->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+						? (resolution->call_info & ZEND_CALL_RELEASE_THIS)
+							!= 0
+						: (receiver->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+								&& receiver->kind
+									!= ZEND_MIR_SOURCE_OPERAND_SSA)
+							|| (resolution->call_info
+								& ZEND_CALL_RELEASE_THIS) == 0)) {
+				return;
+			}
+			key = object->ce;
+			break;
+		}
+		case ZEND_INIT_STATIC_METHOD_CALL: {
+			const uint32_t fetch =
+				descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+			const bool unused =
+				descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED;
+			const bool forwarding = unused
+				&& (fetch == ZEND_FETCH_CLASS_SELF
+					|| fetch == ZEND_FETCH_CLASS_PARENT);
+			const bool late = unused && fetch == ZEND_FETCH_CLASS_STATIC;
+
+			if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| (descriptor->init_op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& !forwarding && !late)) {
+				return;
+			}
+			if ((function->common.fn_flags & ZEND_ACC_STATIC) == 0) {
+				/* self::/parent:: of an instance method keeps $this. */
+				if (!forwarding || resolution->call_info
+						!= (ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_HAS_THIS)) {
+					return;
+				}
+				static_mode = ZEND_NATIVE_CALL_FAST_STATIC_THIS;
+			} else if (resolution->call_info != ZEND_CALL_NESTED_FUNCTION) {
+				return;
+			} else if (forwarding) {
+				static_mode = ZEND_NATIVE_CALL_FAST_STATIC_FORWARD;
+			} else if (late) {
+				static_mode = ZEND_NATIVE_CALL_FAST_STATIC_LATE;
+			}
+			key = resolution->object_or_called_scope;
+			break;
+		}
+		case ZEND_NEW: {
+			const zend_object *object = resolution->object_or_called_scope;
+
+			/* new C(...) of a literal class whose public constructor the
+			 * standard handler returns, as zend_native_call_fast_new()
+			 * calls it on the object it creates. */
+			if (object == NULL
+					|| descriptor->init_op1.kind
+						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| (resolution->call_info
+						& (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS))
+						!= (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS)
+					|| object->handlers != object->ce->default_object_handlers
+					|| object->handlers->get_constructor
+						!= zend_std_get_constructor
+					|| object->ce->constructor != function
+					|| (function->common.fn_flags & ZEND_ACC_PUBLIC) == 0
+					|| zend_native_call_source_slot(
+						(zend_execute_data *) caller,
+						&descriptor->init_result) == NULL) {
+				return;
+			}
+			key = object->ce;
+			break;
+		}
+		default:
+			return;
 	}
 	header->fast_ref_mask = 0;
 	for (index = 0; index < entry->argument_count; index++) {
@@ -4560,9 +4688,18 @@ static void zend_native_call_fast_publish_internal(
 			&entry->placements[index];
 		const zend_native_direct_internal_call_argument *argument =
 			&descriptor->arguments[index];
+		/* An argument past the declared parameters of a variadic
+		 * function stays positional; placements flag the last declared
+		 * parameter of a variadic function, too. */
+		const bool variadic_target =
+			(function->common.fn_flags & ZEND_ACC_VARIADIC) != 0;
+		const bool variadic = variadic_target
+			&& index >= function->common.num_args;
+		const bool variadic_flag = variadic_target
+			&& index + 1 >= function->common.num_args;
 
 		if (placement->source_index != index
-				|| placement->target_index != index
+				|| (!variadic && placement->target_index != index)
 				|| argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 				|| argument->auxiliary_operand.kind
 					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
@@ -4577,8 +4714,10 @@ static void zend_native_call_fast_publish_internal(
 		}
 		if (!ARG_SHOULD_BE_SENT_BY_REF(function, index + 1)) {
 			if ((placement->flags
-					& ~ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK)
-					!= 0) {
+					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
+						| (variadic_flag
+							? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC
+							: 0))) != 0) {
 				return;
 			}
 			continue;
@@ -4595,23 +4734,25 @@ static void zend_native_call_fast_publish_internal(
 					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
 						| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
 						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_SHOULD_REF
-						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF))
-					!= 0) {
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF
+						| (variadic_flag
+							? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC
+							: 0))) != 0) {
 			return;
 		}
 		header->fast_ref_mask |= UINT32_C(1) << index;
 	}
-	header->fast_key = NULL;
+	header->fast_key = key;
 	header->fast_function = function;
 	header->fast_entry = NULL;
 	header->fast_run_time_cache = NULL;
 	header->fast_frame_size =
 		zend_vm_calc_used_stack(entry->argument_count, function);
-	header->fast_call_info = ZEND_CALL_NESTED_FUNCTION;
+	header->fast_call_info = resolution->call_info;
 	header->fast_receive = NULL;
 	header->fast_cell = NULL;
 	header->fast_default_count = 0;
-	header->fast_flags = ZEND_NATIVE_CALL_FAST_INTERNAL;
+	header->fast_flags = ZEND_NATIVE_CALL_FAST_INTERNAL | static_mode;
 	header->fast_do_entry = (void *) zend_native_call_fast_do_internal;
 	header->fast_epoch = zend_native_call_resolution_cache_epoch;
 }
@@ -4632,7 +4773,8 @@ static void zend_native_call_fast_publish(
 	header->fast_epoch = 0;
 	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
 	if (resolution->target_kind == ZEND_NATIVE_USER_CALL_TARGET_INTERNAL) {
-		zend_native_call_fast_publish_internal(header, descriptor, entry);
+		zend_native_call_fast_publish_internal(
+			caller, header, descriptor, entry);
 		return;
 	}
 	if ((resolution->placement_flags
@@ -8513,8 +8655,14 @@ bool zend_native_call_fast_new(
 		}
 		return object_init_ex(result, ce) == SUCCESS;
 	}
+	/* An internal constructor's class may create its objects itself; the
+	 * publication checked that its objects take the standard constructor
+	 * lookup. */
 	if (ce == NULL || ce->constructor != header->fast_function
-			|| ce->create_object != NULL
+			|| (ce->create_object != NULL
+				&& ((header->fast_flags & ZEND_NATIVE_CALL_FAST_INTERNAL) == 0
+					|| ce->default_object_handlers->get_constructor
+						!= zend_std_get_constructor))
 			|| !zend_native_call_class_constants_updated(ce)
 			|| (ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT
 				| ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
@@ -8522,10 +8670,15 @@ bool zend_native_call_fast_new(
 				| ZEND_ACC_UNINSTANTIABLE)) != 0) {
 		return false;
 	}
+	/* An internal class's create_object may observe the line (an
+	 * exception records it). */
+	caller->opline = &caller->func->op_array.opcodes[
+		descriptor->init_source_position];
 	if (object_init_ex(result, ce) != SUCCESS) {
 		return false;
 	}
 	object = Z_OBJ_P(result);
+	ZEND_ASSERT(object->handlers->get_constructor == zend_std_get_constructor);
 	call = zend_vm_stack_push_call_frame(header->fast_call_info,
 		header->fast_function, descriptor->argument_count, object);
 	GC_ADDREF(object);
@@ -8943,6 +9096,9 @@ uint32_t zend_native_call_fast_do_internal(
 		EG(exception) == NULL ? result : NULL);
 	EG(current_execute_data) = caller;
 	zend_vm_stack_free_args(call);
+	if (UNEXPECTED(ZEND_CALL_INFO(call) & ZEND_CALL_RELEASE_THIS)) {
+		OBJ_RELEASE(Z_OBJ(call->This));
+	}
 	zend_vm_stack_free_call_frame(call);
 	if (discard) {
 		zval_ptr_dtor(result);
@@ -8990,7 +9146,7 @@ static bool zend_native_call_rearm_class_binding(
 	const uint32_t index = descriptor->init_op1.index + 1;
 	zval *bound;
 
-	if (key == NULL || (key->ce_flags & ZEND_ACC_IMMUTABLE) == 0
+	if (!zend_native_call_class_persistent(key)
 			|| descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 			|| index >= (uint32_t) op_array->last_literal
 			|| Z_TYPE(op_array->literals[index]) != IS_STRING) {
@@ -8998,6 +9154,87 @@ static bool zend_native_call_rearm_class_binding(
 	}
 	bound = zend_hash_find(EG(class_table), Z_STR(op_array->literals[index]));
 	return bound != NULL && Z_PTR_P(bound) == key;
+}
+
+static bool zend_native_call_rearm_name_binding(
+	const zend_op_array *op_array,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_function *function);
+
+/*
+ * Whether a stale site of an internal target still applies: the function
+ * and the classes the site keyed must outlive the request that published
+ * them, a name must still bind the function, and a literal class name the
+ * class.
+ */
+static bool zend_native_call_fast_rearm_internal(
+	const zend_op_array *op_array,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_user_call_site_header *header)
+{
+	const zend_function *function = header->fast_function;
+	const zend_class_entry *key = (const zend_class_entry *) header->fast_key;
+
+	if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION
+			|| !zend_native_call_internal_function_persistent(function)) {
+		return false;
+	}
+	switch (descriptor->init_opcode) {
+		case ZEND_INIT_FCALL:
+		case ZEND_INIT_FCALL_BY_NAME:
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+			return zend_native_call_rearm_name_binding(
+				op_array, descriptor, function);
+		case ZEND_INIT_METHOD_CALL:
+			/* The guard compares every receiver's class with the key. */
+			return zend_native_call_class_persistent(key);
+		case ZEND_NEW:
+			return zend_native_call_rearm_class_binding(
+				op_array, descriptor, key);
+		case ZEND_INIT_STATIC_METHOD_CALL:
+			if (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+				/* C::m(): the name must still bind the persistent class; a
+				 * call keeping the caller's $this keyed its object, so the
+				 * named class must still have that method. */
+				const uint32_t class_index = descriptor->init_op1.index + 1;
+				const uint32_t method_index = descriptor->init_op2.index + 1;
+				const zend_class_entry *ce;
+				zval *bound;
+
+				if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_STATIC_THIS)
+						== 0) {
+					return zend_native_call_rearm_class_binding(
+						op_array, descriptor, key);
+				}
+				if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+						|| class_index >= (uint32_t) op_array->last_literal
+						|| method_index >= (uint32_t) op_array->last_literal
+						|| Z_TYPE(op_array->literals[class_index]) != IS_STRING
+						|| Z_TYPE(op_array->literals[method_index]) != IS_STRING
+						|| (bound = zend_hash_find(EG(class_table),
+							Z_STR(op_array->literals[class_index]))) == NULL) {
+					return false;
+				}
+				ce = Z_PTR_P(bound);
+				return zend_native_call_class_persistent(ce)
+					&& zend_hash_find_ptr(&ce->function_table,
+						Z_STR(op_array->literals[method_index])) == function;
+			}
+			if ((descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK)
+					== ZEND_FETCH_CLASS_STATIC) {
+				/* static::m() compares the called scope with the key. */
+				return zend_native_call_class_persistent(key);
+			}
+			/* self::/parent:: name the caller's (immutable) scope or its
+			 * parent; a closure may be bound to another scope. */
+			return (op_array->fn_flags & ZEND_ACC_CLOSURE) == 0
+				&& op_array->scope != NULL
+				&& (op_array->scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0
+				&& (header->fast_flags & (ZEND_NATIVE_CALL_FAST_STATIC_THIS
+					| ZEND_NATIVE_CALL_FAST_STATIC_FORWARD)) != 0;
+		default:
+			return false;
+	}
 }
 
 /*
@@ -9109,11 +9346,8 @@ static bool zend_native_call_fast_rearm_site(
 	const zend_class_entry *key = (const zend_class_entry *) header->fast_key;
 
 	if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_INTERNAL) != 0) {
-		/* An internal function lives as long as its module: the name
-		 * must still bind it in this request. */
-		return function != NULL && function->type == ZEND_INTERNAL_FUNCTION
-			&& zend_native_call_rearm_name_binding(
-				op_array, descriptor, function);
+		return zend_native_call_fast_rearm_internal(
+			op_array, descriptor, header);
 	}
 	if (function == NULL) {
 		/* new C of a class without a constructor: only the class. */
