@@ -640,7 +640,9 @@ zend_tpde_local_abi_type zend_tpde_local_abi_from_declared_type(
 
 	const uint32_t value_types =
 		ZEND_TYPE_FULL_MASK(*type) & MAY_BE_ANY;
-	const bool exact_builtin_type = ZEND_TYPE_IS_ONLY_MASK(*type);
+	/* callable admits strings, arrays and objects outside its mask bit. */
+	const bool exact_builtin_type = ZEND_TYPE_IS_ONLY_MASK(*type)
+		&& (ZEND_TYPE_PURE_MASK(*type) & ~MAY_BE_ANY) == 0;
 	if (exact_builtin_type && value_types == MAY_BE_STRING) {
 		return {
 			ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
