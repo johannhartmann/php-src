@@ -42,6 +42,14 @@ ZEND_API void zend_native_executor_set_source_probe(
 ZEND_API void zend_native_executor_invalidate(void);
 
 /*
+ * Retire the persistent generations of the cached scripts `discarded`
+ * names, without advancing the code epoch: for scripts no other code binds
+ * to (see OPcache's zend_accel_discard_script()). Runs before userland.
+ */
+ZEND_API void zend_native_executor_retire_owners(
+	bool (*discarded)(const zend_script *owner));
+
+/*
  * OPcache cold-path integration. The slot contains one pointer-free native
  * bundle for the script's selected roots. Persistence copies it verbatim;
  * process publication resolves all Zend and runtime addresses locally.
