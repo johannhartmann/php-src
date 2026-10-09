@@ -875,11 +875,15 @@ class ZendCompilerX64 final
 				}
 				break;
 			case ZEND_INIT_STATIC_METHOD_CALL: {
-				/* A named class, self::, parent:: or static::. */
+				/* A named class, self::, parent:: or static::; a
+				 * constructor call (parent::__construct()) names no
+				 * method. */
 				const uint32_t fetch =
 					descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
-				if (descriptor->init_op2.kind
-						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+				if ((descriptor->init_op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& descriptor->init_op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
 						|| (descriptor->init_op1.kind
 								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
 							&& (descriptor->init_op1.kind

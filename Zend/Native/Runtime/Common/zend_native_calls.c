@@ -4609,6 +4609,18 @@ static void zend_native_call_fast_pass_references(
 	} while (mask != 0);
 }
 
+/* A static call naming no method (parent::__construct()) calls the
+ * constructor of its class. */
+static zend_always_inline bool zend_native_call_static_constructor(
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_function *function)
+{
+	return descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL
+		&& descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+		&& function->common.scope != NULL
+		&& function->common.scope->constructor == function;
+}
+
 /*
  * Whether an internal function outlives the request: one of a module, or a
  * method of a persistent class (an enum's arena-allocated cases(), from()
@@ -4722,7 +4734,10 @@ static void zend_native_call_fast_publish_internal(
 					|| fetch == ZEND_FETCH_CLASS_PARENT);
 			const bool late = unused && fetch == ZEND_FETCH_CLASS_STATIC;
 
-			if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			/* parent::__construct() names no method. */
+			if ((descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& !zend_native_call_static_constructor(
+							descriptor, function))
 					|| (descriptor->init_op1.kind
 							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
 						&& !forwarding && !late)) {
@@ -4814,6 +4829,7 @@ static void zend_native_call_fast_publish_internal(
 					&& argument->source_opcode != ZEND_SEND_VAR_NO_REF_EX)
 				|| (placement->flags
 					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
 						| (variadic_flag
 							? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC
 							: 0))) != 0) {
@@ -4890,7 +4906,10 @@ static void zend_native_call_fast_publish(
 					!= (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS)) {
 			return;
 		}
-	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC) {
+	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC
+			|| (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NONE
+				&& zend_native_call_static_constructor(
+					descriptor, function))) {
 		const uint32_t fetch =
 			descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
 		const bool forwarding =
@@ -4971,11 +4990,6 @@ static void zend_native_call_fast_publish(
 			header->fast_ref_mask |= UINT32_C(1) << index;
 			continue;
 		}
-		/* Any other runtime-tail placement keeps the universal protocol. */
-		if ((placement->flags
-				& ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION) != 0) {
-			return;
-		}
 
 		/* A runtime by-reference check is decided here: the target takes
 		 * this parameter by value. An argument past the declared parameters
@@ -4987,10 +5001,13 @@ static void zend_native_call_fast_publish(
 		 * target, too; it still receives its argument positionally. */
 		const bool variadic_flag = variadic_target
 			&& index + 1 >= op_array->num_args;
+		/* A by-value parameter in the runtime tail after a by-reference
+		 * one takes its argument as the fast sends store it. */
 		if (placement->source_index != index
 				|| (!variadic && placement->target_index != index)
 				|| (placement->flags
 					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
 						| (variadic_flag
 							? ZEND_NATIVE_USER_CALL_PLACEMENT_VARIADIC
 							: 0))) != 0
