@@ -7162,7 +7162,7 @@ static zend_native_iterator_branch_result zend_native_iterator_reset(
 static bool zend_native_iterator_set_key(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_value_operation *opline,
-	zend_ulong index, zend_string *key)
+	zend_ulong index, zend_string *key, bool property_table)
 {
 	zval *result;
 	const char *class_name;
@@ -7179,7 +7179,9 @@ static bool zend_native_iterator_set_key(
 	}
 	if (key == NULL) {
 		ZVAL_LONG(result, index);
-	} else if (ZSTR_VAL(key)[0] != '\0') {
+	} else if (!property_table || ZSTR_VAL(key)[0] != '\0') {
+		/* Only property tables carry mangled names; an array key that
+		 * starts with a NUL byte is an ordinary string. */
 		ZVAL_STR_COPY(result, key);
 	} else if (zend_unmangle_property_name_ex(
 			key, &class_name, &property_name, &property_length) == SUCCESS) {
@@ -7270,7 +7272,7 @@ static zend_native_iterator_branch_result zend_native_iterator_fetch_array(
 	}
 	if (!zend_native_iterator_set_key(execute_data, opline,
 			HT_IS_PACKED(table) ? position : bucket->h,
-			HT_IS_PACKED(table) ? NULL : bucket->key)
+			HT_IS_PACKED(table) ? NULL : bucket->key, false)
 			|| !zend_native_iterator_assign_value(
 				execute_data, opline, value, by_reference)) {
 		return ZEND_NATIVE_ITERATOR_EXCEPTION;
@@ -7367,7 +7369,7 @@ static zend_native_iterator_branch_result zend_native_iterator_fetch_object(
 			}
 			EG(ht_iterators)[Z_FE_ITER_P(holder)].pos = position;
 			if (!zend_native_iterator_set_key(execute_data, opline,
-					bucket->h, bucket->key)
+					bucket->h, bucket->key, true)
 					|| !zend_native_iterator_assign_value(
 						execute_data, opline, value, by_reference)) {
 				return ZEND_NATIVE_ITERATOR_EXCEPTION;
