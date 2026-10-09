@@ -2427,6 +2427,347 @@ static bool zend_native_executor_compile_captured_script(
 	return true;
 }
 
+/*
+ * Content-addressed bundles. An application may rewrite a script with the
+ * same content in every request (a cache file such as Symfony's
+ * PhpFilesAdapter writes for Doctrine's query cache); OPcache compiles each
+ * new version again, and so did the native compiler. A script that declares
+ * no class and no named function is keyed by a hash of its op_arrays (main
+ * code and closures: opcodes, literals, variables, parameters, live ranges,
+ * try/catch regions); its bundle, which then holds the closures too, is kept
+ * per process and attached to a later script with the same key instead of
+ * compiling it again. Imports bind by source ordinal and validate every
+ * reference, as for a bundle the file cache loads.
+ */
+#define ZEND_NATIVE_CONTENT_BUNDLES_MAX 128
+#define ZEND_NATIVE_CONTENT_BUNDLES_BYTES (16u * 1024u * 1024u)
+
+typedef struct _zend_native_content_key {
+	uint64_t a;
+	uint64_t b;
+} zend_native_content_key;
+
+typedef struct _zend_native_content_bundle {
+	zend_native_content_key key;
+	uint32_t flags;
+	uint64_t training_session;
+	size_t size;
+	unsigned char *bytes;
+} zend_native_content_bundle;
+
+static zend_native_content_bundle
+	zend_native_content_bundles[ZEND_NATIVE_CONTENT_BUNDLES_MAX];
+static uint32_t zend_native_content_bundle_count;
+static size_t zend_native_content_bundle_bytes;
+
+static zend_always_inline void zend_native_content_mix(
+	zend_native_content_key *key, uint64_t value)
+{
+	key->a = (key->a ^ value) * UINT64_C(0x100000001b3);
+	key->a ^= key->a >> 29;
+	key->b = (key->b + value) * UINT64_C(0x9e3779b97f4a7c15);
+	key->b ^= key->b >> 31;
+}
+
+static void zend_native_content_mix_bytes(
+	zend_native_content_key *key, const void *data, size_t length)
+{
+	const unsigned char *bytes = data;
+	uint64_t word;
+
+	zend_native_content_mix(key, length);
+	while (length >= 8) {
+		memcpy(&word, bytes, 8);
+		zend_native_content_mix(key, word);
+		bytes += 8;
+		length -= 8;
+	}
+	word = 0;
+	memcpy(&word, bytes, length);
+	zend_native_content_mix(key, word);
+}
+
+static void zend_native_content_mix_string(
+	zend_native_content_key *key, const zend_string *string)
+{
+	if (string == NULL) {
+		zend_native_content_mix(key, UINT64_C(0xfeedfacecafebeef));
+		return;
+	}
+	zend_native_content_mix_bytes(key, ZSTR_VAL(string), ZSTR_LEN(string));
+}
+
+static bool zend_native_content_mix_zval(
+	zend_native_content_key *key, const zval *value, uint32_t depth)
+{
+	zend_native_content_mix(key, Z_TYPE_P(value));
+	switch (Z_TYPE_P(value)) {
+		case IS_UNDEF:
+		case IS_NULL:
+		case IS_FALSE:
+		case IS_TRUE:
+			return true;
+		case IS_LONG:
+			zend_native_content_mix(key, (uint64_t) Z_LVAL_P(value));
+			return true;
+		case IS_DOUBLE: {
+			uint64_t bits;
+
+			memcpy(&bits, &Z_DVAL_P(value), sizeof(bits));
+			zend_native_content_mix(key, bits);
+			return true;
+		}
+		case IS_STRING:
+			zend_native_content_mix_string(key, Z_STR_P(value));
+			return true;
+		case IS_ARRAY: {
+			const HashTable *table = Z_ARRVAL_P(value);
+			zend_ulong index;
+			zend_string *name;
+			zval *element;
+
+			if (depth > 32) {
+				return false;
+			}
+			zend_native_content_mix(key, zend_hash_num_elements(table));
+			ZEND_HASH_FOREACH_KEY_VAL(table, index, name, element) {
+				if (name != NULL) {
+					zend_native_content_mix_string(key, name);
+				} else {
+					zend_native_content_mix(key, index);
+				}
+				if (!zend_native_content_mix_zval(key, element, depth + 1)) {
+					return false;
+				}
+			} ZEND_HASH_FOREACH_END();
+			return true;
+		}
+		default:
+			/* Constant expressions and anything else keep compiling. */
+			return false;
+	}
+}
+
+static bool zend_native_content_mix_type(
+	zend_native_content_key *key, const zend_type *type)
+{
+	if (ZEND_TYPE_HAS_LIST(*type)) {
+		return false;
+	}
+	zend_native_content_mix(key, ZEND_TYPE_FULL_MASK(*type));
+	if (ZEND_TYPE_HAS_NAME(*type)) {
+		zend_native_content_mix_string(key, ZEND_TYPE_NAME(*type));
+	}
+	return true;
+}
+
+static bool zend_native_content_mix_op_array(
+	zend_native_content_key *key, const zend_op_array *op_array,
+	uint32_t depth)
+{
+	uint32_t index;
+	uint32_t arg_count;
+
+	if (op_array == NULL || depth > 16 || op_array->scope != NULL
+			|| op_array->attributes != NULL) {
+		return false;
+	}
+	zend_native_content_mix(key, op_array->fn_flags);
+	zend_native_content_mix(key, ((uint64_t) op_array->num_args << 32)
+		| op_array->required_num_args);
+	zend_native_content_mix(key, ((uint64_t) op_array->last << 32)
+		| (uint32_t) op_array->T);
+	zend_native_content_mix(key, ((uint64_t) (uint32_t) op_array->last_var
+		<< 32) | (uint32_t) op_array->last_literal);
+	zend_native_content_mix(key, ((uint64_t) (uint32_t) op_array->cache_size
+		<< 32) | op_array->num_dynamic_func_defs);
+	zend_native_content_mix(key, ((uint64_t) op_array->last_live_range << 32)
+		| (uint32_t) op_array->last_try_catch);
+	zend_native_content_mix(key, ((uint64_t) op_array->line_start << 32)
+		| op_array->line_end);
+	zend_native_content_mix_string(key, op_array->function_name);
+	zend_native_content_mix_string(key, op_array->filename);
+	for (index = 0; index < op_array->last; index++) {
+		const zend_op *op = &op_array->opcodes[index];
+
+		zend_native_content_mix(key, (uint64_t) op->opcode
+			| ((uint64_t) op->op1_type << 8)
+			| ((uint64_t) op->op2_type << 16)
+			| ((uint64_t) op->result_type << 24)
+			| ((uint64_t) op->extended_value << 32));
+		zend_native_content_mix(key, ((uint64_t) op->op1.num << 32)
+			| op->op2.num);
+		zend_native_content_mix(key, ((uint64_t) op->result.num << 32)
+			| op->lineno);
+	}
+	for (index = 0; index < (uint32_t) op_array->last_literal; index++) {
+		if (!zend_native_content_mix_zval(
+				key, &op_array->literals[index], 0)) {
+			return false;
+		}
+	}
+	for (index = 0; index < (uint32_t) op_array->last_var; index++) {
+		zend_native_content_mix_string(key, op_array->vars[index]);
+	}
+	arg_count = op_array->num_args
+		+ ((op_array->fn_flags & ZEND_ACC_VARIADIC) != 0 ? 1 : 0);
+	if (op_array->arg_info != NULL) {
+		const zend_arg_info *info = op_array->arg_info;
+		uint32_t first = 0;
+
+		if ((op_array->fn_flags & ZEND_ACC_HAS_RETURN_TYPE) != 0) {
+			info--;
+			arg_count++;
+		}
+		for (index = first; index < arg_count; index++) {
+			zend_native_content_mix_string(key, info[index].name);
+			if (!zend_native_content_mix_type(key, &info[index].type)) {
+				return false;
+			}
+		}
+	} else if (arg_count != 0) {
+		return false;
+	}
+	for (index = 0; index < op_array->last_live_range; index++) {
+		const zend_live_range *range = &op_array->live_range[index];
+
+		zend_native_content_mix(key, range->var);
+		zend_native_content_mix(key, ((uint64_t) range->start << 32)
+			| range->end);
+	}
+	for (index = 0; index < (uint32_t) op_array->last_try_catch; index++) {
+		const zend_try_catch_element *element =
+			&op_array->try_catch_array[index];
+
+		zend_native_content_mix(key, ((uint64_t) element->try_op << 32)
+			| element->catch_op);
+		zend_native_content_mix(key, ((uint64_t) element->finally_op << 32)
+			| element->finally_end);
+	}
+	if (op_array->static_variables != NULL) {
+		zval variables;
+
+		ZVAL_ARR(&variables, op_array->static_variables);
+		if (!zend_native_content_mix_zval(key, &variables, 0)) {
+			return false;
+		}
+	} else {
+		zend_native_content_mix(key, 0);
+	}
+	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
+		if (!zend_native_content_mix_op_array(
+				key, op_array->dynamic_func_defs[index], depth + 1)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool zend_native_content_key_of(
+	const zend_script *script, zend_native_content_key *key)
+{
+	key->a = UINT64_C(0xcbf29ce484222325);
+	key->b = UINT64_C(0x6a09e667f3bcc909);
+	if (zend_hash_num_elements(&script->function_table) != 0
+			|| zend_hash_num_elements(&script->class_table) != 0
+			|| zend_native_executor_preload_capture_state.active) {
+		return false;
+	}
+	zend_native_content_mix(key, ZEND_NATIVE_RUNTIME_ABI_VERSION);
+	return zend_native_content_mix_op_array(key, &script->main_op_array, 0);
+}
+
+static const zend_native_content_bundle *zend_native_content_bundle_find(
+	const zend_native_content_key *key)
+{
+	const uint32_t flags = zend_native_executor_bundle_flags();
+	const uint64_t session = zend_tpde_layout_training_session();
+
+	for (uint32_t index = 0; index < zend_native_content_bundle_count;
+			index++) {
+		const zend_native_content_bundle *entry =
+			&zend_native_content_bundles[index];
+
+		if (entry->key.a == key->a && entry->key.b == key->b
+				&& entry->flags == flags
+				&& entry->training_session == session) {
+			return entry;
+		}
+	}
+	return NULL;
+}
+
+static void zend_native_content_bundle_store(
+	const zend_native_content_key *key, const unsigned char *bytes,
+	size_t size)
+{
+	zend_native_content_bundle *entry;
+
+	if (size > ZEND_NATIVE_CONTENT_BUNDLES_BYTES / 4) {
+		return;
+	}
+	if (zend_native_content_bundle_count == ZEND_NATIVE_CONTENT_BUNDLES_MAX
+			|| zend_native_content_bundle_bytes + size
+				> ZEND_NATIVE_CONTENT_BUNDLES_BYTES) {
+		/* Start over: the cache serves scripts rewritten every request. */
+		for (uint32_t index = 0; index < zend_native_content_bundle_count;
+				index++) {
+			free(zend_native_content_bundles[index].bytes);
+		}
+		zend_native_content_bundle_count = 0;
+		zend_native_content_bundle_bytes = 0;
+	}
+	entry = &zend_native_content_bundles[zend_native_content_bundle_count];
+	entry->bytes = malloc(size);
+	if (entry->bytes == NULL) {
+		return;
+	}
+	memcpy(entry->bytes, bytes, size);
+	entry->key = *key;
+	entry->flags = zend_native_executor_bundle_flags();
+	entry->training_session = zend_tpde_layout_training_session();
+	entry->size = size;
+	zend_native_content_bundle_count++;
+	zend_native_content_bundle_bytes += size;
+}
+
+/* Every closure of a content-keyed script joins its bundle. */
+static bool zend_native_executor_compile_closures(
+	zend_native_compiler *compiler, zend_op_array *op_array,
+	zend_native_compile_diagnostic *diagnostic, uint32_t depth)
+{
+	for (uint32_t index = 0; index < op_array->num_dynamic_func_defs;
+			index++) {
+		zend_op_array *closure = op_array->dynamic_func_defs[index];
+
+		if (depth > 16
+				|| zend_native_compiler_compile(
+					compiler, closure, NULL, 0, diagnostic) == FAILURE
+				|| !zend_native_executor_compile_closures(
+					compiler, closure, diagnostic, depth + 1)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static void zend_native_executor_attach_bundle(
+	zend_script *script, const unsigned char *bytes, size_t size)
+{
+	zend_native_opcache_bundle *bundle = emalloc(
+		zend_native_executor_bundle_allocation_size(size));
+
+	bundle->magic = ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC;
+	bundle->format = ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT;
+	bundle->storage = ZEND_NATIVE_OPCACHE_BUNDLE_HEAP;
+	bundle->flags = zend_native_executor_bundle_flags();
+	bundle->training_session = zend_tpde_layout_training_session();
+	bundle->size = size;
+	memcpy(bundle->bytes, bytes, size);
+	script->main_op_array.reserved[zend_native_executor_bundle_rid] =
+		bundle;
+}
+
 static zend_result zend_native_executor_prepare_script_impl(
 	zend_script *script,
 	bool compile_main,
@@ -2440,6 +2781,8 @@ static zend_result zend_native_executor_prepare_script_impl(
 	size_t size = 0;
 	size_t allocation_size;
 	uint32_t selected_count = 0;
+	zend_native_content_key content_key;
+	bool content_keyed;
 
 	if (script == NULL || zend_native_executor_bundle_rid < 0) {
 		return FAILURE;
@@ -2452,6 +2795,18 @@ static zend_result zend_native_executor_prepare_script_impl(
 			return SUCCESS;
 		}
 		zend_native_executor_discard_bundle(&script->main_op_array);
+	}
+	content_keyed = compile_main
+		&& zend_native_content_key_of(script, &content_key);
+	if (content_keyed) {
+		const zend_native_content_bundle *cached =
+			zend_native_content_bundle_find(&content_key);
+
+		if (cached != NULL) {
+			zend_native_executor_attach_bundle(
+				script, cached->bytes, cached->size);
+			return SUCCESS;
+		}
 	}
 	memset(&config, 0, sizeof(config));
 	memset(&diagnostic, 0, sizeof(diagnostic));
@@ -2474,6 +2829,9 @@ static zend_result zend_native_executor_prepare_script_impl(
 				&& zend_native_compiler_compile(
 					compiler, &script->main_op_array, NULL, 0,
 					&diagnostic) == FAILURE)
+			|| (content_keyed
+				&& !zend_native_executor_compile_closures(
+					compiler, &script->main_op_array, &diagnostic, 0))
 			|| !zend_native_executor_compile_captured_script(
 				compiler, script, &diagnostic, &selected_count)) {
 		zend_native_compile_trace_reason = "execute";
@@ -2497,6 +2855,9 @@ static zend_result zend_native_executor_prepare_script_impl(
 		return FAILURE;
 	}
 	zend_native_compiler_destroy(compiler);
+	if (content_keyed) {
+		zend_native_content_bundle_store(&content_key, bytes, size);
+	}
 	allocation_size =
 		zend_native_executor_bundle_allocation_size(size);
 	if (allocation_size == 0) {
