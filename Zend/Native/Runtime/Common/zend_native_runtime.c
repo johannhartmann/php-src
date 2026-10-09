@@ -1134,6 +1134,12 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_CONCAT_STRINGS_TT,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE | ZEND_NATIVE_EFFECT_MAY_FAIL,
 		(const void *) zend_native_concat_strings_tt},
+	{ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
+			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
+			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER,
+		(const void *) zend_native_call_fast_method_init},
 };
 
 _Static_assert(sizeof(zend_native_runtime_helpers)

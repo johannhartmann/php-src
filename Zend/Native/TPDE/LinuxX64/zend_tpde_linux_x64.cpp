@@ -6665,6 +6665,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				/* A stale epoch first tries the re-arm stub below. */
 				auto fast_retry = text_writer.label_create();
 				auto fast_rearm = text_writer.label_create();
+				auto fast_method = text_writer.label_create();
 				AsmReg rearm_descriptor_reg{};
 				uint64_t rearm_live_registers = ~uint64_t{0};
 				{
@@ -6751,6 +6752,8 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(CMP64rm, value_reg, header_field(descriptor_reg,
 							offsetof(zend_native_user_call_site_header,
 								fast_key)));
+						/* Another receiver class takes the second level:
+						 * the target recorded for that class. */
 						if (this_receiver) {
 							/* Another class of $this still calls a
 							 * receiver-independent target. */
@@ -6760,10 +6763,10 @@ bool ZendCompilerX64::compile_inst_impl(
 								offsetof(zend_native_user_call_site_header,
 									fast_flags)),
 								ZEND_NATIVE_CALL_FAST_ANY_THIS);
-							generate_raw_jump(Jump::je, fast_miss);
+							generate_raw_jump(Jump::je, fast_method);
 							label_place(key_matched);
 						} else {
-							generate_raw_jump(Jump::jne, fast_miss);
+							generate_raw_jump(Jump::jne, fast_method);
 						}
 					}
 					if (static_call && late_static) {
@@ -6947,6 +6950,45 @@ bool ZendCompilerX64::compile_inst_impl(
 					}, [&] { ASM(TEST8rr, FE_AX, FE_AX); });
 				generate_raw_jump(Jump::jne, fast_retry);
 				generate_raw_jump(Jump::jmp, fast_miss);
+				if (method) {
+					/* The second level of a method site: the helper pushes
+					 * and links the frame of the target recorded for the
+					 * receiver's class and returns its entries, which the
+					 * Do calls (mode 2). */
+					label_place(fast_method);
+					const int32_t entry_slot =
+						fast_entry_slot(node.mir_instruction_index);
+					const int32_t do_entry_slot =
+						fast_do_entry_slot(node.mir_instruction_index);
+					{
+						tpde::x64::CCAssignerSysV assigner{false};
+						CallBuilder builder{*this, assigner};
+						builder.add_arg(copy_fixed_argument(
+							canonical_frame_register(), &assigner),
+							tpde::CCAssignment{});
+						builder.add_arg(image_symbol_value(
+							ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
+							call.id, &assigner), tpde::CCAssignment{});
+						builder.call(runtime_symbol(
+							ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT));
+						ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
+						ValuePart do_entry{
+							tpde::x64::PlatformConfig::GP_BANK, 8};
+						builder.add_ret(entry, tpde::CCAssignment{});
+						builder.add_ret(do_entry, tpde::CCAssignment{});
+						ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, do_entry_slot),
+							do_entry.cur_reg_or_load(this));
+						do_entry.reset(this);
+						auto entry_reg = entry.cur_reg_or_load(this);
+						ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot),
+							entry_reg);
+						ASM(TEST64rr, entry_reg, entry_reg);
+						entry.reset(this);
+					}
+					generate_raw_jump(Jump::je, fast_miss);
+					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 2);
+					generate_raw_jump(Jump::jmp, fast_join);
+				}
 				cold_end();
 				}
 				/* A published site takes the universal protocol once per
@@ -8230,6 +8272,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			const zend_native_user_call_descriptor *descriptor =
 				call.user_call;
 			const bool dynamic = source_call_fast_dynamic(call);
+			/* A method site may run its second level (mode 2). */
+			const bool method_site = !dynamic
+				&& descriptor->init_opcode == ZEND_INIT_METHOD_CALL;
 			const int32_t fast_slot =
 				fast_call_slot(node.mir_instruction_index);
 			const zend_mir_source_operand_ref &result_operand =
@@ -8295,7 +8340,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				} else {
 					/* The published site's fast Do: the target's fast-call
 					 * entry or zend_native_call_fast_do(), from the header
-					 * before the descriptor in RDX. */
+					 * before the descriptor in RDX. A method site's second
+					 * level (mode 2) calls the entries its Init recorded,
+					 * from the cold area. */
 					ScratchReg target{this};
 					const auto target_reg = target.alloc_specific(
 						tpde::x64::AsmReg{tpde::x64::AsmReg::R11});
@@ -8303,10 +8350,29 @@ bool ZendCompilerX64::compile_inst_impl(
 						header_offset + static_cast<int32_t>(offsetof(
 							zend_native_user_call_site_header,
 							fast_do_entry))));
+					auto do_call = text_writer.label_create();
+					auto second_level = text_writer.label_create();
+					if (method_site) {
+						ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+						generate_raw_jump(Jump::jne, second_level);
+						label_place(do_call);
+					}
 					ValuePart target_value{
 						tpde::x64::PlatformConfig::GP_BANK, 8};
 					target_value.set_value(this, std::move(target));
 					builder.call(std::move(target_value));
+					if (method_site) {
+						/* Raw moves into the call's registers: the allocator
+						 * state is the one before the call. */
+						cold_begin();
+						label_place(second_level);
+						ASM(MOV64rm, FE_CX, FE_MEM(FE_BP, 0, FE_NOREG,
+							fast_entry_slot(node.mir_instruction_index)));
+						ASM(MOV64rm, FE_R11, FE_MEM(FE_BP, 0, FE_NOREG,
+							fast_do_entry_slot(node.mir_instruction_index)));
+						generate_raw_jump(Jump::jmp, do_call);
+						cold_end();
+					}
 				}
 				ValuePart left{tpde::x64::PlatformConfig::GP_BANK, 4};
 				builder.add_ret(left, tpde::CCAssignment{});
