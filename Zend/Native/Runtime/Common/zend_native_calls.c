@@ -4518,6 +4518,104 @@ zend_native_call_fast_receive_prepare(
 	return receive;
 }
 
+/*
+ * A by-name site whose target is an internal function (a namespaced call
+ * of strlen(), say): its Init pushes the frame from the header as for a
+ * user target, the sends store the arguments by value, and the Do runs the
+ * handler (zend_native_call_fast_do_internal()). A by-reference parameter
+ * takes only a CV sent with SEND_VAR_EX (fast_ref_mask), as for a user
+ * target; a deprecated or #[\NoDiscard] function keeps the universal
+ * protocol, whose preflight reports it.
+ */
+static void zend_native_call_fast_publish_internal(
+	zend_native_user_call_site_header *header,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_call_resolution_cache_entry *entry)
+{
+	const zend_native_user_call_resolution *resolution = &entry->resolution;
+	zend_function *function = resolution->function;
+	uint32_t index;
+
+	if (function == NULL || function->type != ZEND_INTERNAL_FUNCTION
+			|| (descriptor->init_opcode != ZEND_INIT_FCALL
+				&& descriptor->init_opcode != ZEND_INIT_FCALL_BY_NAME
+				&& descriptor->init_opcode != ZEND_INIT_NS_FCALL_BY_NAME)
+			|| descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| resolution->object_or_called_scope != NULL
+			|| resolution->call_info != ZEND_CALL_NESTED_FUNCTION
+			|| resolution->extra_named_params != NULL
+			|| (resolution->placement_flags
+				& ~ZEND_NATIVE_USER_CALL_PLACEMENTS_HAS_DEFAULTS) != 0
+			|| entry->argument_count != descriptor->argument_count
+			|| entry->argument_count != resolution->placement_count
+			|| descriptor->initial_argument_count
+				!= descriptor->argument_count
+			|| (function->common.fn_flags
+				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD)) != 0) {
+		return;
+	}
+	header->fast_ref_mask = 0;
+	for (index = 0; index < entry->argument_count; index++) {
+		const zend_native_user_call_placement *placement =
+			&entry->placements[index];
+		const zend_native_direct_internal_call_argument *argument =
+			&descriptor->arguments[index];
+
+		if (placement->source_index != index
+				|| placement->target_index != index
+				|| argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+				|| argument->auxiliary_operand.kind
+					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| (argument->source_opcode != ZEND_SEND_VAL
+					&& argument->source_opcode != ZEND_SEND_VAL_EX
+					&& argument->source_opcode != ZEND_SEND_VAR
+					&& argument->source_opcode != ZEND_SEND_VAR_EX
+					&& argument->source_opcode != ZEND_SEND_FUNC_ARG
+					&& argument->source_opcode != ZEND_SEND_VAR_NO_REF_EX)
+				|| ARG_MAY_BE_SENT_BY_REF(function, index + 1)) {
+			return;
+		}
+		if (!ARG_SHOULD_BE_SENT_BY_REF(function, index + 1)) {
+			if ((placement->flags
+					& ~ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK)
+					!= 0) {
+				return;
+			}
+			continue;
+		}
+		if (index >= 32
+				|| argument->source_opcode != ZEND_SEND_VAR_EX
+				|| (argument->source_operand.kind
+						!= ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& argument->source_operand.kind
+						!= ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| argument->source_operand.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_CV
+				|| (placement->flags
+					& ~(ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_SHOULD_REF
+						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF))
+					!= 0) {
+			return;
+		}
+		header->fast_ref_mask |= UINT32_C(1) << index;
+	}
+	header->fast_key = NULL;
+	header->fast_function = function;
+	header->fast_entry = NULL;
+	header->fast_run_time_cache = NULL;
+	header->fast_frame_size =
+		zend_vm_calc_used_stack(entry->argument_count, function);
+	header->fast_call_info = ZEND_CALL_NESTED_FUNCTION;
+	header->fast_receive = NULL;
+	header->fast_cell = NULL;
+	header->fast_default_count = 0;
+	header->fast_flags = ZEND_NATIVE_CALL_FAST_INTERNAL;
+	header->fast_do_entry = (void *) zend_native_call_fast_do_internal;
+	header->fast_epoch = zend_native_call_resolution_cache_epoch;
+}
+
 static void zend_native_call_fast_publish(
 	const zend_execute_data *caller,
 	zend_native_user_call_site_header *header,
@@ -4533,6 +4631,10 @@ static void zend_native_call_fast_publish(
 
 	header->fast_epoch = 0;
 	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
+	if (resolution->target_kind == ZEND_NATIVE_USER_CALL_TARGET_INTERNAL) {
+		zend_native_call_fast_publish_internal(header, descriptor, entry);
+		return;
+	}
 	if ((resolution->placement_flags
 				& ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME) == 0
 			|| resolution->target_kind
@@ -8766,6 +8868,98 @@ uint32_t zend_native_call_fast_do(
 }
 
 /*
+ * The fast Do of a site published for an internal function
+ * (ZEND_NATIVE_CALL_FAST_INTERNAL): unlink the frame the Init pushed and
+ * run the handler as ZEND_DO_ICALL does, observers and interrupts
+ * included, then release the arguments and the frame.
+ */
+uint32_t zend_native_call_fast_do_internal(
+	zend_execute_data *caller,
+	zend_native_execution_context *context,
+	const zend_native_user_call_descriptor *descriptor,
+	zend_native_frame_entry_t dynamic_entry,
+	uint32_t result_offset)
+{
+	const zend_native_user_call_site_header *header =
+		ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+	zend_execute_data *call = caller->call;
+	const bool discard = result_offset == UINT32_MAX;
+	zval discarded;
+	zval *result = discard
+		? &discarded : (zval *) ((char *) caller + result_offset);
+	uint32_t status;
+
+	(void) context;
+	(void) dynamic_entry;
+	if (UNEXPECTED(header->fast_ref_mask != 0)) {
+		uint32_t mask = header->fast_ref_mask;
+
+		do {
+			const uint32_t index = (uint32_t) __builtin_ctz(mask);
+			zval *argument = ZEND_CALL_ARG(call, index + 1);
+			zval *variable = ZEND_CALL_VAR_NUM(caller,
+				descriptor->arguments[index].source_operand.index);
+
+			zval_ptr_dtor_nogc(argument);
+			if (Z_ISREF_P(variable)) {
+				Z_ADDREF_P(variable);
+			} else {
+				if (Z_ISUNDEF_P(variable)) {
+					ZVAL_NULL(variable);
+				}
+				ZVAL_MAKE_REF_EX(variable, 2);
+			}
+			ZVAL_REF(argument, Z_REF_P(variable));
+			mask &= mask - 1;
+		} while (mask != 0);
+	}
+	caller->call = call->prev_execute_data;
+	call->prev_execute_data = caller;
+	call->return_value = NULL;
+	EG(current_execute_data) = call;
+#if ZEND_DEBUG
+	bool should_throw = zend_internal_call_should_throw(call->func, call);
+#endif
+	ZVAL_NULL(result);
+	ZEND_OBSERVER_FCALL_BEGIN(call);
+	if (EXPECTED(zend_execute_internal == NULL)) {
+		call->func->internal_function.handler(call, result);
+	} else {
+		zend_execute_internal(call, result);
+	}
+#if ZEND_DEBUG
+	if (EG(exception) == NULL && call->func != NULL) {
+		if (should_throw) {
+			zend_internal_call_arginfo_violation(call->func);
+		}
+		ZEND_ASSERT(!(call->func->common.fn_flags & ZEND_ACC_HAS_RETURN_TYPE)
+			|| zend_verify_internal_return_type(call->func, result));
+		ZEND_ASSERT((call->func->common.fn_flags
+				& ZEND_ACC_RETURN_REFERENCE) != 0
+			? Z_ISREF_P(result) : !Z_ISREF_P(result));
+	}
+#endif
+	ZEND_OBSERVER_FCALL_END(call,
+		EG(exception) == NULL ? result : NULL);
+	EG(current_execute_data) = caller;
+	zend_vm_stack_free_args(call);
+	zend_vm_stack_free_call_frame(call);
+	if (discard) {
+		zval_ptr_dtor(result);
+	}
+	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+		zend_fcall_interrupt(caller);
+	}
+	status = EG(exception) == NULL
+		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
+	if (status != ZEND_NATIVE_RETURNED && !discard) {
+		zval_ptr_dtor_nogc(result);
+		ZVAL_UNDEF(result);
+	}
+	return status;
+}
+
+/*
  * The universal Expand of a source call site, out of line: a resolution
  * that expands arguments at run time expands them into the callee frame,
  * as the generated universal Expand did. On failure the activation is
@@ -8822,6 +9016,38 @@ static bool zend_native_call_rearm_class_binding(
 static bool zend_native_call_fast_rearm_site(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor);
+
+/* Whether a function site's name still binds function in this request, as
+ * the VM's Init looks it up: the lowercased name, and for a namespaced call
+ * the global fallback. */
+static bool zend_native_call_rearm_name_binding(
+	const zend_op_array *op_array,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_function *function)
+{
+	const uint32_t index = descriptor->init_op2.index
+		+ (descriptor->init_opcode == ZEND_INIT_FCALL ? 0 : 1);
+	zval *bound;
+
+	if ((descriptor->init_opcode != ZEND_INIT_FCALL
+				&& descriptor->init_opcode != ZEND_INIT_FCALL_BY_NAME
+				&& descriptor->init_opcode != ZEND_INIT_NS_FCALL_BY_NAME)
+			|| descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| index >= (uint32_t) op_array->last_literal
+			|| Z_TYPE(op_array->literals[index]) != IS_STRING) {
+		return false;
+	}
+	bound = zend_hash_find_known_hash(EG(function_table),
+		Z_STR(op_array->literals[index]));
+	if (bound == NULL
+			&& descriptor->init_opcode == ZEND_INIT_NS_FCALL_BY_NAME
+			&& index + 1 < (uint32_t) op_array->last_literal
+			&& Z_TYPE(op_array->literals[index + 1]) == IS_STRING) {
+		bound = zend_hash_find_known_hash(EG(function_table),
+			Z_STR(op_array->literals[index + 1]));
+	}
+	return bound != NULL && Z_PTR_P(bound) == function;
+}
 
 bool zend_native_call_fast_rearm(
 	zend_execute_data *caller,
@@ -8882,6 +9108,13 @@ static bool zend_native_call_fast_rearm_site(
 	const zend_op_array *op_array = &caller->func->op_array;
 	const zend_class_entry *key = (const zend_class_entry *) header->fast_key;
 
+	if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_INTERNAL) != 0) {
+		/* An internal function lives as long as its module: the name
+		 * must still bind it in this request. */
+		return function != NULL && function->type == ZEND_INTERNAL_FUNCTION
+			&& zend_native_call_rearm_name_binding(
+				op_array, descriptor, function);
+	}
 	if (function == NULL) {
 		/* new C of a class without a constructor: only the class. */
 		if (descriptor->init_opcode != ZEND_NEW
@@ -8902,31 +9135,12 @@ static bool zend_native_call_fast_rearm_site(
 	switch (descriptor->init_opcode) {
 		case ZEND_INIT_FCALL:
 		case ZEND_INIT_FCALL_BY_NAME:
-		case ZEND_INIT_NS_FCALL_BY_NAME: {
-			/* The lowercased name, as the VM's Init looks it up. */
-			const uint32_t index = descriptor->init_op2.index
-				+ (descriptor->init_opcode == ZEND_INIT_FCALL ? 0 : 1);
-			zval *bound;
-
-			if (descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-					|| index >= (uint32_t) op_array->last_literal
-					|| Z_TYPE(op_array->literals[index]) != IS_STRING) {
-				return false;
-			}
-			bound = zend_hash_find_known_hash(EG(function_table),
-				Z_STR(op_array->literals[index]));
-			if (bound == NULL
-					&& descriptor->init_opcode == ZEND_INIT_NS_FCALL_BY_NAME
-					&& index + 1 < (uint32_t) op_array->last_literal
-					&& Z_TYPE(op_array->literals[index + 1]) == IS_STRING) {
-				bound = zend_hash_find_known_hash(EG(function_table),
-					Z_STR(op_array->literals[index + 1]));
-			}
-			if (bound == NULL || Z_PTR_P(bound) != function) {
+		case ZEND_INIT_NS_FCALL_BY_NAME:
+			if (!zend_native_call_rearm_name_binding(
+					op_array, descriptor, function)) {
 				return false;
 			}
 			break;
-		}
 		case ZEND_INIT_METHOD_CALL:
 			if (header->fast_key == NULL
 					|| (((const zend_class_entry *) header->fast_key)->ce_flags
