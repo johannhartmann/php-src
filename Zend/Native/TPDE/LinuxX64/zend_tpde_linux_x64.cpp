@@ -3637,15 +3637,45 @@ public:
 				ASM(CMP32ri, FE_R9, static_cast<int32_t>(parameter));
 				not_supplied = branch_not_above();
 			}
+			const int32_t argument_offset = member(
+				(ZEND_CALL_FRAME_SLOT + parameter) * sizeof(zval));
 			ASM(MOVZXr32m8, FE_R10, FE_MEM(FE_AX, 0, FE_NOREG,
-				member((ZEND_CALL_FRAME_SLOT + parameter) * sizeof(zval)
-					+ offsetof(zval, u1.v.type))));
+				argument_offset + member(offsetof(zval, u1.v.type))));
 			ASM(MOV32ri, FE_R11, static_cast<int32_t>(mask));
 			ASM(BT32rr, FE_R11, FE_R10);
-			text_writer.ensure_space(16);
-			ASMF(JNC, FE_JMPL, text_writer.cur_ptr());
-			to_general_do.push_back(
-				static_cast<uint32_t>(text_writer.offset()));
+			if (((plan->fast_call_class_mask >> parameter) & 1) == 0) {
+				text_writer.ensure_space(16);
+				ASMF(JNC, FE_JMPL, text_writer.cur_ptr());
+				to_general_do.push_back(
+					static_cast<uint32_t>(text_writer.offset()));
+			} else {
+				/* A class-typed parameter: an object of the class it last
+				 * accepted fits (the published target cell's
+				 * fast_receive); a dynamic site's frame takes the general
+				 * Do. */
+				text_writer.ensure_space(16);
+				ASMF(JC, FE_JMPL, text_writer.cur_ptr());
+				const uint32_t fits = text_writer.offset();
+				ASM(CMP32ri, FE_R10, IS_OBJECT);
+				to_general_do.push_back(branch(true));
+				ASM(TEST64rr, FE_CX, FE_CX);
+				to_general_do.push_back(branch(true));
+				ASM(MOV64rm, FE_R11, FE_MEM(FE_DX, 0, FE_NOREG,
+					header_offset + member(offsetof(
+						zend_native_user_call_site_header, fast_cell))));
+				ASM(TEST64rr, FE_R11, FE_R11);
+				to_general_do.push_back(branch_zero());
+				ASM(MOV64rm, FE_R10, FE_MEM(FE_AX, 0, FE_NOREG,
+					argument_offset));
+				ASM(MOV64rm, FE_R10, FE_MEM(FE_R10, 0, FE_NOREG,
+					member(offsetof(zend_object, ce))));
+				ASM(CMP64rm, FE_R10, FE_MEM(FE_R11, 0, FE_NOREG,
+					member(offsetof(zend_native_entry_cell, fast_receive)
+						+ offsetof(zend_native_call_fast_receive, classes)
+						+ parameter * sizeof(void *))));
+				to_general_do.push_back(branch(true));
+				patch(fits, text_writer.offset());
+			}
 			if (not_supplied != UINT32_MAX) {
 				patch(not_supplied, text_writer.offset());
 			}

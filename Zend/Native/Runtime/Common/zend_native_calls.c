@@ -4500,13 +4500,20 @@ zend_native_call_fast_receive_prepare(
 		return receive;
 	}
 	receive->num_args = op_array->num_args;
+	receive->class_mask = 0;
 	for (index = 0; index < op_array->num_args; index++) {
 		const zend_op *opline = &op_array->opcodes[index];
+		const zend_type type = op_array->arg_info[index].type;
 		const zval *value;
 
 		receive->type_masks[index] =
 			zend_native_call_fast_receive_mask(&op_array->arg_info[index]);
 		receive->defaults[index] = NULL;
+		receive->classes[index] = NULL;
+		if (ZEND_TYPE_IS_SET(type)
+				&& (ZEND_TYPE_HAS_NAME(type) || ZEND_TYPE_HAS_LIST(type))) {
+			receive->class_mask |= UINT32_C(1) << index;
+		}
 		if (opline->opcode == ZEND_RECV) {
 			continue;
 		}
@@ -4527,6 +4534,47 @@ zend_native_call_fast_receive_prepare(
 	}
 	receive->state = ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE;
 	return receive;
+}
+
+static zend_always_inline bool zend_native_call_class_persistent(
+	const zend_class_entry *ce);
+
+/* Whether the class-typed parameter accepted this argument's class before. */
+static zend_always_inline bool zend_native_call_fast_receive_class_hit(
+	const zend_native_call_fast_receive *receive, uint32_t index,
+	const zval *argument)
+{
+	return (receive->class_mask & (UINT32_C(1) << index)) != 0
+		&& Z_TYPE_P(argument) == IS_OBJECT
+		&& Z_OBJCE_P(argument) == receive->classes[index]
+		&& receive->classes[index] != NULL;
+}
+
+/*
+ * After the generic receive accepted a frame: remember the classes of the
+ * object arguments its class-typed parameters took (an object coerced to a
+ * scalar is no object any more), as zend_native_call_fast_receive_class_hit()
+ * and the native call entry compare them.
+ */
+static void zend_native_call_fast_receive_record_classes(
+	zend_native_call_fast_receive *receive, const zend_execute_data *callee)
+{
+	const uint32_t supplied = ZEND_CALL_NUM_ARGS(callee);
+	uint32_t mask = receive->class_mask;
+
+	while (mask != 0) {
+		const uint32_t index = (uint32_t) __builtin_ctz(mask);
+		const zval *argument = ZEND_CALL_ARG(callee, index + 1);
+
+		mask &= mask - 1;
+		if (index >= supplied || index >= receive->num_args) {
+			break;
+		}
+		if (Z_TYPE_P(argument) == IS_OBJECT
+				&& zend_native_call_class_persistent(Z_OBJCE_P(argument))) {
+			receive->classes[index] = Z_OBJCE_P(argument);
+		}
+	}
 }
 
 /*
@@ -9230,9 +9278,12 @@ uint32_t zend_native_call_fast_do(
 		EG(current_execute_data) = callee;
 		if ((flags & ZEND_NATIVE_CALL_FAST_CHECK_ARGS) != 0) {
 			for (uint32_t index = 0; index < argument_count; index++) {
+				const zval *argument = ZEND_CALL_ARG(callee, index + 1);
+
 				if ((receive->type_masks[index]
-						& (UINT32_C(1) << Z_TYPE_P(
-							ZEND_CALL_ARG(callee, index + 1)))) == 0) {
+						& (UINT32_C(1) << Z_TYPE_P(argument))) == 0
+						&& !zend_native_call_fast_receive_class_hit(
+							receive, index, argument)) {
 					prepare = true;
 					break;
 				}
@@ -9240,6 +9291,12 @@ uint32_t zend_native_call_fast_do(
 		}
 		if (prepare) {
 			status = zend_native_call_fast_prepare(callee);
+			if (status == ZEND_NATIVE_RETURNED && receive->class_mask != 0
+					&& header->fast_cell != NULL
+					&& receive == &header->fast_cell->fast_receive) {
+				zend_native_call_fast_receive_record_classes(
+					&header->fast_cell->fast_receive, callee);
+			}
 		} else if ((flags & ZEND_NATIVE_CALL_FAST_DEFAULTS) != 0) {
 			for (uint32_t index = 0; index < header->fast_default_count;
 					index++) {

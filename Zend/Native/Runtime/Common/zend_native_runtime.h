@@ -14,7 +14,7 @@ extern "C" {
  * loaded: bump it whenever the helper ids, the execution context, the
  * persisted image layout or what generated code assumes about them change.
  */
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 98u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 99u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
