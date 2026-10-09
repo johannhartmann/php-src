@@ -986,6 +986,49 @@ class ZendCompilerX64 final
 		return state;
 	}
 
+	/*
+	 * A guarded fast path jumps to its cold block from every failed check,
+	 * and the cold block reloads an operand from its stack slot once that
+	 * copy is valid. Store the operands the cold block takes before the
+	 * first check: a register evicted later in the fast path would be
+	 * stored only on the path that falls through. The fast path stored
+	 * them before its exit anyway.
+	 */
+	void spill_cold_block_operands(const Adaptor::InstNode &node) {
+		if (node.control_block == UINT32_MAX) {
+			return;
+		}
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (successors.size() < 2) {
+			return;
+		}
+		const IRBlockRef cold = successors[1];
+		auto spill_value = [&](IRValueRef value) {
+			::tpde::ValueAssignment *assignment =
+				val_assignment(adaptor->val_local_idx(value));
+			if (assignment == nullptr || assignment->variable_ref) {
+				return;
+			}
+			for (uint32_t part = 0; part < assignment->part_count; ++part) {
+				::tpde::AssignmentPartRef location{assignment, part};
+				if (location.register_valid() && location.modified()
+						&& !location.fixed_assignment()) {
+					this->spill(location);
+				}
+			}
+		};
+		for (IRInstRef inst : adaptor->block_insts(cold)) {
+			for (IRValueRef operand : adaptor->node(inst).liveness_operands) {
+				spill_value(operand);
+			}
+		}
+		for (IRValueRef phi : adaptor->block_phis(cold)) {
+			spill_value(adaptor->val_as_phi(phi).incoming_val_for_block(
+				IRBlockRef{node.control_block}));
+		}
+	}
+
 	void reconcile_target_branch_state(const TargetBranchState &state) {
 		for (const TargetBranchAssignment &entry : state) {
 			::tpde::ValueAssignment *assignment =
@@ -5165,6 +5208,9 @@ bool ZendCompilerX64::compile_inst_impl(
 	if (!emit_materializations(instruction)
 			|| !emit_deopt_stores(instruction)) {
 		return false;
+	}
+	if (node.kind == Adaptor::InstKind::GuardedFast) {
+		spill_cold_block_operands(node);
 	}
 	if (node.kind == Adaptor::InstKind::GuardedCold && node.deopt_exit) {
 		return emit_deopt_exit(instruction);
