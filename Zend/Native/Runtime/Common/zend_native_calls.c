@@ -1385,9 +1385,13 @@ ZEND_TLS zend_native_reentry_cache_entry
 	zend_native_reentry_cache[ZEND_NATIVE_REENTRY_CACHE_SIZE];
 static uint64_t zend_native_reentry_persistent_epoch = 1;
 
+static void zend_native_call_recorded_targets_forget(
+	const zend_native_entry_cell *const *cells, uint32_t count);
+
 void zend_native_reentry_invalidate_persistent(void)
 {
 	zend_native_reentry_persistent_epoch++;
+	zend_native_call_recorded_targets_forget(NULL, 0);
 }
 
 void zend_native_reentry_forget_cells(
@@ -1407,6 +1411,7 @@ void zend_native_reentry_forget_cells(
 			}
 		}
 	}
+	zend_native_call_recorded_targets_forget(cells, count);
 }
 
 static zend_always_inline uint64_t zend_native_reentry_cache_epoch(void)
@@ -1700,7 +1705,9 @@ zend_result zend_native_entry_cell_reset(zend_native_entry_cell *cell)
 	}
 	zend_native_call_resolution_cache_invalidate();
 	if (cell->lease_managed) {
-		zend_native_reentry_invalidate_persistent();
+		const zend_native_entry_cell *reset = cell;
+
+		zend_native_reentry_forget_cells(&reset, 1);
 	}
 	__atomic_store_n(&cell->code, NULL, __ATOMIC_RELEASE);
 	cell->retired_epoch = cell->published_epoch;
@@ -5223,7 +5230,7 @@ static void zend_native_call_fast_publish(
  * visibility was checked from. zend_native_call_fast_dynamic_init() finds
  * the target again without the general resolution and activation.
  */
-#define ZEND_NATIVE_CALL_RECORDED_TARGETS 1024
+#define ZEND_NATIVE_CALL_RECORDED_TARGETS 4096
 
 typedef enum _zend_native_call_recorded_kind {
 	ZEND_NATIVE_CALL_RECORDED_NONE = 0,
@@ -5255,6 +5262,31 @@ typedef struct _zend_native_call_recorded_target {
 
 static zend_native_call_recorded_target
 	zend_native_call_recorded_targets[ZEND_NATIVE_CALL_RECORDED_TARGETS];
+
+/* Retired persistent cells (all of them for count 0): their recorded
+ * targets go too, which outlived the request through them. */
+static void zend_native_call_recorded_targets_forget(
+	const zend_native_entry_cell *const *cells, uint32_t count)
+{
+	for (uint32_t slot = 0; slot < ZEND_NATIVE_CALL_RECORDED_TARGETS; slot++) {
+		zend_native_call_recorded_target *target =
+			&zend_native_call_recorded_targets[slot];
+
+		if (target->cell == NULL) {
+			continue;
+		}
+		if (count == 0) {
+			memset(target, 0, sizeof(*target));
+			continue;
+		}
+		for (uint32_t index = 0; index < count; index++) {
+			if (target->cell == cells[index]) {
+				memset(target, 0, sizeof(*target));
+				break;
+			}
+		}
+	}
+}
 
 static zend_always_inline zend_native_call_recorded_target *
 zend_native_call_recorded_target_slot(
@@ -5410,7 +5442,13 @@ static void zend_native_call_recorded_target_store(
 	target->receive = zend_native_call_fast_receive_prepare(
 		resolution->entry_cell, &resolution->function->op_array);
 	target->cell = resolution->entry_cell;
-	target->persistent = function != NULL
+	/* A closure of a cached script: its code and the persistent
+	 * generation's cell outlive the request. */
+	target->persistent = kind == ZEND_NATIVE_CALL_RECORDED_CLOSURE
+		? resolution->entry_cell->lease_managed
+			&& resolution->entry_cell->function != NULL
+			&& resolution->entry_cell->function->op_array.opcodes == key
+		: function != NULL
 		&& (function->op_array.fn_flags & ZEND_ACC_IMMUTABLE) != 0
 		&& (kind == ZEND_NATIVE_CALL_RECORDED_METHOD
 			? (((const zend_class_entry *) key)->ce_flags
@@ -5443,9 +5481,14 @@ static zend_always_inline bool zend_native_call_recorded_target_current(
 	if (EXPECTED(target->epoch == zend_native_call_resolution_cache_epoch)) {
 		return true;
 	}
+	/* A closure's target names its code; the cell names the function the
+	 * closures of that code are copied from. */
 	if (!target->persistent || (cell = target->cell) == NULL
 			|| cell->state != ZEND_NATIVE_ENTRY_READY
-			|| cell->function != target->function
+			|| (target->kind == ZEND_NATIVE_CALL_RECORDED_CLOSURE
+				? cell->function == NULL
+					|| cell->function->op_array.opcodes != target->key
+				: cell->function != target->function)
 			|| (code = zend_native_entry_cell_load(
 				(zend_native_entry_cell *) cell)) == NULL
 			|| zend_native_code_frame_entry(code) != target->entry) {
@@ -5521,9 +5564,9 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 		}
 		target = zend_native_call_recorded_target_slot(
 			function->op_array.opcodes, NULL, NULL);
-		if (target->epoch != zend_native_call_resolution_cache_epoch
-				|| target->key != function->op_array.opcodes
-				|| target->kind != ZEND_NATIVE_CALL_RECORDED_CLOSURE) {
+		if (target->key != function->op_array.opcodes
+				|| target->kind != ZEND_NATIVE_CALL_RECORDED_CLOSURE
+				|| !zend_native_call_recorded_target_current(target)) {
 			return miss;
 		}
 		call_info |= ZEND_CALL_CLOSURE;
