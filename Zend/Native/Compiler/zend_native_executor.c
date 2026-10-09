@@ -2960,9 +2960,15 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			generation = zend_native_executor_find_function_generation(
 				execute_data->func);
 		}
+		/* A closure of a cached script, entered from C (a shutdown
+		 * function, an error handler): its copied op_array is mutable, but
+		 * its opcodes are the script's, which the persistent generation
+		 * indexed, as for an external reentry. */
 		if (generation == NULL
-				&& zend_native_executor_bundle(
-					&execute_data->func->op_array) != NULL) {
+				&& (zend_native_executor_bundle(
+						&execute_data->func->op_array) != NULL
+					|| (execute_data->func->common.fn_flags
+						& ZEND_ACC_CLOSURE) != 0)) {
 			generation = zend_native_executor_find_leased_function(
 				execute_data->func);
 			if (generation == NULL) {
