@@ -3050,6 +3050,40 @@ static zend_native_status zend_native_verify_return_exception(
 		? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 }
 
+/*
+ * Per return-type check of a cached function: the persistent class of the
+ * last object it accepted. Retiring persistent code clears the table
+ * (zend_native_value_forget_return_classes()), so no stale code or class
+ * address matches.
+ */
+#define ZEND_NATIVE_RETURN_CLASSES 1024
+typedef struct _zend_native_return_class_entry {
+	const zend_op *opcodes;
+	const zend_class_entry *ce;
+	uint32_t position;
+} zend_native_return_class_entry;
+static zend_native_return_class_entry
+	zend_native_return_classes[ZEND_NATIVE_RETURN_CLASSES];
+
+void zend_native_value_forget_return_classes(
+	const zend_op *const *opcodes, uint32_t count)
+{
+	if (count == 0) {
+		memset(zend_native_return_classes, 0,
+			sizeof(zend_native_return_classes));
+		return;
+	}
+	for (uint32_t slot = 0; slot < ZEND_NATIVE_RETURN_CLASSES; slot++) {
+		for (uint32_t index = 0; index < count; index++) {
+			if (zend_native_return_classes[slot].opcodes == opcodes[index]) {
+				memset(&zend_native_return_classes[slot], 0,
+					sizeof(zend_native_return_classes[slot]));
+				break;
+			}
+		}
+	}
+}
+
 zend_native_status zend_native_value_verify_return_type(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -3114,6 +3148,27 @@ zend_native_status zend_native_value_verify_return_type(
 			return_info->type, Z_TYPE_P(retval_ref)))) {
 		return ZEND_NATIVE_RETURNED;
 	}
+	/* A class-typed return of a cached function remembers the class of the
+	 * last object it accepted: an object of that class passes again (the
+	 * check depends only on the class). */
+	zend_native_return_class_entry *class_entry = NULL;
+	if (Z_TYPE_P(retval_ref) == IS_OBJECT
+			&& (ZEND_TYPE_HAS_NAME(return_info->type)
+				|| ZEND_TYPE_HAS_LIST(return_info->type))
+			&& (execute_data->func->op_array.fn_flags & ZEND_ACC_IMMUTABLE)
+				!= 0) {
+		const zend_op *opcodes = execute_data->func->op_array.opcodes;
+
+		class_entry = &zend_native_return_classes[
+			((((uintptr_t) opcodes) ^ source_position_id)
+					* UINT64_C(0x9e3779b97f4a7c15) >> 40)
+				& (ZEND_NATIVE_RETURN_CLASSES - 1)];
+		if (class_entry->opcodes == opcodes
+				&& class_entry->position == source_position_id
+				&& class_entry->ce == Z_OBJCE_P(retval_ref)) {
+			return ZEND_NATIVE_RETURNED;
+		}
+	}
 	if (opline->op1_type == IS_CV
 			&& UNEXPECTED(Z_ISUNDEF_P(retval_ptr))) {
 		retval_ref = retval_ptr = zend_native_value_read_r_explicit(
@@ -3149,6 +3204,14 @@ zend_native_status zend_native_value_verify_return_type(
 		zend_verify_return_error(execute_data->func, retval_ptr);
 		return zend_native_verify_return_exception(
 			execute_data, source_position_id);
+	}
+	if (class_entry != NULL && Z_TYPE_P(retval_ptr) == IS_OBJECT
+			&& (Z_OBJCE_P(retval_ptr)->type == ZEND_INTERNAL_CLASS
+				|| (Z_OBJCE_P(retval_ptr)->ce_flags & ZEND_ACC_IMMUTABLE)
+					!= 0)) {
+		class_entry->opcodes = execute_data->func->op_array.opcodes;
+		class_entry->position = source_position_id;
+		class_entry->ce = Z_OBJCE_P(retval_ptr);
 	}
 	return zend_native_value_status();
 }

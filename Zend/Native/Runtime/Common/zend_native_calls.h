@@ -42,6 +42,10 @@ typedef struct _zend_native_call_fast_receive {
 	uint32_t num_args;
 	/* Bit n: parameter n names a class, which type_masks cannot express. */
 	uint32_t class_mask;
+	/* Bit n: the default of parameter n is a constant expression, which the
+	 * receive evaluates as RECV_INIT does, caching it per request in the
+	 * run-time cache. */
+	uint32_t ast_mask;
 	uint32_t type_masks[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 	const zval *defaults[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 	/* Per class-typed parameter: the class of the last object argument the
@@ -967,6 +971,10 @@ extern zval zend_native_char_strings[256];
 /* Persistent code was retired or replaced: forget the reentry cells kept
  * across requests. */
 void zend_native_reentry_invalidate_persistent(void);
+/* Retired persistent code (all of it for count 0): forget the return
+ * classes kept for its checks. */
+void zend_native_value_forget_return_classes(
+	const struct _zend_op *const *opcodes, uint32_t count);
 /* A few persistent cells go away: forget only them. */
 void zend_native_reentry_forget_cells(
 	const zend_native_entry_cell *const *cells, uint32_t count);
