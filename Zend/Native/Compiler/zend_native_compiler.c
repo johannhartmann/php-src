@@ -4735,6 +4735,7 @@ zend_native_tier2_result zend_native_compiler_recompile_tier2(
 		}
 	}
 	zend_native_call_resolution_cache_invalidate();
+	zend_native_reentry_invalidate_persistent();
 	zend_native_compiler_mutation_unlock(compiler);
 	zend_native_compiler_release_ready_transients(
 		compiler, first_new_function);
@@ -6726,6 +6727,18 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 	zend_native_call_resolution_cache_invalidate();
 	if (compiler == NULL) {
 		return;
+	}
+	if (compiler->persistent && compiler->function_count <= 64) {
+		/* A small script retired alone (a cache file rewritten every
+		 * request) keeps the other persistent reentries. */
+		const zend_native_entry_cell *cells[64];
+
+		for (index = 0; index < compiler->function_count; index++) {
+			cells[index] = &compiler->functions[index]->entry_cell;
+		}
+		zend_native_reentry_forget_cells(cells, compiler->function_count);
+	} else if (compiler->persistent) {
+		zend_native_reentry_invalidate_persistent();
 	}
 	/*
 	 * The executor keeps stale generations on its retirement list until

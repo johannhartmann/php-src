@@ -68,10 +68,30 @@ void zend_native_call_publish_moved_frame(
 
 zval zend_native_char_strings[256];
 
+/* The context's fields are addresses of this thread's globals: built once,
+ * then copied for every entry. */
+ZEND_TLS zend_native_execution_context zend_native_execution_context_template;
+ZEND_TLS bool zend_native_execution_context_template_ready;
+
+static void zend_native_execution_context_build(
+	zend_native_execution_context *context);
+
 void zend_native_execution_context_init(
 	zend_native_execution_context *context)
 {
 	ZEND_ASSERT(context != NULL);
+	if (UNEXPECTED(!zend_native_execution_context_template_ready)) {
+		zend_native_execution_context_build(
+			&zend_native_execution_context_template);
+		zend_native_execution_context_template_ready = true;
+	}
+	*context = zend_native_execution_context_template;
+	context->observers_enabled = ZEND_OBSERVER_ENABLED;
+}
+
+static void zend_native_execution_context_build(
+	zend_native_execution_context *context)
+{
 	if (Z_TYPE(zend_native_char_strings[0]) != IS_STRING) {
 		for (uint32_t byte = 0; byte < 256; byte++) {
 			ZVAL_INTERNED_STR(&zend_native_char_strings[byte],
@@ -1342,15 +1362,20 @@ static zend_native_entry_cell *zend_native_reentry_find(
 }
 
 /*
- * The cells reentries resolved under the active scope, by code: a
- * closure or an inherited copy shares the opcodes of the function it was
- * made from and resolves to the same cell. Entering or leaving a scope and
- * every call-resolution invalidation (a retired or reset cell, a destroyed
- * compiler, request end) start a new epoch.
+ * The cells reentries resolved under a chain of scopes (its signature), by
+ * code: a closure or an inherited copy shares the opcodes of the function it
+ * was made from and resolves to the same cell. Every call-resolution
+ * invalidation (a retired or reset cell, a destroyed compiler, request end)
+ * starts a new epoch; activating another generation's scope and back does
+ * not, since the signature names the chain.
  */
-#define ZEND_NATIVE_REENTRY_CACHE_SIZE 64
+#define ZEND_NATIVE_REENTRY_CACHE_SIZE 1024
 typedef struct _zend_native_reentry_cache_entry {
-	const zend_native_reentry_scope *scope;
+	uint64_t signature;
+	/* A cell of a persistent generation survives the request: it is
+	 * cached under the persistent epoch, which only retiring persistent
+	 * code advances. */
+	bool persistent;
 	const zend_op *opcodes;
 	zend_native_entry_cell *cell;
 	uint64_t epoch;
@@ -1358,12 +1383,41 @@ typedef struct _zend_native_reentry_cache_entry {
 } zend_native_reentry_cache_entry;
 ZEND_TLS zend_native_reentry_cache_entry
 	zend_native_reentry_cache[ZEND_NATIVE_REENTRY_CACHE_SIZE];
-ZEND_TLS uint64_t zend_native_reentry_cache_scope_epoch;
+static uint64_t zend_native_reentry_persistent_epoch = 1;
+
+void zend_native_reentry_invalidate_persistent(void)
+{
+	zend_native_reentry_persistent_epoch++;
+}
+
+void zend_native_reentry_forget_cells(
+	const zend_native_entry_cell *const *cells, uint32_t count)
+{
+	for (uint32_t slot = 0; slot < ZEND_NATIVE_REENTRY_CACHE_SIZE; slot++) {
+		zend_native_reentry_cache_entry *cached =
+			&zend_native_reentry_cache[slot];
+
+		if (cached->cell == NULL) {
+			continue;
+		}
+		for (uint32_t index = 0; index < count; index++) {
+			if (cached->cell == cells[index]) {
+				memset(cached, 0, sizeof(*cached));
+				break;
+			}
+		}
+	}
+}
 
 static zend_always_inline uint64_t zend_native_reentry_cache_epoch(void)
 {
-	return zend_native_call_resolution_cache_epoch_value()
-		+ (zend_native_reentry_cache_scope_epoch << 40);
+	return zend_native_call_resolution_cache_epoch_value();
+}
+
+static zend_always_inline uint64_t zend_native_reentry_signature(void)
+{
+	return zend_native_active_reentry_scope != NULL
+		? zend_native_active_reentry_scope->signature : 0;
 }
 
 zend_native_entry_cell *zend_native_reentry_resolve(
@@ -1372,18 +1426,22 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_native_reentry_cache_entry *cached;
 	zend_native_entry_cell *cell;
 	uint64_t epoch;
+	uint64_t signature;
 
 	if (function == NULL || !ZEND_USER_CODE(function->type)) {
 		return NULL;
 	}
 	epoch = zend_native_reentry_cache_epoch();
+	signature = zend_native_reentry_signature();
 	cached = &zend_native_reentry_cache[
-		((uintptr_t) function->op_array.opcodes >> 6)
+		((((uintptr_t) function->op_array.opcodes ^ signature)
+				* UINT64_C(0x9e3779b97f4a7c15)) >> 40)
 			& (ZEND_NATIVE_REENTRY_CACHE_SIZE - 1)];
 	if (cached->opcodes == function->op_array.opcodes
 			&& cached->last == function->op_array.last
-			&& cached->scope == zend_native_active_reentry_scope
-			&& cached->epoch == epoch
+			&& cached->signature == signature
+			&& cached->epoch == (cached->persistent
+				? zend_native_reentry_persistent_epoch : epoch)
 			&& cached->cell->state == ZEND_NATIVE_ENTRY_READY) {
 		return cached->cell;
 	}
@@ -1396,11 +1454,14 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 			&& cell->function->op_array.opcodes
 				== function->op_array.opcodes
 			&& cell->function->op_array.last == function->op_array.last) {
-		cached->scope = zend_native_active_reentry_scope;
+		cached->signature = signature;
 		cached->opcodes = function->op_array.opcodes;
 		cached->last = function->op_array.last;
 		cached->cell = cell;
-		cached->epoch = zend_native_reentry_cache_epoch();
+		cached->persistent = cell->lease_managed;
+		cached->epoch = cell->lease_managed
+			? zend_native_reentry_persistent_epoch
+			: zend_native_reentry_cache_epoch();
 	}
 	return cell;
 }
@@ -1521,8 +1582,17 @@ zend_result zend_native_reentry_scope_enter_resolver(
 	scope->resolver = resolver;
 	scope->resolver_context = resolver_context;
 	scope->previous = zend_native_active_reentry_scope;
+	{
+		uint64_t signature = scope->previous != NULL
+			? scope->previous->signature : UINT64_C(0x9e3779b97f4a7c15);
+
+		signature = (signature ^ (uintptr_t) scope) * UINT64_C(0x100000001b3);
+		signature = (signature ^ (uintptr_t) resolver_context)
+			* UINT64_C(0xff51afd7ed558ccd);
+		/* 0 stays the signature of no scope. */
+		scope->signature = (signature ^ (signature >> 33)) | 1;
+	}
 	zend_native_active_reentry_scope = scope;
-	zend_native_reentry_cache_scope_epoch++;
 	return SUCCESS;
 }
 
@@ -1530,7 +1600,6 @@ void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope)
 {
 	ZEND_ASSERT(scope != NULL && zend_native_active_reentry_scope == scope);
 	if (scope != NULL && zend_native_active_reentry_scope == scope) {
-		zend_native_reentry_cache_scope_epoch++;
 		zend_native_active_reentry_scope = scope->previous;
 		scope->resolver = NULL;
 		scope->resolver_context = NULL;
@@ -1630,6 +1699,9 @@ zend_result zend_native_entry_cell_reset(zend_native_entry_cell *cell)
 		return FAILURE;
 	}
 	zend_native_call_resolution_cache_invalidate();
+	if (cell->lease_managed) {
+		zend_native_reentry_invalidate_persistent();
+	}
 	__atomic_store_n(&cell->code, NULL, __ATOMIC_RELEASE);
 	cell->retired_epoch = cell->published_epoch;
 	cell->state = ZEND_NATIVE_ENTRY_UNCOMPILED;
