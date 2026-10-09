@@ -221,6 +221,11 @@ static zend_mir_scalar_type_mask zend_mir_declared_argument_scalar_type(
 			& (ZEND_SEND_BY_REF | ZEND_SEND_PREFER_REF)) != 0) {
 		return ZEND_MIR_SCALAR_TYPE_NONE;
 	}
+	/* A class name in the type admits objects the mask does not show. */
+	if (!ZEND_TYPE_IS_ONLY_MASK(
+			op_array->arg_info[argument_number - 1].type)) {
+		return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
 	type = ZEND_TYPE_PURE_MASK(
 		op_array->arg_info[argument_number - 1].type);
 	switch (type) {
