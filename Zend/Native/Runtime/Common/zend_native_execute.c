@@ -649,7 +649,7 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 	}
 }
 
-static zend_native_status zend_native_execute_frame_impl(
+static zend_always_inline zend_native_status zend_native_execute_frame_impl(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diagnostic,
@@ -667,8 +667,7 @@ static zend_native_status zend_native_execute_frame_impl(
 #ifdef HAVE_DTRACE
 			&& !zend_dtrace_enabled
 #endif
-			&& (entry = zend_native_code_frame_entry(code)) != NULL
-			&& zend_native_code_is_executable(code))) {
+			&& (entry = zend_native_code_executable_entry(code)) != NULL)) {
 		return zend_native_execute_frame_lean(entry, execute_data,
 			observer_already_started, &state);
 	}

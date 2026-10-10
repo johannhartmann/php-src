@@ -14880,6 +14880,11 @@ extern "C" zend_native_frame_entry_t zend_native_code_frame_entry(
 	return code != nullptr ? code->entry : nullptr;
 }
 
+extern "C" zend_native_frame_entry_t zend_native_code_executable_entry(
+	const zend_native_code *code) {
+	return code != nullptr && code->executable ? code->entry : nullptr;
+}
+
 extern "C" void *zend_native_code_fast_call_entry(
 	const zend_native_code *code) {
 	return code != nullptr ? code->fast_call_entry : nullptr;
