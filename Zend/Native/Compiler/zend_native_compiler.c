@@ -5435,7 +5435,7 @@ zend_native_compiler *zend_native_compiler_create(
 }
 
 #define ZEND_NATIVE_BUNDLE_MAGIC UINT64_C(0x0033314c444e425a)
-#define ZEND_NATIVE_BUNDLE_FORMAT 2u
+#define ZEND_NATIVE_BUNDLE_FORMAT 3u
 #define ZEND_NATIVE_BUNDLE_MAX_BYTES (UINT64_C(1) << 28)
 
 typedef enum _zend_native_bundle_reference_type {
@@ -5686,21 +5686,30 @@ static zend_op_array *zend_native_bundle_source_at(
 	return NULL;
 }
 
+/* A word at a time: a bundle attached again every request (a cache file
+ * rewritten with the same content) is checked on each import. The
+ * checksum field counts as zero. */
 static uint64_t zend_native_bundle_checksum(
 	const unsigned char *bytes, size_t size)
 {
-	uint64_t hash = UINT64_C(1469598103934665603);
-	size_t checksum_offset =
+	const size_t checksum_offset =
 		offsetof(zend_native_bundle_header, checksum);
-	size_t index;
+	uint64_t hash = UINT64_C(1469598103934665603) ^ size;
+	size_t index = 0;
 
-	for (index = 0; index < size; index++) {
-		unsigned char value =
-			index >= checksum_offset
-				&& index < checksum_offset + sizeof(uint64_t)
-			? 0 : bytes[index];
-		hash ^= value;
-		hash *= UINT64_C(1099511628211);
+	static_assert(offsetof(zend_native_bundle_header, checksum)
+		% sizeof(uint64_t) == 0, "bundle checksum must be word aligned");
+	for (; index + sizeof(uint64_t) <= size; index += sizeof(uint64_t)) {
+		uint64_t word = 0;
+
+		if (index != checksum_offset) {
+			memcpy(&word, bytes + index, sizeof(word));
+		}
+		hash = (hash ^ word) * UINT64_C(0x9e3779b97f4a7c15);
+		hash ^= hash >> 29;
+	}
+	for (; index < size; index++) {
+		hash = (hash ^ bytes[index]) * UINT64_C(1099511628211);
 	}
 	return hash;
 }
@@ -6678,9 +6687,12 @@ void zend_native_compiler_end_request(zend_native_compiler *compiler)
 	if (compiler == NULL) {
 		return;
 	}
-	zend_native_compiler_leave(compiler);
-	zend_native_compiler_session_flush_stats(compiler);
-	zend_native_compiler_session_release(compiler);
+	/* Most leased generations ran without a session of their own. */
+	if (zend_native_compiler_session_find(compiler) != NULL) {
+		zend_native_compiler_leave(compiler);
+		zend_native_compiler_session_flush_stats(compiler);
+		zend_native_compiler_session_release(compiler);
+	}
 	if (!compiler->persistent) {
 		return;
 	}
