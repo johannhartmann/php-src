@@ -6,6 +6,9 @@
 #include "Zend/zend_execute.h"
 #include "Zend/zend_extensions.h"
 #include "Zend/zend_generators.h"
+#include "Zend/Native/Runtime/Common/zend_native_execute.h"
+#include "Zend/Native/Runtime/Common/zend_native_reentry_cache.h"
+#include "Zend/zend_dtrace.h"
 #include "Zend/zend_observer.h"
 #include "Zend/Optimizer/zend_optimizer.h"
 
@@ -3256,7 +3259,93 @@ int zend_native_executor_op_array_handle(void)
 	return zend_native_executor_bundle_rid;
 }
 
+static zend_never_inline void zend_native_executor_execute_ex_general(
+	zend_execute_data *execute_data);
+
+/* What execute_ex does after a frame it entered failed: the source probe
+ * of the throwing position, or the error of a failure without an
+ * exception. */
+static zend_never_inline void zend_native_executor_entry_failed(
+	zend_execute_data *execute_data, zend_execute_data *previous,
+	const char *message)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+
+	if (EG(exception) != NULL
+			&& zend_native_runtime_source_probe_enabled()
+			&& EG(opline_before_exception) != NULL
+			&& EG(opline_before_exception) >= op_array->opcodes
+			&& EG(opline_before_exception)
+				< op_array->opcodes + op_array->last) {
+		EG(current_execute_data) = execute_data;
+		zend_native_runtime_source_probe((uint32_t) (
+			EG(opline_before_exception) - op_array->opcodes));
+	}
+	if (EG(exception) == NULL) {
+		zend_throw_error(NULL, "%s", message);
+	}
+	EG(current_execute_data) = previous;
+}
+
 void zend_native_executor_execute_ex(zend_execute_data *execute_data)
+{
+	/*
+	 * The common entry from C (a callback, a magic method, ArrayAccess) of
+	 * a function whose ready code the reentry cache holds: unobserved, no
+	 * generator, no trampoline, no frame probe. The frame runs at once;
+	 * everything else takes the general activation below.
+	 */
+	if (EXPECTED(zend_native_executor_request_state.execution_depth != 0
+			&& zend_native_executor_request_state.active
+			&& !zend_native_executor_preload_capture_state.active
+			&& !ZEND_OBSERVER_ENABLED
+#ifdef HAVE_DTRACE
+			&& !zend_dtrace_enabled
+#endif
+			&& execute_data->func->type == ZEND_USER_FUNCTION
+			&& (execute_data->func->common.fn_flags
+				& (ZEND_ACC_CALL_VIA_TRAMPOLINE | ZEND_ACC_GENERATOR)) == 0
+			&& (ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) == 0)) {
+		zend_native_entry_cell *cell;
+		const zend_native_code *code;
+		zend_native_frame_entry_t entry = zend_native_reentry_cached_entry(
+			execute_data->func, &cell, &code);
+
+		if (UNEXPECTED(entry == NULL)) {
+			entry = zend_native_reentry_resolve_entry(
+				execute_data->func, &cell, &code);
+		}
+
+		if (EXPECTED(entry != NULL && cell->frame_probe == NULL)) {
+			zend_execute_data *previous = execute_data->prev_execute_data;
+			zend_native_execution_state state;
+			zend_native_status status;
+
+			zend_native_entry_cell_retain_active(cell);
+			EG(current_execute_data) = execute_data;
+			zend_native_executor_request_state.execution_depth++;
+			status = zend_native_execute_frame_lean(entry, execute_data, true,
+				&state, (zend_native_execution_context *)
+					zend_native_execution_context_shared());
+			zend_native_executor_request_state.execution_depth--;
+			EG(current_execute_data) = previous;
+			zend_native_entry_cell_release_active(cell);
+			if (EXPECTED(status == ZEND_NATIVE_RETURNED)) {
+				return;
+			}
+			if (status == ZEND_NATIVE_BAILOUT) {
+				zend_bailout();
+			}
+			zend_native_executor_entry_failed(execute_data, previous,
+				"Native userland execution failed");
+			return;
+		}
+	}
+	zend_native_executor_execute_ex_general(execute_data);
+}
+
+static zend_never_inline void zend_native_executor_execute_ex_general(
+	zend_execute_data *execute_data)
 {
 	zend_native_executor_dispatch *dispatch;
 	zend_native_executor_generation *generation;

@@ -614,6 +614,11 @@ zend_result zend_native_reentry_scope_enter_resolver(
 void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope);
 zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_function *function);
+/* zend_native_reentry_resolve() with the ready cell's executable code and
+ * frame entry, kept with the cached cell; NULL when there is none. */
+zend_native_frame_entry_t zend_native_reentry_resolve_entry(
+	zend_function *function, zend_native_entry_cell **cell,
+	const zend_native_code **code);
 
 /*
  * Replace a CALL_VIA_TRAMPOLINE user frame with its concrete __call() or
@@ -1023,8 +1028,21 @@ void zend_native_value_forget_return_classes(
 /* A few persistent cells go away: forget only them. */
 void zend_native_reentry_forget_cells(
 	const zend_native_entry_cell *const *cells, uint32_t count);
+/* A frame whose arguments need no receive work: every parameter
+ * supplied, none typed, none variadic (zend_native_frame_prepare() would
+ * pass it unchanged). */
+#define ZEND_NATIVE_FRAME_PREPARED(execute_data) \
+	(ZEND_CALL_NUM_ARGS(execute_data) \
+			>= (execute_data)->func->op_array.num_args \
+		&& ((execute_data)->func->op_array.fn_flags \
+			& (ZEND_ACC_VARIADIC | ZEND_ACC_HAS_TYPE_HINTS)) == 0)
+
 void zend_native_execution_context_init(
 	zend_native_execution_context *context);
+/* This thread's context template, which generated code only reads: an
+ * entry without observers passes it instead of a copy (its
+ * observers_enabled is the one of the template's build). */
+const zend_native_execution_context *zend_native_execution_context_shared(void);
 /*
  * Native direct activations live inside the active fiber's Zend VM stack.
  * Fiber switches therefore save and clear the thread-local chain before the
