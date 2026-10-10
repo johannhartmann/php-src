@@ -25,6 +25,15 @@ native code materializes all roots and transfers cleanup responsibility to
 state reachable by the active bailout catcher. No C++ object requiring RAII
 destruction may remain live across such an operation.
 
+That state is reachable through bailout records: a native boundary that
+must clean up when a bailout passes it links a record into a per-thread
+chain (one per fiber) instead of installing its own `zend_try`.
+`_zend_bailout` unwinds, before its jump, every record linked while its
+target was the active catcher, newest first, while their C frames are still
+intact; the bailout then continues to the catcher. A boundary that turns a
+bailout into a returned status for its native callers keeps its own
+`zend_try`.
+
 Generator and fiber suspension store persistent, rooted frame state. Resume
 enters one native dispatcher with a resume ID and the expected immutable
 code-version identity. The dispatcher validates both, reconstructs the
