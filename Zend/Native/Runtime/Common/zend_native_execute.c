@@ -2,6 +2,7 @@
 
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_generators.h"
+#include "Zend/Native/Runtime/Common/zend_native_execute.h"
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_closures.h"
@@ -12,28 +13,8 @@
 
 #include <stdio.h>
 
-typedef struct _zend_native_execution_state {
-	zend_vm_stack previous_stack;
-	zval *previous_stack_top;
-	zend_native_status status;
-	zval discarded_return;
-	zval *original_return_value;
-	bool observer_started;
-	bool observer_finished;
-#ifdef HAVE_DTRACE
-	zend_dtrace_user_frame dtrace_frame;
-	bool dtrace_frame_started;
-#endif
-} zend_native_execution_state;
 
-/*
- * The state lives in the C frame of zend_native_execute_frame_impl(), not in
- * the function that calls setjmp(), so the catcher never reads an
- * indeterminate automatic after longjmp. It must not live on the VM stack:
- * nothing may follow the newest frame there, because a tier-2 host entry grows
- * that frame in place. A generator frame lies below its thawed call frames and
- * leaves the VM stack to them.
- */
+/* See zend_native_execute.h for where the state lives. */
 static zend_always_inline void zend_native_execution_state_init(
 	zend_native_execution_state *state, bool generator_frame)
 {
@@ -210,8 +191,10 @@ zend_native_status zend_native_execution_finish_direct_frame(
 			status = ZEND_NATIVE_EXCEPTION;
 		} else if ((type_mask & MAY_BE_VOID) == 0
 				&& (return_value == NULL || Z_ISUNDEF_P(return_value)
-					|| !zend_check_type_ex(
-						&return_info->type, return_value, true, false))) {
+					|| (!ZEND_TYPE_CONTAINS_CODE(
+							return_info->type, Z_TYPE_P(return_value))
+						&& !zend_check_type_ex(&return_info->type,
+							return_value, true, false)))) {
 			zend_verify_return_error(execute_data->func,
 				return_value == NULL || Z_ISUNDEF_P(return_value)
 					? NULL : return_value);
@@ -293,8 +276,10 @@ static zend_always_inline bool zend_native_execute_frame_returned(
 			state->status = ZEND_NATIVE_EXCEPTION;
 		} else if ((type_mask & MAY_BE_VOID) == 0
 				&& (Z_ISUNDEF_P(return_value)
-					|| !zend_check_type_ex(
-						&return_info->type, return_value, true, false))) {
+					|| (!ZEND_TYPE_CONTAINS_CODE(
+							return_info->type, Z_TYPE_P(return_value))
+						&& !zend_check_type_ex(&return_info->type,
+							return_value, true, false)))) {
 			zend_verify_return_error(execute_data->func,
 				Z_ISUNDEF_P(return_value) ? NULL : return_value);
 			state->status = ZEND_NATIVE_EXCEPTION;
@@ -304,6 +289,85 @@ static zend_always_inline bool zend_native_execute_frame_returned(
 		zend_native_call_direct_abandon(execute_data);
 	}
 	return frame_returned;
+}
+
+/* Every parameter supplied, none variadic, each argument of a type its
+ * declaration's mask names: zend_native_frame_prepare() would pass the
+ * frame unchanged. */
+static zend_always_inline bool zend_native_execute_frame_received(
+	const zend_execute_data *execute_data)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+
+	if (ZEND_NATIVE_FRAME_PREPARED(execute_data)) {
+		return true;
+	}
+	if (ZEND_CALL_NUM_ARGS(execute_data) < op_array->num_args
+			|| (op_array->fn_flags & ZEND_ACC_VARIADIC) != 0) {
+		return false;
+	}
+	for (uint32_t index = 0; index < op_array->num_args; index++) {
+		const zend_type type = op_array->arg_info[index].type;
+
+		if (ZEND_TYPE_IS_SET(type)
+				&& !ZEND_TYPE_CONTAINS_CODE(type,
+					Z_TYPE_P(ZEND_CALL_ARG(execute_data, index + 1)))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
+ * A frame that returned as most do: a value, no exception or interrupt,
+ * a return type the value's type is in (the mask; anything else takes the
+ * full check), and nothing beyond its compiled variables to release. Its
+ * return value is initialized.
+ */
+static zend_always_inline bool zend_native_execute_frame_plain_return(
+	zend_execute_data *execute_data, zend_native_status status)
+{
+	zval *return_value = execute_data->return_value;
+
+	if (status != ZEND_NATIVE_RETURNED || EG(exception) != NULL
+			|| zend_atomic_bool_load_ex(&EG(vm_interrupt))
+			|| (ZEND_CALL_INFO(execute_data)
+				& (ZEND_CALL_CODE | ZEND_CALL_HAS_SYMBOL_TABLE
+					| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS
+					| ZEND_CALL_FREE_EXTRA_ARGS)) != 0) {
+		return false;
+	}
+	if ((execute_data->func->common.fn_flags & ZEND_ACC_HAS_RETURN_TYPE)
+			!= 0) {
+		const zend_type type = execute_data->func->common.arg_info[-1].type;
+
+		if ((ZEND_TYPE_FULL_MASK(type) & MAY_BE_VOID) == 0
+				&& (Z_ISUNDEF_P(return_value)
+					|| !ZEND_TYPE_CONTAINS_CODE(type, Z_TYPE_P(return_value)))) {
+			return false;
+		}
+	}
+	if (Z_ISUNDEF_P(return_value)) {
+		ZVAL_NULL(return_value);
+	}
+	return true;
+}
+
+/* zend_native_execution_cleanup_frame_ex() of a returned plain frame. */
+static zend_always_inline void zend_native_execute_frame_release_plain(
+	zend_execute_data *execute_data)
+{
+	zval *cv = ZEND_CALL_VAR_NUM(execute_data, 0);
+	uint32_t count = execute_data->func->op_array.last_var;
+
+	if (EG(current_execute_data) == execute_data) {
+		EG(current_execute_data) = execute_data->prev_execute_data;
+	}
+	while (count != 0) {
+		i_zval_ptr_dtor(cv);
+		cv++;
+		count--;
+	}
 }
 
 /* What follows a bailout out of the entry of a lean frame, as
@@ -338,12 +402,22 @@ static void zend_native_execute_frame_settle(
  * point where it happened, and one out of the return processing, which
  * that function leaves unprotected, propagates.
  */
-static zend_never_inline zend_native_status zend_native_execute_frame_lean(
+zend_never_inline zend_native_status zend_native_execute_frame_lean(
 	zend_native_frame_entry_t entry, zend_execute_data *execute_data,
-	bool observer_already_started, zend_native_execution_state *state)
+	bool observer_already_started, zend_native_execution_state *state,
+	zend_native_execution_context *shared_context)
 {
-	zend_native_execution_context context;
+	zend_native_execution_context local_context;
+	zend_native_execution_context *context = shared_context;
 	volatile uint32_t phase = 0;
+#if ZEND_DEBUG
+	/* Generated code only reads its context. */
+	zend_native_execution_context shared_before;
+
+	if (shared_context != NULL) {
+		memcpy(&shared_before, shared_context, sizeof(shared_before));
+	}
+#endif
 	volatile bool frame_returned = false;
 
 	zend_native_execution_state_init(state, false);
@@ -354,16 +428,41 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 #ifdef HAVE_DTRACE
 	state->dtrace_frame_started = false;
 #endif
-	zend_native_execution_context_init(&context);
+	if (context == NULL) {
+		zend_native_execution_context_init(&local_context);
+		context = &local_context;
+	}
 	if (state->original_return_value == NULL) {
 		ZVAL_UNDEF(&state->discarded_return);
 		execute_data->return_value = &state->discarded_return;
 	}
 	zend_try {
-		state->status = zend_native_frame_prepare(execute_data) == FAILURE
+		state->status = !zend_native_execute_frame_received(execute_data)
+				&& zend_native_frame_prepare(execute_data) == FAILURE
 			? (EG(exception) != NULL
 				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT)
-			: entry(execute_data, &context);
+			: entry(execute_data, context);
+		if (EXPECTED(zend_native_execute_frame_plain_return(
+				execute_data, state->status))) {
+			/* What the general processing below does for it. */
+			phase = 3;
+			zend_native_execute_frame_release_plain(execute_data);
+			if (observer_already_started) {
+				uint32_t call_info = ZEND_CALL_INFO(execute_data);
+
+				if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
+					OBJ_RELEASE(Z_OBJ(execute_data->This));
+				} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
+					OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
+				}
+			}
+			if (state->original_return_value == NULL
+					&& !Z_ISUNDEF(state->discarded_return)) {
+				zval_ptr_dtor(&state->discarded_return);
+			}
+			phase = 4;
+			goto done;
+		}
 		phase = 1;
 		frame_returned =
 			zend_native_execute_frame_returned(execute_data, state);
@@ -393,6 +492,8 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 			}
 		}
 		phase = 4;
+done:
+		;
 	} zend_catch {
 		switch (phase) {
 			case 0:
@@ -417,6 +518,10 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 	if (state->original_return_value == NULL) {
 		execute_data->return_value = NULL;
 	}
+#if ZEND_DEBUG
+	ZEND_ASSERT(shared_context == NULL || memcmp(&shared_before,
+		shared_context, sizeof(shared_before)) == 0);
+#endif
 	{
 		zend_native_status status = state->status;
 		zend_native_execution_state_free(state);
@@ -556,8 +661,10 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 			state->status = ZEND_NATIVE_EXCEPTION;
 		} else if ((type_mask & MAY_BE_VOID) == 0
 				&& (Z_ISUNDEF_P(return_value)
-					|| !zend_check_type_ex(
-						&return_info->type, return_value, true, false))) {
+					|| (!ZEND_TYPE_CONTAINS_CODE(
+							return_info->type, Z_TYPE_P(return_value))
+						&& !zend_check_type_ex(&return_info->type,
+							return_value, true, false)))) {
 			zend_verify_return_error(execute_data->func,
 				Z_ISUNDEF_P(return_value) ? NULL : return_value);
 			state->status = ZEND_NATIVE_EXCEPTION;
@@ -669,7 +776,7 @@ static zend_always_inline zend_native_status zend_native_execute_frame_impl(
 #endif
 			&& (entry = zend_native_code_executable_entry(code)) != NULL)) {
 		return zend_native_execute_frame_lean(entry, execute_data,
-			observer_already_started, &state);
+			observer_already_started, &state, NULL);
 	}
 	return zend_native_execute_frame_state(code, execute_data, diagnostic,
 		observer_already_started, &state);

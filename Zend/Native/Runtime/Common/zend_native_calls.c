@@ -14,12 +14,12 @@
 #include "Zend/zend_observer.h"
 #include "Zend/zend_partial.h"
 
+#include "Zend/Native/Runtime/Common/zend_native_reentry_cache.h"
+
 #include <string.h>
 #include <unistd.h>
 
-ZEND_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
-/* Defined with the call-resolution cache below. */
-static uint64_t zend_native_call_resolution_cache_epoch;
+ZEND_EXT_TLS zend_native_reentry_scope *zend_native_active_reentry_scope;
 
 static zend_always_inline uint64_t
 zend_native_call_resolution_cache_epoch_value(void)
@@ -87,6 +87,16 @@ void zend_native_execution_context_init(
 	}
 	*context = zend_native_execution_context_template;
 	context->observers_enabled = ZEND_OBSERVER_ENABLED;
+}
+
+const zend_native_execution_context *zend_native_execution_context_shared(void)
+{
+	if (UNEXPECTED(!zend_native_execution_context_template_ready)) {
+		zend_native_execution_context_build(
+			&zend_native_execution_context_template);
+		zend_native_execution_context_template_ready = true;
+	}
+	return &zend_native_execution_context_template;
 }
 
 static void zend_native_execution_context_build(
@@ -1369,21 +1379,9 @@ static zend_native_entry_cell *zend_native_reentry_find(
  * starts a new epoch; activating another generation's scope and back does
  * not, since the signature names the chain.
  */
-#define ZEND_NATIVE_REENTRY_CACHE_SIZE 1024
-typedef struct _zend_native_reentry_cache_entry {
-	uint64_t signature;
-	/* A cell of a persistent generation survives the request: it is
-	 * cached under the persistent epoch, which only retiring persistent
-	 * code advances. */
-	bool persistent;
-	const zend_op *opcodes;
-	zend_native_entry_cell *cell;
-	uint64_t epoch;
-	uint32_t last;
-} zend_native_reentry_cache_entry;
-ZEND_TLS zend_native_reentry_cache_entry
+ZEND_EXT_TLS zend_native_reentry_cache_entry
 	zend_native_reentry_cache[ZEND_NATIVE_REENTRY_CACHE_SIZE];
-static uint64_t zend_native_reentry_persistent_epoch = 1;
+uint64_t zend_native_reentry_persistent_epoch = 1;
 
 static void zend_native_call_recorded_targets_forget(
 	const zend_native_entry_cell *const *cells, uint32_t count,
@@ -1495,11 +1493,6 @@ static zend_always_inline uint64_t zend_native_reentry_cache_epoch(void)
 	return zend_native_call_resolution_cache_epoch_value();
 }
 
-static zend_always_inline uint64_t zend_native_reentry_signature(void)
-{
-	return zend_native_active_reentry_scope != NULL
-		? zend_native_active_reentry_scope->signature : 0;
-}
 
 zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_function *function)
@@ -1539,6 +1532,9 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 		cached->opcodes = function->op_array.opcodes;
 		cached->last = function->op_array.last;
 		cached->cell = cell;
+		cached->code = zend_native_entry_cell_load(cell);
+		cached->entry = cached->code != NULL
+			? zend_native_code_executable_entry(cached->code) : NULL;
 		zend_native_entry_cell_note_cached(cell, (uint16_t)
 			(cached - zend_native_reentry_cache));
 		cached->persistent = cell->lease_managed;
@@ -1547,6 +1543,21 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 			: zend_native_reentry_cache_epoch();
 	}
 	return cell;
+}
+
+zend_native_frame_entry_t zend_native_reentry_resolve_entry(
+	zend_function *function, zend_native_entry_cell **cell,
+	const zend_native_code **code)
+{
+	const zend_native_frame_entry_t entry =
+		zend_native_reentry_cached_entry(function, cell, code);
+
+	if (EXPECTED(entry != NULL)) {
+		return entry;
+	}
+	*cell = zend_native_reentry_resolve(function);
+	*code = *cell != NULL ? zend_native_entry_cell_load(*cell) : NULL;
+	return *code != NULL ? zend_native_code_executable_entry(*code) : NULL;
 }
 
 static zend_native_user_opcode_result zend_native_user_opcode_result_make(
@@ -1840,6 +1851,9 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 	if (execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)) {
 		return FAILURE;
+	}
+	if (ZEND_NATIVE_FRAME_PREPARED(execute_data)) {
+		return SUCCESS;
 	}
 	op_array = &execute_data->func->op_array;
 	supplied = ZEND_CALL_NUM_ARGS(execute_data);
@@ -3942,7 +3956,7 @@ struct _zend_native_call_resolution_cache_entry {
 #define ZEND_NATIVE_CALL_SITE_ENTRIES 2
 static zend_native_call_resolution_cache_entry *
 	zend_native_call_resolution_cache_entries;
-static uint64_t zend_native_call_resolution_cache_epoch = 1;
+uint64_t zend_native_call_resolution_cache_epoch = 1;
 
 static void zend_native_call_fast_publish(
 	const zend_execute_data *caller,
