@@ -19680,6 +19680,82 @@ bool ZendCompilerX64::compile_inst_impl(
 					return true;
 				}
 			}
+			if (record.opcode == ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH
+					&& !node.has_result
+					&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE}
+					&& mir.value_operation.extended_value
+						<= INT32_MAX - sizeof(void *)) {
+				/* ZEND_JMP_FRAMELESS as the VM runs it: once primed, the
+				 * run-time cache slot says whether the namespaced function
+				 * exists; only an unprimed slot calls the helper. */
+				const int32_t decision_slot =
+					inst_stack_slot(sizeof(uint32_t));
+				if (decision_slot >= 0) {
+					return false;
+				}
+				auto slow = text_writer.label_create();
+				auto miss = text_writer.label_create();
+				auto branch = text_writer.label_create();
+				auto [frame_ref, frame] =
+					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+				auto frame_scratch = frame_register(std::move(frame));
+				auto spilled = spill_before_branch();
+				release_spilled_regs(spilled);
+				auto frame_reg = frame_scratch.cur_reg();
+				ScratchReg cached{this};
+				auto cached_reg = cached.alloc_gp();
+				ASM(MOV64rm, cached_reg,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_execute_data, run_time_cache))));
+				ASM(TEST64rr, cached_reg, cached_reg);
+				generate_raw_jump(Jump::je, slow);
+				ASM(MOV64rm, cached_reg,
+					FE_MEM(cached_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							mir.value_operation.extended_value)));
+				ASM(CMP64ri, cached_reg, ZEND_JMP_FL_HIT);
+				generate_raw_jump(Jump::jne, miss);
+				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
+					ZEND_NATIVE_ITERATOR_NEXT);
+				generate_raw_jump(Jump::jmp, branch);
+				label_place(miss);
+				ASM(CMP64ri, cached_reg, ZEND_JMP_FL_MISS);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
+					ZEND_NATIVE_ITERATOR_END);
+				generate_raw_jump(Jump::jmp, branch);
+				cached.reset();
+				label_place(slow);
+
+				tpde::x64::CCAssignerSysV assigner{false};
+				CallBuilder builder{*this, assigner};
+				ValuePart frame_argument{
+					tpde::x64::PlatformConfig::GP_BANK, 8};
+				frame_argument.set_value(this, take_frame(frame_scratch));
+				builder.add_arg(std::move(frame_argument),
+					tpde::CCAssignment{});
+				call_value_operation(builder, mir.value_operation,
+					mir.runtime_helper);
+				ValuePart decision{tpde::x64::PlatformConfig::GP_BANK, 4};
+				builder.add_ret(decision, tpde::CCAssignment{});
+				auto decision_reg = decision.cur_reg_or_load(this);
+				emit_decision_exception_check(decision_reg,
+					mir.exception_block_id, [&] { decision.reset(this); });
+				ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
+					decision_reg);
+				decision.reset(this);
+				label_place(branch);
+				const auto &successors = adaptor->block_succs(
+					IRBlockRef{node.control_block});
+				ScratchReg branch_decision{this};
+				auto branch_decision_reg = branch_decision.alloc_gp();
+				ASM(MOV32rm, branch_decision_reg,
+					FE_MEM(FE_BP, 0, FE_NOREG, decision_slot));
+				ASM(TEST32rr, branch_decision_reg, branch_decision_reg);
+				generate_cond_branch(Jump::jne, successors[0], successors[1]);
+				return true;
+			}
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			builder.add_arg(CallArg{node.operands[0]});
