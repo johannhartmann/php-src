@@ -143,6 +143,16 @@ takes its cached path. The hit path is unchanged; property values, dynamic
 and hooked properties stay per request. A new native generation (an OPcache
 restart or a replaced script that declares classes) drops the templates.
 
+Lookups of code outlive the request too. The universal protocol and entries
+from C find a function's cell in the reentry cache, which keeps persistent
+cells under the persistent epoch. A cached include finds its entry cell by
+opcodes in a process-local include cache once its persistent generation is
+settled (`zend_native_compiler_end_request()` has nothing left to drop);
+without threads such a generation needs no per-request lease, since only a
+request boundary retires a persistent generation. OPcache records the
+scripts it discards for good in a small ring, so a process retires exactly
+their generations instead of checking every generation's script.
+
 The call fast path uses the same ownership, observation and suspension rules
 as section 1 (a caller's native-owned locals are described by the map at the
 call-return PC); it is developed in parallel with, not independently of, the

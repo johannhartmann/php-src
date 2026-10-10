@@ -124,9 +124,10 @@ ZEND_API void zend_native_compiler_destroy(zend_native_compiler *compiler);
 /*
  * Drop request-owned dynamic code and post-publication compiler workspaces.
  * Persistent entry cells and immutable code mappings remain ready for the
- * next request.
+ * next request. Returns true for a persistent compiler that has nothing left
+ * to drop at a later request's end unless a session compiles with it.
  */
-ZEND_API void zend_native_compiler_end_request(
+ZEND_API bool zend_native_compiler_end_request(
 	zend_native_compiler *compiler);
 
 /*

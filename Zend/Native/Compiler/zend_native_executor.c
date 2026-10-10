@@ -44,6 +44,13 @@ typedef struct _zend_native_executor_generation {
 	 * immutable code of the generation, valid while it is leased. */
 	zend_native_entry_cell *include_entry_cell;
 	struct _zend_native_executor_generation *next;
+	/* The previous generation in zend_native_executor_persistent_generations
+	 * while listed there, so that retiring one owner needs no scan. */
+	struct _zend_native_executor_generation *previous_persistent;
+	bool listed_persistent;
+	/* A persistent generation whose compiler a request's end left nothing
+	 * to drop (zend_native_compiler_end_request()). */
+	bool settled;
 } zend_native_executor_generation;
 
 typedef struct _zend_native_executor_epoch_ref {
@@ -118,6 +125,42 @@ static bool zend_native_executor_installed;
 static zend_native_frame_probe_t zend_native_executor_frame_probe;
 static void *zend_native_executor_frame_probe_context;
 static uint64_t zend_native_executor_epoch = 1;
+#ifndef ZTS
+/*
+ * The entry cells of cached includes whose settled persistent generation
+ * served them, by opcodes: an include finds its code without the owner,
+ * generation and lease lookups. An entry holds while the request epoch and
+ * the cache serial, which retiring stale generations and invalidation
+ * advance, are the ones it was stored under; retiring the generation of a
+ * discarded script drops its entry.
+ */
+# define ZEND_NATIVE_EXECUTOR_INCLUDE_CACHE 16384
+typedef struct _zend_native_executor_include_entry {
+	const zend_op *opcodes;
+	zend_native_entry_cell *entry_cell;
+	uint64_t epoch;
+	uint64_t serial;
+	uint32_t last;
+} zend_native_executor_include_entry;
+static zend_native_executor_include_entry
+	zend_native_executor_include_cache[ZEND_NATIVE_EXECUTOR_INCLUDE_CACHE];
+static uint64_t zend_native_executor_include_cache_serial = 1;
+
+static zend_always_inline zend_native_executor_include_entry *
+zend_native_executor_include_cache_entry(const zend_op *opcodes)
+{
+	return &zend_native_executor_include_cache[
+		((((uintptr_t) opcodes) * UINT64_C(0x9e3779b97f4a7c15)) >> 40)
+			& (ZEND_NATIVE_EXECUTOR_INCLUDE_CACHE - 1)];
+}
+#endif
+
+static zend_always_inline void zend_native_executor_include_cache_forget(void)
+{
+#ifndef ZTS
+	zend_native_executor_include_cache_serial++;
+#endif
+}
 static uint64_t zend_native_executor_lease_serials;
 static zend_native_executor_generation
 	*zend_native_executor_persistent_generations;
@@ -1415,6 +1458,24 @@ static bool zend_native_executor_acquire_generation_locked(
 	return true;
 }
 
+/*
+ * Leases a generation a lookup found, unless it needs none: without
+ * threads only a request boundary retires a persistent generation, so a
+ * settled one, whose compiler a request's end leaves alone, stays valid for
+ * the whole request.
+ */
+static bool zend_native_executor_use_generation_locked(
+	zend_native_executor_generation *generation)
+{
+#ifndef ZTS
+	if (generation != NULL && generation->settled
+			&& !generation->owner_retired) {
+		return true;
+	}
+#endif
+	return zend_native_executor_acquire_generation_locked(generation);
+}
+
 static void zend_native_executor_reap_retired_locked(void)
 {
 	zend_native_executor_generation **link =
@@ -1437,20 +1498,83 @@ static void zend_native_executor_reap_retired_locked(void)
 	}
 }
 
+static void zend_native_executor_persistent_link_locked(
+	zend_native_executor_generation *generation)
+{
+	generation->previous_persistent = NULL;
+	generation->next = zend_native_executor_persistent_generations;
+	if (generation->next != NULL) {
+		generation->next->previous_persistent = generation;
+	}
+	zend_native_executor_persistent_generations = generation;
+	generation->listed_persistent = true;
+}
+
+static void zend_native_executor_persistent_unlink_locked(
+	zend_native_executor_generation *generation)
+{
+	ZEND_ASSERT(generation->listed_persistent);
+	if (generation->previous_persistent != NULL) {
+		generation->previous_persistent->next = generation->next;
+	} else {
+		zend_native_executor_persistent_generations = generation->next;
+	}
+	if (generation->next != NULL) {
+		generation->next->previous_persistent =
+			generation->previous_persistent;
+	}
+	generation->previous_persistent = NULL;
+	generation->next = NULL;
+	generation->listed_persistent = false;
+}
+
+/* Retires a listed persistent generation whose script was discarded. */
+static void zend_native_executor_retire_owner_generation_locked(
+	zend_native_executor_generation *generation)
+{
+#ifndef ZTS
+	/* Only the include this generation served may be cached for it. */
+	if (generation->include_entry_cell != NULL
+			&& generation->include_entry_cell->function != NULL) {
+		zend_native_executor_include_entry *cached =
+			zend_native_executor_include_cache_entry(
+				generation->include_entry_cell->function
+					->op_array.opcodes);
+
+		if (cached->entry_cell == generation->include_entry_cell) {
+			memset(cached, 0, sizeof(*cached));
+		}
+	}
+#endif
+	zend_native_executor_persistent_unlink_locked(generation);
+	/* No lookup finds it again; the replacement script has its own
+	 * opcodes and owner. */
+	zend_native_executor_unregister_generation_locked(generation);
+	if (generation->active_requests == 0
+			&& zend_native_compiler_is_quiescent(
+				generation->compiler)) {
+		zend_native_executor_destroy_generation(generation);
+	} else {
+		generation->owner_retired = true;
+		generation->next = zend_native_executor_retired_generations;
+		zend_native_executor_retired_generations = generation;
+	}
+}
+
 static void zend_native_executor_retire_stale(uint64_t epoch)
 {
-	zend_native_executor_generation **link =
-		&zend_native_executor_persistent_generations;
+	zend_native_executor_generation *next;
 
 	zend_native_executor_generation_lock();
-	while (*link != NULL) {
-		zend_native_executor_generation *generation = *link;
-
+	for (zend_native_executor_generation *generation =
+			zend_native_executor_persistent_generations;
+			generation != NULL; generation = next) {
+		next = generation->next;
 		if (generation->epoch == epoch) {
-			link = &generation->next;
 			continue;
 		}
-		*link = generation->next;
+		zend_native_executor_include_cache_forget();
+		zend_native_executor_persistent_unlink_locked(generation);
 		if (!zend_native_executor_epoch_is_active_locked(
 				generation->epoch)
 				&& generation->active_requests == 0
@@ -1469,32 +1593,46 @@ static void zend_native_executor_retire_stale(uint64_t epoch)
 void zend_native_executor_retire_owners(
 	bool (*discarded)(const zend_script *owner))
 {
-	zend_native_executor_generation **link =
-		&zend_native_executor_persistent_generations;
+	zend_native_executor_generation *next;
 
 	if (discarded == NULL) {
 		return;
 	}
 	zend_native_executor_generation_lock();
-	while (*link != NULL) {
-		zend_native_executor_generation *generation = *link;
-
-		if (generation->owner == NULL || !discarded(generation->owner)) {
-			link = &generation->next;
-			continue;
+	for (zend_native_executor_generation *generation =
+			zend_native_executor_persistent_generations;
+			generation != NULL; generation = next) {
+		next = generation->next;
+		if (generation->owner != NULL && discarded(generation->owner)) {
+			zend_native_executor_retire_owner_generation_locked(generation);
 		}
-		*link = generation->next;
-		/* No lookup finds it again; the replacement script has its own
-		 * opcodes and owner. */
-		zend_native_executor_unregister_generation_locked(generation);
-		if (generation->active_requests == 0
-				&& zend_native_compiler_is_quiescent(
-					generation->compiler)) {
-			zend_native_executor_destroy_generation(generation);
-		} else {
-			generation->owner_retired = true;
-			generation->next = zend_native_executor_retired_generations;
-			zend_native_executor_retired_generations = generation;
+	}
+	zend_native_executor_reap_retired_locked();
+	zend_native_executor_generation_unlock();
+}
+
+void zend_native_executor_retire_owner_scripts(
+	const zend_script *const *owners, uint32_t count)
+{
+	zend_native_executor_generation_lock();
+	if (zend_native_executor_generation_indexes_active) {
+		for (uint32_t index = 0; index < count; index++) {
+			/* Listed persistent generations belong to the observed epoch
+			 * (zend_native_executor_retire_stale()). */
+			zend_native_executor_generation_key key =
+				zend_native_executor_generation_key_make(
+					zend_native_executor_request_state.observed_epoch,
+					owners[index]);
+			zend_native_executor_generation *generation =
+				zend_hash_str_find_ptr(
+					&zend_native_executor_generations_by_owner,
+					(const char *) &key, sizeof(key));
+
+			if (generation != NULL && generation->listed_persistent
+					&& generation->owner == owners[index]) {
+				zend_native_executor_retire_owner_generation_locked(
+					generation);
+			}
 		}
 	}
 	zend_native_executor_reap_retired_locked();
@@ -1530,7 +1668,10 @@ static void zend_native_executor_release_request_leases(void)
 		return;
 	}
 	for (uint32_t index = count; index-- > 0;) {
-		zend_native_compiler_end_request(leases[index]->compiler);
+		if (zend_native_compiler_end_request(leases[index]->compiler)
+				&& leases[index]->persistent) {
+			leases[index]->settled = true;
+		}
 	}
 	/* Retired generations are reaped once all leases are dropped. */
 	zend_native_executor_generation_lock();
@@ -1787,10 +1928,7 @@ zend_native_executor_create_or_acquire_generation(zend_op_array *root)
 				}
 			} else if (generation->epoch == __atomic_load_n(
 					&zend_native_executor_epoch, __ATOMIC_RELAXED)) {
-				generation->next =
-					zend_native_executor_persistent_generations;
-				zend_native_executor_persistent_generations =
-					generation;
+				zend_native_executor_persistent_link_locked(generation);
 			} else {
 				generation->next =
 					zend_native_executor_retired_generations;
@@ -1997,8 +2135,29 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 	uint32_t first_compiled_function;
 	const zend_script *owner;
 
-	if (op_array == NULL || !zend_native_executor_request_state.active
-			|| !zend_native_executor_op_array_is_cache_owned(op_array)
+#ifndef ZTS
+	zend_native_executor_include_entry *cached = NULL;
+#endif
+
+	if (op_array == NULL || !zend_native_executor_request_state.active) {
+		return NULL;
+	}
+#ifndef ZTS
+	if (op_array->opcodes != NULL) {
+		cached = zend_native_executor_include_cache_entry(
+			op_array->opcodes);
+		if (cached->opcodes == op_array->opcodes
+				&& cached->last == op_array->last
+				&& cached->epoch
+					== zend_native_executor_request_state.observed_epoch
+				&& cached->serial
+					== zend_native_executor_include_cache_serial
+				&& cached->entry_cell->state == ZEND_NATIVE_ENTRY_READY) {
+			return cached->entry_cell;
+		}
+	}
+#endif
+	if (!zend_native_executor_op_array_is_cache_owned(op_array)
 			|| (owner = zend_native_executor_script_owner(op_array)) == NULL) {
 		return NULL;
 	}
@@ -2017,6 +2176,17 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 			&& entry_cell->state == ZEND_NATIVE_ENTRY_READY
 			&& entry_cell->function->op_array.opcodes == op_array->opcodes
 			&& entry_cell->function->op_array.last == op_array->last) {
+#ifndef ZTS
+		if (cached != NULL && generation->settled) {
+			*cached = (zend_native_executor_include_entry) {
+				.opcodes = op_array->opcodes,
+				.entry_cell = entry_cell,
+				.epoch = zend_native_executor_request_state.observed_epoch,
+				.serial = zend_native_executor_include_cache_serial,
+				.last = op_array->last
+			};
+		}
+#endif
 		return entry_cell;
 	}
 	memset(&diagnostic, 0, sizeof(diagnostic));
@@ -2357,6 +2527,7 @@ void zend_native_executor_invalidate(void)
 		&zend_native_executor_epoch, 1, __ATOMIC_RELEASE);
 	/* The classes the property resolutions name may be gone. */
 	zend_native_property_cache_forget();
+	zend_native_executor_include_cache_forget();
 
 	/*
 	 * OPcache RINIT runs after Zend request activation but before userland.
@@ -3179,7 +3350,7 @@ zend_result zend_native_executor_register_script_owner(
 				&& !zend_native_executor_request_has_lease(
 				dispatch->generation)) {
 		zend_native_executor_generation_lock();
-		if (!zend_native_executor_acquire_generation_locked(
+		if (!zend_native_executor_use_generation_locked(
 				dispatch->generation)) {
 			zend_native_executor_generation_unlock();
 			return FAILURE;

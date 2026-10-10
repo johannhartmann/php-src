@@ -11,7 +11,7 @@
 #include "Zend/zend_compile.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
-#define ZEND_NATIVE_REENTRY_CACHE_SIZE 1024
+#define ZEND_NATIVE_REENTRY_CACHE_SIZE 4096
 
 typedef struct _zend_native_reentry_cache_entry {
 	uint64_t signature;

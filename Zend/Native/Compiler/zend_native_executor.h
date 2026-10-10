@@ -48,6 +48,9 @@ ZEND_API void zend_native_executor_invalidate(void);
  */
 ZEND_API void zend_native_executor_retire_owners(
 	bool (*discarded)(const zend_script *owner));
+/* The same for the listed discarded scripts, without a scan. */
+ZEND_API void zend_native_executor_retire_owner_scripts(
+	const zend_script *const *owners, uint32_t count);
 
 /*
  * OPcache cold-path integration. The slot contains one pointer-free native

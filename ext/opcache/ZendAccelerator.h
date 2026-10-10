@@ -250,6 +250,10 @@ typedef uint32_t zend_string_table_pos_t;
 #define ZEND_STRING_TABLE_POS_MAX UINT32_MAX
 #define ZEND_STRING_TABLE_POS_ALIGNMENT 8
 
+#ifdef HAVE_NATIVE_ENGINE
+# define ACCEL_NATIVE_DISCARD_RING 64
+#endif
+
 typedef struct _zend_accel_shared_globals {
 	/* Cache Data Structures */
 	zend_ulong   hits;
@@ -272,6 +276,10 @@ typedef struct _zend_accel_shared_globals {
 	/* Discarded scripts no other code binds to (see
 	 * zend_accel_discard_script()). */
 	uint64_t        native_discards;
+	/* The last ACCEL_NATIVE_DISCARD_RING of those scripts, each at the
+	 * value native_discards had before its discard, so that a process
+	 * retires just their generations. */
+	const void     *native_discarded[ACCEL_NATIVE_DISCARD_RING];
 #endif
 	bool       accelerator_enabled;
 	bool       restart_pending;

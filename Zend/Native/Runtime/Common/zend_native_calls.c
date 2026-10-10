@@ -3414,8 +3414,8 @@ static bool zend_native_call_resolution_user_entry(
 		code = zend_native_entry_cell_load(entry_cell);
 	}
 	if (code == NULL) {
-		entry_cell = zend_native_reentry_find(
-			zend_native_active_reentry_scope, function);
+		/* The reentry cache keeps a persistent cell across requests. */
+		entry_cell = zend_native_reentry_resolve(function);
 		if (entry_cell != NULL
 				&& zend_native_call_entry_matches_function(
 					entry_cell, function)
@@ -7170,8 +7170,7 @@ void zend_native_call_begin(
 			}
 			if (resolved->type == ZEND_USER_FUNCTION
 					&& resolved != function) {
-				cell = zend_native_reentry_find(
-					zend_native_active_reentry_scope, resolved);
+				cell = zend_native_reentry_resolve(resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					function = zend_native_call_reject_target(
@@ -7197,8 +7196,7 @@ void zend_native_call_begin(
 				break;
 			}
 			if (function->type == ZEND_USER_FUNCTION) {
-				cell = zend_native_reentry_find(
-					zend_native_active_reentry_scope, function);
+				cell = zend_native_reentry_resolve(function);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					function = zend_native_call_reject_target(
@@ -7225,8 +7223,7 @@ void zend_native_call_begin(
 			if (function->type == ZEND_USER_FUNCTION
 					&& (function->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
-				cell = zend_native_reentry_find(
-					zend_native_active_reentry_scope, function);
+				cell = zend_native_reentry_resolve(function);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
@@ -7263,8 +7260,7 @@ void zend_native_call_begin(
 			if (resolved != function && resolved->type == ZEND_USER_FUNCTION
 					&& (resolved->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
-				cell = zend_native_reentry_find(
-					zend_native_active_reentry_scope, resolved);
+				cell = zend_native_reentry_resolve(resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					if (receiver_owned) {
@@ -7303,8 +7299,7 @@ void zend_native_call_begin(
 			if (resolved != function && resolved->type == ZEND_USER_FUNCTION
 					&& (resolved->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
-				cell = zend_native_reentry_find(
-					zend_native_active_reentry_scope, resolved);
+				cell = zend_native_reentry_resolve(resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					function = zend_native_call_reject_target(
@@ -7338,8 +7333,7 @@ void zend_native_call_begin(
 			if (resolved != function && resolved->type == ZEND_USER_FUNCTION
 					&& (resolved->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
-				cell = zend_native_reentry_find(
-					zend_native_active_reentry_scope, resolved);
+				cell = zend_native_reentry_resolve(resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					function = zend_native_call_reject_target(
@@ -7376,8 +7370,7 @@ void zend_native_call_begin(
 				break;
 			}
 			if (resolved != function && resolved->type == ZEND_USER_FUNCTION) {
-				cell = zend_native_reentry_find(
-					zend_native_active_reentry_scope, resolved);
+				cell = zend_native_reentry_resolve(resolved);
 				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
 						|| cell->code == NULL) {
 					OBJ_RELEASE(object);
@@ -7750,8 +7743,7 @@ static zend_native_status zend_native_call_invoke(
 	if (call->func->type == ZEND_USER_FUNCTION
 			&& call->func != (zend_function *) &zend_pass_function
 			&& call->func != cell->function) {
-		cell = zend_native_reentry_find(
-			zend_native_active_reentry_scope, call->func);
+		cell = zend_native_reentry_resolve(call->func);
 	}
 	if (call->func->type == ZEND_USER_FUNCTION
 			&& call->func != (zend_function *) &zend_pass_function

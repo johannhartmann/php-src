@@ -1452,6 +1452,9 @@ static void zend_accel_discard_script(zend_persistent_script *persistent_script)
 	 * every request, retires only its own generation.
 	 */
 	if (zend_accel_script_binds_nothing(persistent_script)) {
+		__atomic_store_n(&ZCSG(native_discarded)[
+				ZCSG(native_discards) % ACCEL_NATIVE_DISCARD_RING],
+			(const void *) &persistent_script->script, __ATOMIC_RELAXED);
 		(void) __atomic_add_fetch(
 			&ZCSG(native_discards), 1, __ATOMIC_RELEASE);
 	} else {
@@ -3116,8 +3119,30 @@ ZEND_RINIT_FUNCTION(zend_accelerator)
 			ZCG(native_discards) = native_discards;
 			zend_native_executor_invalidate();
 		} else if (ZCG(native_discards) != native_discards) {
+			const zend_script *owners[ACCEL_NATIVE_DISCARD_RING];
+			const uint64_t seen = ZCG(native_discards);
+			uint32_t count = 0;
+
 			ZCG(native_discards) = native_discards;
-			zend_native_executor_retire_owners(accel_native_owner_discarded);
+			if (native_discards - seen <= ACCEL_NATIVE_DISCARD_RING) {
+				for (uint64_t discard = seen; discard != native_discards;
+						discard++) {
+					owners[count++] = __atomic_load_n(
+						&ZCSG(native_discarded)[
+							discard % ACCEL_NATIVE_DISCARD_RING],
+						__ATOMIC_RELAXED);
+				}
+			}
+			/* Too many discards, or a writer lapped the ring while it
+			 * was read: check every generation's script. */
+			if (count == 0 || __atomic_load_n(&ZCSG(native_discards),
+						__ATOMIC_ACQUIRE) - seen
+					> ACCEL_NATIVE_DISCARD_RING) {
+				zend_native_executor_retire_owners(
+					accel_native_owner_discarded);
+			} else {
+				zend_native_executor_retire_owner_scripts(owners, count);
+			}
 		}
 		/* A finished layout training: recompile with its profile. */
 		if (zend_native_executor_take_layout_restart()

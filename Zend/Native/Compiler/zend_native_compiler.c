@@ -6680,12 +6680,12 @@ bool zend_native_compiler_retire_dynamic_component(
 	return true;
 }
 
-void zend_native_compiler_end_request(zend_native_compiler *compiler)
+bool zend_native_compiler_end_request(zend_native_compiler *compiler)
 {
 	uint32_t index;
 
 	if (compiler == NULL) {
-		return;
+		return false;
 	}
 	/* Most leased generations ran without a session of their own. */
 	if (zend_native_compiler_session_find(compiler) != NULL) {
@@ -6694,7 +6694,7 @@ void zend_native_compiler_end_request(zend_native_compiler *compiler)
 		zend_native_compiler_session_release(compiler);
 	}
 	if (!compiler->persistent) {
-		return;
+		return false;
 	}
 	zend_native_compiler_mutation_lock(compiler);
 	/*
@@ -6704,8 +6704,10 @@ void zend_native_compiler_end_request(zend_native_compiler *compiler)
 	if (compiler->transients_released
 			|| zend_native_compiler_active_call_count(compiler) != 0
 			|| zend_native_compiler_suspended_frame_count(compiler) != 0) {
+		const bool settled = compiler->transients_released;
+
 		zend_native_compiler_mutation_unlock(compiler);
-		return;
+		return settled;
 	}
 	for (index = 0; index < compiler->function_count; index++) {
 		zend_native_compiled_function *function =
@@ -6729,6 +6731,7 @@ void zend_native_compiler_end_request(zend_native_compiler *compiler)
 	}
 	compiler->transients_released = true;
 	zend_native_compiler_mutation_unlock(compiler);
+	return true;
 }
 
 void zend_native_compiler_destroy(zend_native_compiler *compiler)
