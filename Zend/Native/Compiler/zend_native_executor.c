@@ -3481,6 +3481,12 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 	status = zend_native_compiler_execute_observed_data(
 		generation->compiler, execute_data, &diagnostic);
 	zend_native_executor_request_state.execution_depth--;
+	/* A bailout (a fatal error, the memory limit) leaves for the outer
+	 * zend_try as the VM does, without the bookkeeping below, which
+	 * allocates; the request's end releases the generation. */
+	if (status == ZEND_NATIVE_BAILOUT) {
+		goto complete;
+	}
 	if (!generation->persistent
 			&& !zend_native_executor_sync_request_generation(generation)) {
 		status = ZEND_NATIVE_EXCEPTION;
