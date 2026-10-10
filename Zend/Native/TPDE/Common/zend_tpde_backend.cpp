@@ -13402,6 +13402,8 @@ static bool freeze_component_machine_plan(
 				&plans[index], ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_CV);
 			require_runtime_helper(
 				&plans[index], ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_THIS);
+			require_runtime_helper(
+				&plans[index], ZEND_NATIVE_HELPER_CALL_FAST_RUN_TIME_CACHE);
 		}
 	}
 	for (uint32_t index = 0; index < component_count; ++index) {

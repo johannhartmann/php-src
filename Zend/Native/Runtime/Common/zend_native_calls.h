@@ -88,6 +88,9 @@ typedef struct _zend_native_entry_cell {
 	uint64_t fast_bound_epoch;
 	zend_native_frame_entry_t fast_bound_entry;
 	void **fast_bound_run_time_cache;
+	/* A fast call site holds this target across requests: resetting or
+	 * replacing the cell's code invalidates the persistent sites. */
+	bool fast_persistent_sites;
 	/* Tier 2 (ADR 0025 section 4): calls left until the function is
 	 * queued for recompilation, counted down by its published code
 	 * (zero when not counting), and its tier-2 state. */
@@ -371,6 +374,15 @@ typedef struct _zend_native_user_call_site_header {
 	 * entry cells, untyped non-variadic targets taking exactly the sent
 	 * arguments by value, with identity placements.
 	 */
+	/* A site whose target needs no name or class binding (a method of an
+	 * immutable class, self::, parent::, static::) holds it across
+	 * requests: its fast_epoch is zend_native_call_persistent_site_epoch(),
+	 * at or above every epoch until the persistent sites are invalidated.
+	 * The site is fast while fast_epoch is at least the current epoch.
+	 * fast_run_time_cache is the callee's run-time cache in the request
+	 * that armed a request-local site; a persistent site has none and its
+	 * call looks the current request's up as the VM does
+	 * (zend_native_call_fast_run_time_cache()). */
 	uint64_t fast_epoch;
 	const void *fast_key;
 	zend_function *fast_function;
@@ -701,8 +713,14 @@ zend_native_call_normalize_user_resolution(
  * zend_native_call_resolve_user()). Entry cell resets and compiler
  * destruction invalidate every entry; the executor frees the cache when a
  * request ends.
+ *
+ * The call-cache epoch counts requests and invalidations in its low 32
+ * bits and invalidations of the persistent fast sites in its high bits:
+ * zend_native_call_persistent_sites_invalidate() moves to the next high
+ * value, which every persistent site's fast_epoch is below.
  */
 void zend_native_call_resolution_cache_invalidate(void);
+void zend_native_call_persistent_sites_invalidate(void);
 void zend_native_call_resolution_cache_destroy(void);
 void zend_native_call_release_user_resolution(
 	zend_native_user_call_resolution *resolution);
@@ -863,6 +881,10 @@ zend_result zend_native_call_universal_expand(void);
 bool zend_native_call_fast_rearm(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor);
+/* The run-time cache of a fast call's callee in this request, created on
+ * the callee's first call in the request (the fast-call entry calls it
+ * when the cache is missing). */
+void **zend_native_call_fast_run_time_cache(zend_execute_data *callee);
 zend_result zend_native_call_universal_send(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,

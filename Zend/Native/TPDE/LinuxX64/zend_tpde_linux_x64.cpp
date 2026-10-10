@@ -3559,6 +3559,8 @@ public:
 			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_RELEASE_THIS);
 		const tpde::SymRef general_symbol =
 			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_DO);
+		const tpde::SymRef run_time_cache_symbol =
+			runtime_symbol(ZEND_NATIVE_HELPER_CALL_FAST_RUN_TIME_CACHE);
 		const bool variadic = plan->fast_call_variadic;
 		const tpde::SymRef variadic_symbol = variadic
 			? runtime_symbol(ZEND_NATIVE_HELPER_CALL_RECEIVE_VARIADIC)
@@ -3568,6 +3570,7 @@ public:
 				|| !leave_symbol.valid() || !release_symbol.valid()
 				|| !release_this_symbol.valid()
 				|| !general_symbol.valid()
+				|| !run_time_cache_symbol.valid()
 				|| (variadic && !variadic_symbol.valid())) {
 			return;
 		}
@@ -3829,16 +3832,39 @@ public:
 			to_defaults = branch_below();
 			defaults_return = text_writer.offset();
 		}
-		/* The site's run-time cache, or the target's one a dynamic site
-		 * installed. */
-		ASM(MOV64rm, FE_R9, FE_MEM(FE_DX, 0, FE_NOREG,
+		/* The run-time cache a request-local site armed with; a
+		 * persistent site's call takes the callee's in this request as the
+		 * VM's call does (RUN_TIME_CACHE(&func->op_array)), and a dynamic
+		 * site's frame the target's one it installed. A request's first
+		 * call creates it out of line. */
+		ASM(MOV64rm, FE_R10, FE_MEM(FE_DX, 0, FE_NOREG,
 			header_offset + member(offsetof(
 				zend_native_user_call_site_header, fast_run_time_cache))));
+		ASM(TEST64rr, FE_R10, FE_R10);
+		{
+			const uint32_t armed = branch(true);
+			ASM(MOV64rm, FE_R10, FE_MEM(FE_AX, 0, FE_NOREG,
+				member(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, FE_R10, FE_MEM(FE_R10, 0, FE_NOREG,
+				member(offsetof(zend_op_array, run_time_cache__ptr))));
+			ASM(TEST32ri, FE_R10, 1);
+			const uint32_t pointer = branch_zero();
+			ASM(MOV64rm, FE_R9, FE_MEM(FE_SI, 0, FE_NOREG,
+				member(offsetof(zend_native_execution_context,
+					map_ptr_base_address))));
+			ASM(MOV64rm, FE_R9, FE_MEM(FE_R9, 0, FE_NOREG, 0));
+			ASM(MOV64rm, FE_R10, FE_MEM(FE_R9, 1, FE_R10, 0));
+			patch(pointer, text_writer.offset());
+			patch(armed, text_writer.offset());
+		}
 		ASM(TEST64rr, FE_CX, FE_CX);
-		ASM(CMOVNZ64rm, FE_R9, FE_MEM(FE_AX, 0, FE_NOREG,
+		ASM(CMOVNZ64rm, FE_R10, FE_MEM(FE_AX, 0, FE_NOREG,
 			member(offsetof(zend_execute_data, run_time_cache))));
+		ASM(TEST64rr, FE_R10, FE_R10);
+		const uint32_t missing_cache = branch_zero();
+		const uint32_t cache_ready = text_writer.offset();
 		ASM(MOV64mr, FE_MEM(FE_AX, 0, FE_NOREG,
-			member(offsetof(zend_execute_data, run_time_cache))), FE_R9);
+			member(offsetof(zend_execute_data, run_time_cache))), FE_R10);
 		ASM(MOV64rm, FE_R9, FE_MEM(FE_SI, 0, FE_NOREG,
 			member(offsetof(zend_native_execution_context,
 				current_execute_data))));
@@ -3988,6 +4014,17 @@ public:
 			member(offsetof(zval, u1.v.type_flags))), IS_TYPE_REFCOUNTED);
 		to_general.push_back(branch(true));
 		patch(branch(false), discarded_checked);
+		/* The callee's first call in the request creates its run-time
+		 * cache; the call preserves nothing. */
+		patch(missing_cache, text_writer.offset());
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 40), FE_DX);
+		ASM(MOV64rr, FE_DI, FE_AX);
+		emit_symbol_call(run_time_cache_symbol);
+		ASM(MOV64rr, FE_R10, FE_AX);
+		ASM(MOV64rm, FE_AX, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(MOV64rm, FE_DX, FE_MEM(FE_SP, 0, FE_NOREG, 40));
+		ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, 32));
+		patch(branch(false), cache_ready);
 		/* zend_native_call_fast_release_this(object, result, discarded),
 		 * whose status the entry returns. The frame's memory is free: its
 		 * result address is read before a destructor can reuse it. */
@@ -6755,7 +6792,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					rearm_live_registers &= ~(uint64_t{1} << value_reg.id());
 					rearm_live_registers &= ~(uint64_t{1} << callee_reg.id());
 					rearm_live_registers &= ~(uint64_t{1} << object_reg.id());
-					generate_raw_jump(Jump::jne, fast_rearm);
+					/* Stale below the current epoch: a persistent site's
+					 * epoch lies above every request's. */
+					generate_raw_jump(Jump::ja, fast_rearm);
 					emit_observer_exit(fast_miss);
 					if (method) {
 						if (this_receiver) {

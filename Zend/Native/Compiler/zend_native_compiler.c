@@ -4734,7 +4734,7 @@ zend_native_tier2_result zend_native_compiler_recompile_tier2(
 			member->entry_cell.tier2_state = ZEND_NATIVE_TIER2_COMPILED;
 		}
 	}
-	zend_native_call_resolution_cache_invalidate();
+	zend_native_call_persistent_sites_invalidate();
 	zend_native_reentry_invalidate_persistent();
 	zend_native_compiler_mutation_unlock(compiler);
 	zend_native_compiler_release_ready_transients(

@@ -1140,6 +1140,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
 			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER,
 		(const void *) zend_native_call_fast_method_init},
+	{ZEND_NATIVE_HELPER_CALL_FAST_RUN_TIME_CACHE,
+		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
+		(const void *) zend_native_call_fast_run_time_cache},
 };
 
 _Static_assert(sizeof(zend_native_runtime_helpers)

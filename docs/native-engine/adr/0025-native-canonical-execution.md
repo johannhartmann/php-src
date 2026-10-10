@@ -120,6 +120,17 @@ Two WordPress forms are fast-path forms, not cold ones:
   and activation machine, and its native call entry is called; the
   per-site cache is only the first level.
 
+A per-site cache outlives the request when no binding of the request selects
+its target: a method of an immutable or internal class (the guard compares
+the receiver's class), `static::` (the called scope) and `self::` or
+`parent::` from an immutable caller scope. Its epoch lies above every
+request's until its target's cell is reset or gets other code, which runs
+`zend_native_call_persistent_sites_invalidate()`; its native call entry takes
+the callee's run-time cache of the current request as the VM's call does,
+creating it on the request's first call. Function names, `new C` and `C::m()`
+bind per request: those sites re-arm once per request
+(`zend_native_call_fast_rearm()`) and keep the run-time cache they armed with.
+
 The call fast path uses the same ownership, observation and suspension rules
 as section 1 (a caller's native-owned locals are described by the map at the
 call-return PC); it is developed in parallel with, not independently of, the
