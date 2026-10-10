@@ -16,6 +16,7 @@
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct _zend_native_explicit_object_operation {
@@ -3647,3 +3648,312 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
 	zend_native_declare_class_delayed(execute_data, &operation))
 
 #undef ZEND_NATIVE_OBJECT_EXPLICIT_HELPER
+
+/*
+ * Property resolutions that outlive the request (ADR 0025 section 3).
+ *
+ * A property operation with a literal name caches the receiver class, the
+ * property offset and a typed property's info in its op array's run-time
+ * cache, which every request starts empty. What it caches depends on the
+ * class, the name and the op array's scope alone. For an immutable op array
+ * that is no closure, whose scope is fixed, and a declared property of an
+ * immutable class, all of these stay as they are until OPcache drops the
+ * class, which begins a new native generation: the run-time cache of a
+ * later request starts with them, so the operation's first execution takes
+ * its cached path instead of resolving the property again. Dynamic and
+ * hooked properties and other classes resolve per request as before.
+ *
+ * The resolutions are learned at request shutdown from the run-time caches
+ * of the op arrays whose templates still learn, and kept per process in
+ * templates indexed by the op array's run-time cache map pointer slot. A
+ * template stops learning once every property slot of its op array holds a
+ * resolution or ZEND_NATIVE_PROPERTY_TEMPLATE_SETTLED requests in a row
+ * taught it nothing.
+ */
+#define ZEND_NATIVE_PROPERTY_TEMPLATE_SETTLED 2
+
+typedef struct _zend_native_property_resolution {
+	uint32_t cache_offset;
+	zend_class_entry *ce;
+	uintptr_t property_offset;
+	zend_property_info *property_info;
+} zend_native_property_resolution;
+
+typedef struct _zend_native_property_template {
+	const zend_op_array *op_array;
+	uint32_t count;
+	/* The learned resolutions come first. */
+	uint32_t learned;
+	uint32_t idle_requests;
+	zend_native_property_resolution resolutions[];
+} zend_native_property_template;
+
+typedef struct _zend_native_property_pending {
+	zend_native_property_template *template;
+	void **run_time_cache;
+} zend_native_property_pending;
+
+/* The template of an op array without a property cache slot. */
+static zend_native_property_template zend_native_property_template_none;
+
+static ZEND_EXT_TLS zend_native_property_template **
+	zend_native_property_templates;
+static ZEND_EXT_TLS size_t zend_native_property_template_capacity;
+static ZEND_EXT_TLS zend_native_property_pending *
+	zend_native_property_pending_caches;
+static ZEND_EXT_TLS uint32_t zend_native_property_pending_count;
+static ZEND_EXT_TLS uint32_t zend_native_property_pending_capacity;
+
+/* The run-time cache offset of an operation's property cache slot. */
+static bool zend_native_property_cache_offset(
+	const zend_op_array *op_array, const zend_op *opline, uint32_t *offset)
+{
+	if (opline->op2_type != IS_CONST) {
+		return false;
+	}
+	switch (opline->opcode) {
+		case ZEND_FETCH_OBJ_R:
+		case ZEND_FETCH_OBJ_W:
+		case ZEND_FETCH_OBJ_RW:
+		case ZEND_FETCH_OBJ_IS:
+		case ZEND_FETCH_OBJ_FUNC_ARG:
+		case ZEND_FETCH_OBJ_UNSET:
+			*offset = opline->extended_value & ~ZEND_FETCH_OBJ_FLAGS;
+			break;
+		case ZEND_ASSIGN_OBJ:
+		case ZEND_PRE_INC_OBJ:
+		case ZEND_PRE_DEC_OBJ:
+		case ZEND_POST_INC_OBJ:
+		case ZEND_POST_DEC_OBJ:
+		case ZEND_UNSET_OBJ:
+			*offset = opline->extended_value;
+			break;
+		case ZEND_ASSIGN_OBJ_OP:
+			if (opline + 1 >= op_array->opcodes + op_array->last) {
+				return false;
+			}
+			*offset = opline[1].extended_value;
+			break;
+		case ZEND_ISSET_ISEMPTY_PROP_OBJ:
+			*offset = opline->extended_value & ~ZEND_ISEMPTY;
+			break;
+		default:
+			return false;
+	}
+	return *offset % sizeof(void *) == 0
+		&& *offset <= (uint32_t) op_array->cache_size
+		&& (uint32_t) op_array->cache_size - *offset
+			>= 3 * sizeof(void *);
+}
+
+static int zend_native_property_offset_compare(const void *a, const void *b)
+{
+	const uint32_t left = *(const uint32_t *) a;
+	const uint32_t right = *(const uint32_t *) b;
+
+	return left < right ? -1 : left > right;
+}
+
+static zend_native_property_template *zend_native_property_template_create(
+	const zend_op_array *op_array)
+{
+	zend_native_property_template *template;
+	uint32_t *offsets;
+	uint32_t count = 0;
+	uint32_t unique = 0;
+	uint32_t i;
+
+	offsets = malloc(op_array->last * sizeof(*offsets) + 1);
+	if (offsets == NULL) {
+		return NULL;
+	}
+	for (i = 0; i < op_array->last; i++) {
+		if (zend_native_property_cache_offset(
+				op_array, &op_array->opcodes[i], &offsets[count])) {
+			count++;
+		}
+	}
+	if (count == 0) {
+		free(offsets);
+		return &zend_native_property_template_none;
+	}
+	/* Operations on the same property of $this share their slot. */
+	qsort(offsets, count, sizeof(*offsets),
+		zend_native_property_offset_compare);
+	for (i = 0; i < count; i++) {
+		if (unique == 0 || offsets[unique - 1] != offsets[i]) {
+			offsets[unique++] = offsets[i];
+		}
+	}
+	template = malloc(sizeof(*template)
+		+ unique * sizeof(zend_native_property_resolution));
+	if (template != NULL) {
+		template->op_array = op_array;
+		template->count = unique;
+		template->learned = 0;
+		template->idle_requests = 0;
+		for (i = 0; i < unique; i++) {
+			template->resolutions[i] = (zend_native_property_resolution) {
+				.cache_offset = offsets[i]
+			};
+		}
+	}
+	free(offsets);
+	return template;
+}
+
+static void zend_native_property_template_free(
+	zend_native_property_template *template)
+{
+	if (template != NULL
+			&& template != &zend_native_property_template_none) {
+		free(template);
+	}
+}
+
+void zend_native_property_cache_prime(
+	const zend_op_array *op_array, void **run_time_cache)
+{
+	const uintptr_t slot =
+		(uintptr_t) ZEND_MAP_PTR(op_array->run_time_cache);
+	zend_native_property_template *template;
+	size_t index;
+	uint32_t i;
+
+	/* A closure may be bound to another scope; a slot of a request-local
+	 * op array is reused by the next request. */
+	if ((op_array->fn_flags & ZEND_ACC_IMMUTABLE) == 0
+			|| (op_array->fn_flags
+				& (ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE)) != 0
+			|| !ZEND_MAP_PTR_IS_OFFSET(op_array->run_time_cache)
+			|| (intptr_t) slot <= 0) {
+		return;
+	}
+	index = slot / sizeof(void *);
+	if (index >= zend_native_property_template_capacity) {
+		size_t capacity = zend_native_property_template_capacity != 0
+			? zend_native_property_template_capacity : 1024;
+		zend_native_property_template **templates;
+
+		while (capacity <= index) {
+			capacity *= 2;
+		}
+		templates = realloc(zend_native_property_templates,
+			capacity * sizeof(*templates));
+		if (templates == NULL) {
+			return;
+		}
+		memset(templates + zend_native_property_template_capacity, 0,
+			(capacity - zend_native_property_template_capacity)
+				* sizeof(*templates));
+		zend_native_property_templates = templates;
+		zend_native_property_template_capacity = capacity;
+	}
+	template = zend_native_property_templates[index];
+	if (template == NULL || (template->op_array != op_array
+			&& template != &zend_native_property_template_none)) {
+		zend_native_property_template_free(template);
+		template = zend_native_property_template_create(op_array);
+		zend_native_property_templates[index] = template;
+		if (template == NULL) {
+			return;
+		}
+	}
+	for (i = 0; i < template->learned; i++) {
+		const zend_native_property_resolution *resolution =
+			&template->resolutions[i];
+		void **cache_slot = (void **) (
+			(char *) run_time_cache + resolution->cache_offset);
+
+		cache_slot[0] = resolution->ce;
+		cache_slot[1] = (void *) resolution->property_offset;
+		cache_slot[2] = resolution->property_info;
+	}
+	if (template->learned == template->count
+			|| template->idle_requests
+				>= ZEND_NATIVE_PROPERTY_TEMPLATE_SETTLED) {
+		return;
+	}
+	if (zend_native_property_pending_count
+			== zend_native_property_pending_capacity) {
+		uint32_t capacity = zend_native_property_pending_capacity != 0
+			? zend_native_property_pending_capacity * 2 : 256;
+		zend_native_property_pending *pending = realloc(
+			zend_native_property_pending_caches,
+			capacity * sizeof(*pending));
+
+		if (pending == NULL) {
+			return;
+		}
+		zend_native_property_pending_caches = pending;
+		zend_native_property_pending_capacity = capacity;
+	}
+	zend_native_property_pending_caches[
+		zend_native_property_pending_count++] =
+			(zend_native_property_pending) {
+				.template = template,
+				.run_time_cache = run_time_cache
+			};
+}
+
+void zend_native_property_cache_learn(void)
+{
+	uint32_t pending;
+
+	for (pending = 0; pending < zend_native_property_pending_count;
+			pending++) {
+		zend_native_property_template *template =
+			zend_native_property_pending_caches[pending].template;
+		void **run_time_cache =
+			zend_native_property_pending_caches[pending].run_time_cache;
+		const uint32_t learned = template->learned;
+		uint32_t i;
+
+		/* Only the op array's live cache: one primed after an earlier
+		 * shutdown was released with that request's arena. */
+		if (ZEND_MAP_PTR_GET(template->op_array->run_time_cache)
+				!= run_time_cache) {
+			continue;
+		}
+		for (i = template->learned; i < template->count; i++) {
+			zend_native_property_resolution resolution =
+				template->resolutions[i];
+			void **cache_slot = (void **) (
+				(char *) run_time_cache + resolution.cache_offset);
+			zend_class_entry *ce = cache_slot[0];
+
+			if (ce == NULL || (ce->ce_flags & ZEND_ACC_IMMUTABLE) == 0
+					|| !IS_VALID_PROPERTY_OFFSET(
+						(uintptr_t) cache_slot[1])) {
+				continue;
+			}
+			resolution.ce = ce;
+			resolution.property_offset = (uintptr_t) cache_slot[1];
+			resolution.property_info = cache_slot[2];
+			/* The slot it swaps with was already looked at. */
+			template->resolutions[i] =
+				template->resolutions[template->learned];
+			template->resolutions[template->learned++] = resolution;
+		}
+		template->idle_requests = template->learned != learned
+			? 0 : template->idle_requests + 1;
+	}
+	zend_native_property_pending_count = 0;
+}
+
+void zend_native_property_cache_forget(void)
+{
+	size_t i;
+
+	for (i = 0; i < zend_native_property_template_capacity; i++) {
+		zend_native_property_template_free(
+			zend_native_property_templates[i]);
+	}
+	free(zend_native_property_templates);
+	zend_native_property_templates = NULL;
+	zend_native_property_template_capacity = 0;
+	free(zend_native_property_pending_caches);
+	zend_native_property_pending_caches = NULL;
+	zend_native_property_pending_count = 0;
+	zend_native_property_pending_capacity = 0;
+}

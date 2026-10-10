@@ -3,6 +3,7 @@
 #ifndef ZEND_NATIVE_OBJECTS_H
 #define ZEND_NATIVE_OBJECTS_H
 
+#include "Zend/zend_compile.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #ifdef __cplusplus
@@ -106,6 +107,20 @@ ZEND_NATIVE_EXPLICIT_OBJECT_ASSIGNMENT_HELPER(
 zend_native_status zend_native_throw_source_zval(
 	zend_execute_data *execute_data, uint64_t operand,
 	uint32_t source_opcode, uint32_t source_position_id);
+
+/*
+ * Property resolutions that outlive the request (ADR 0025 section 3): the
+ * run-time cache of an immutable op array starts with the declared
+ * properties an earlier request resolved on immutable classes.
+ * zend_native_property_cache_prime() fills a new run-time cache,
+ * zend_native_property_cache_learn() takes the resolutions at request
+ * shutdown and zend_native_property_cache_forget() drops them all when a
+ * new native generation begins.
+ */
+void zend_native_property_cache_prime(
+	const zend_op_array *op_array, void **run_time_cache);
+void zend_native_property_cache_learn(void);
+void zend_native_property_cache_forget(void);
 
 #ifdef __cplusplus
 }

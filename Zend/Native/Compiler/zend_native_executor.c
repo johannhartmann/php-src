@@ -7,6 +7,7 @@
 #include "Zend/zend_extensions.h"
 #include "Zend/zend_generators.h"
 #include "Zend/Native/Runtime/Common/zend_native_execute.h"
+#include "Zend/Native/Runtime/Common/zend_native_objects.h"
 #include "Zend/Native/Runtime/Common/zend_native_reentry_cache.h"
 #include "Zend/zend_dtrace.h"
 #include "Zend/zend_observer.h"
@@ -2107,6 +2108,7 @@ zend_result zend_native_executor_startup(void)
 void zend_native_executor_shutdown(void)
 {
 	zend_native_executor_end_preload_capture();
+	zend_native_property_cache_forget();
 	zend_native_executor_deactivate();
 	zend_native_executor_destroy_generations(
 		&zend_native_executor_persistent_generations);
@@ -2335,6 +2337,7 @@ void zend_native_executor_deactivate(void)
 	}
 	zend_native_executor_release_request_epoch();
 	zend_native_call_resolution_cache_destroy();
+	zend_native_property_cache_learn();
 	zend_native_compile_trace_request_end("request_end");
 }
 
@@ -2352,6 +2355,8 @@ void zend_native_executor_invalidate(void)
 {
 	(void) __atomic_add_fetch(
 		&zend_native_executor_epoch, 1, __ATOMIC_RELEASE);
+	/* The classes the property resolutions name may be gone. */
+	zend_native_property_cache_forget();
 
 	/*
 	 * OPcache RINIT runs after Zend request activation but before userland.

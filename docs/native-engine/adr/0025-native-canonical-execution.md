@@ -131,6 +131,18 @@ creating it on the request's first call. Function names, `new C` and `C::m()`
 bind per request: those sites re-arm once per request
 (`zend_native_call_fast_rearm()`) and keep the run-time cache they armed with.
 
+Property resolutions outlive the request the same way. What a property
+operation with a literal name caches in the run-time cache (class, slot
+offset, typed property info) depends only on the class, the name and the op
+array's scope. For an immutable op array that is no closure and a declared
+property of an immutable class, request shutdown keeps the resolution in a
+per-process template of the op array (`zend_native_property_cache_learn()`),
+and the next request's run-time cache of that op array starts with it
+(`zend_native_property_cache_prime()`), so the operation's first execution
+takes its cached path. The hit path is unchanged; property values, dynamic
+and hooked properties stay per request. A new native generation (an OPcache
+restart or a replaced script that declares classes) drops the templates.
+
 The call fast path uses the same ownership, observation and suspension rules
 as section 1 (a caller's native-owned locals are described by the map at the
 call-return PC); it is developed in parallel with, not independently of, the

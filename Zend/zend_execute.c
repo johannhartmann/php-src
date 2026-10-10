@@ -48,6 +48,10 @@
 /* Virtual current working directory support */
 #include "zend_virtual_cwd.h"
 
+#ifdef HAVE_NATIVE_ENGINE
+# include "Native/Runtime/Common/zend_native_objects.h"
+#endif
+
 #ifdef HAVE_GCC_GLOBAL_REGS
 # if defined(__GNUC__) && ZEND_GCC_VERSION >= 4008 && defined(i386)
 #  define ZEND_VM_FP_GLOBAL_REG "%esi"
@@ -4510,6 +4514,11 @@ static zend_always_inline void init_func_run_time_cache_i(zend_op_array *op_arra
 	ZEND_ASSERT(RUN_TIME_CACHE(op_array) == NULL);
 	run_time_cache = zend_arena_alloc(&CG(arena), op_array->cache_size);
 	memset(run_time_cache, 0, op_array->cache_size);
+#ifdef HAVE_NATIVE_ENGINE
+	if (op_array->fn_flags & ZEND_ACC_IMMUTABLE) {
+		zend_native_property_cache_prime(op_array, run_time_cache);
+	}
+#endif
 	ZEND_MAP_PTR_SET(op_array->run_time_cache, run_time_cache);
 }
 /* }}} */
