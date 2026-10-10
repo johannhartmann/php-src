@@ -122,6 +122,22 @@ static zend_native_executor_generation
 static zend_native_executor_epoch_ref *zend_native_executor_epochs;
 static HashTable zend_native_executor_persistent_dispatches;
 static bool zend_native_executor_persistent_dispatches_active;
+/* This thread's persistent dispatches by source opcodes, NULL for none: a
+ * cached script registers its owner on every request that includes it.
+ * The dispatches live until shutdown; binding one records it here. */
+#define ZEND_NATIVE_EXECUTOR_DISPATCH_CACHE 4096
+ZEND_TLS struct {
+	const zend_op *opcodes;
+	struct _zend_native_executor_dispatch *dispatch;
+} zend_native_executor_dispatch_cache[ZEND_NATIVE_EXECUTOR_DISPATCH_CACHE];
+
+static zend_always_inline uint32_t zend_native_executor_dispatch_cache_slot(
+	const zend_op *opcodes)
+{
+	return (uint32_t) ((((uintptr_t) opcodes)
+			* UINT64_C(0x9e3779b97f4a7c15)) >> 40)
+		& (ZEND_NATIVE_EXECUTOR_DISPATCH_CACHE - 1);
+}
 static HashTable zend_native_executor_generations_by_owner;
 static HashTable zend_native_executor_generations_by_opcodes;
 /* The last generations_by_opcodes hits by opcodes, under the generation
@@ -1172,10 +1188,16 @@ static void zend_native_executor_bind_dispatch(
 			&zend_native_executor_persistent_dispatches,
 			(const char *) &key, sizeof(key));
 		if (dispatch == NULL) {
+			const uint32_t cached = zend_native_executor_dispatch_cache_slot(
+				op_array->opcodes);
+
 			dispatch = pecalloc(1, sizeof(*dispatch), true);
 			zend_hash_str_add_ptr(
 				&zend_native_executor_persistent_dispatches,
 				(const char *) &key, sizeof(key), dispatch);
+			zend_native_executor_dispatch_cache[cached].opcodes =
+				op_array->opcodes;
+			zend_native_executor_dispatch_cache[cached].dispatch = dispatch;
 		}
 		dispatch->generation = generation;
 		dispatch->entry_cell = entry_cell;
@@ -2101,6 +2123,8 @@ void zend_native_executor_shutdown(void)
 		zend_hash_destroy(
 			&zend_native_executor_persistent_dispatches);
 		zend_native_executor_persistent_dispatches_active = false;
+		memset(zend_native_executor_dispatch_cache, 0,
+			sizeof(zend_native_executor_dispatch_cache));
 	}
 	if (zend_native_executor_preloaded_owners_active) {
 		zend_hash_destroy(&zend_native_executor_preloaded_owners);
@@ -3108,11 +3132,22 @@ zend_result zend_native_executor_register_script_owner(
 	}
 	dispatch = zend_native_executor_dispatch_load(op_array);
 	if (dispatch == NULL) {
-		key = zend_native_executor_dispatch_key_make(op_array);
+		const uint32_t slot = zend_native_executor_dispatch_cache_slot(
+			op_array->opcodes);
+
 		zend_native_executor_generation_lock();
-		dispatch = zend_hash_str_find_ptr(
-			&zend_native_executor_persistent_dispatches,
-			(const char *) &key, sizeof(key));
+		if (zend_native_executor_dispatch_cache[slot].opcodes
+				== op_array->opcodes) {
+			dispatch = zend_native_executor_dispatch_cache[slot].dispatch;
+		} else {
+			key = zend_native_executor_dispatch_key_make(op_array);
+			dispatch = zend_hash_str_find_ptr(
+				&zend_native_executor_persistent_dispatches,
+				(const char *) &key, sizeof(key));
+			zend_native_executor_dispatch_cache[slot].opcodes =
+				op_array->opcodes;
+			zend_native_executor_dispatch_cache[slot].dispatch = dispatch;
+		}
 		if (dispatch != NULL
 				&& zend_native_executor_dispatch_epoch_load(dispatch)
 					== zend_native_executor_request_state
