@@ -2150,6 +2150,7 @@ void zend_native_executor_activate(void)
 	ZEND_ASSERT(!zend_native_executor_request_state.dispatch_active);
 	ZEND_ASSERT(!zend_native_executor_request_state.lookup_indexes_active);
 	ZEND_ASSERT(zend_native_executor_request_state.epoch == NULL);
+	zend_native_bailout_records_reset();
 	(void) zend_tpde_layout_switch();
 	zend_native_executor_acquire_request_epoch();
 	if (previous_epoch
@@ -3318,16 +3319,15 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 
 		if (EXPECTED(entry != NULL && cell->frame_probe == NULL)) {
 			zend_execute_data *previous = execute_data->prev_execute_data;
-			zend_native_execution_state state;
 			zend_native_status status;
 
+			/* The depth stays nonzero: it only tells nested execution from
+			 * the top level, and a bailout passing this entry leaves it
+			 * as it was. */
 			zend_native_entry_cell_retain_active(cell);
 			EG(current_execute_data) = execute_data;
-			zend_native_executor_request_state.execution_depth++;
-			status = zend_native_execute_frame_lean(entry, execute_data, true,
-				&state, (zend_native_execution_context *)
-					zend_native_execution_context_shared());
-			zend_native_executor_request_state.execution_depth--;
+			status = zend_native_execute_frame_entered(
+				entry, execute_data, cell);
 			EG(current_execute_data) = previous;
 			zend_native_entry_cell_release_active(cell);
 			if (EXPECTED(status == ZEND_NATIVE_RETURNED)) {

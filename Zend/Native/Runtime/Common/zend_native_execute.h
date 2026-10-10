@@ -6,6 +6,7 @@
 #include "Zend/zend_compile.h"
 #include "Zend/zend_dtrace.h"
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
+#include "Zend/Native/Runtime/Common/zend_native_calls.h"
 
 /*
  * The state lives in the C frame of the caller of the function that calls
@@ -30,14 +31,12 @@ typedef struct _zend_native_execution_state {
 } zend_native_execution_state;
 
 /*
- * The common entry from C of a frame that is no generator, unobserved and
- * without a DTrace probe: one zend_try covers the frame. execute_ex passes
- * the shared context (zend_native_execution_context_shared()), others
- * NULL for a fresh copy.
+ * execute_ex's direct entry of a frame with no generator, observer or
+ * DTrace probe whose cell it retained: unwound by a bailout record instead
+ * of a zend_try (the cell is released when a bailout passes the frame).
  */
-zend_native_status zend_native_execute_frame_lean(
+zend_native_status zend_native_execute_frame_entered(
 	zend_native_frame_entry_t entry, zend_execute_data *execute_data,
-	bool observer_already_started, zend_native_execution_state *state,
-	zend_native_execution_context *shared_context);
+	zend_native_entry_cell *cell);
 
 #endif /* ZEND_NATIVE_EXECUTE_H */

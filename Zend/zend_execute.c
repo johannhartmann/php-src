@@ -5326,98 +5326,97 @@ static zend_never_inline zend_execute_data *zend_init_dynamic_call_array(const z
 
 #define ZEND_FAKE_OP_ARRAY ((zend_op_array*)(intptr_t)-1)
 
-ZEND_API zend_never_inline zend_op_array* ZEND_FASTCALL zend_include_or_eval(const zval *inc_filename_zv, int type) /* {{{ */
-{
+#ifdef HAVE_NATIVE_ENGINE
+# include "Native/Runtime/Common/zend_native_calls.h"
+#endif
+
+typedef struct _zend_include_or_eval_state {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_bailout_record record;
+#endif
+	zend_op_array *new_op_array;
 	zend_string *tmp_inc_filename;
-	zend_string *inc_filename = zval_try_get_tmp_string(inc_filename_zv, &tmp_inc_filename);
-	struct {
-		zend_op_array *new_op_array;
-		zend_string *tmp_inc_filename;
-		zend_string *resolved_path;
-		char *eval_desc;
-		zend_file_handle file_handle;
-		bool file_handle_initialized;
-		bool bailed_out;
-	} *state;
+	zend_string *resolved_path;
+	char *eval_desc;
+	zend_file_handle file_handle;
+	bool file_handle_initialized;
+	bool bailed_out;
+} zend_include_or_eval_state;
 
-	if (UNEXPECTED(!inc_filename)) {
-		return NULL;
-	}
-	state = ecalloc(1, sizeof(*state));
-	state->tmp_inc_filename = tmp_inc_filename;
+static zend_always_inline void zend_include_or_eval_compile(
+	zend_include_or_eval_state *state, zend_string *inc_filename, int type)
+{
+	switch (type) {
+		case ZEND_INCLUDE_ONCE:
+		case ZEND_REQUIRE_ONCE:
+			state->resolved_path = zend_resolve_path(inc_filename);
+			if (EXPECTED(state->resolved_path)) {
+				if (zend_hash_exists(&EG(included_files), state->resolved_path)) {
+					state->new_op_array = ZEND_FAKE_OP_ARRAY;
+					break;
+				}
+			} else if (UNEXPECTED(EG(exception))) {
+				break;
+			} else if (UNEXPECTED(zend_str_has_nul_byte(inc_filename))) {
+				zend_message_dispatcher(
+					(type == ZEND_INCLUDE_ONCE) ?
+						ZMSG_FAILED_INCLUDE_FOPEN : ZMSG_FAILED_REQUIRE_FOPEN,
+						ZSTR_VAL(inc_filename));
+				break;
+			} else {
+				state->resolved_path = zend_string_copy(inc_filename);
+			}
 
-	zend_try {
-		switch (type) {
-			case ZEND_INCLUDE_ONCE:
-			case ZEND_REQUIRE_ONCE:
-				state->resolved_path = zend_resolve_path(inc_filename);
-				if (EXPECTED(state->resolved_path)) {
-					if (zend_hash_exists(&EG(included_files), state->resolved_path)) {
-						state->new_op_array = ZEND_FAKE_OP_ARRAY;
-						break;
-					}
-				} else if (UNEXPECTED(EG(exception))) {
-					break;
-				} else if (UNEXPECTED(zend_str_has_nul_byte(inc_filename))) {
-					zend_message_dispatcher(
-						(type == ZEND_INCLUDE_ONCE) ?
-							ZMSG_FAILED_INCLUDE_FOPEN : ZMSG_FAILED_REQUIRE_FOPEN,
-							ZSTR_VAL(inc_filename));
-					break;
+			zend_stream_init_filename_ex(
+				&state->file_handle, state->resolved_path);
+			state->file_handle_initialized = true;
+			if (SUCCESS == zend_stream_open(&state->file_handle)) {
+
+				if (!state->file_handle.opened_path) {
+					state->file_handle.opened_path =
+						zend_string_copy(state->resolved_path);
+				}
+
+				if (zend_hash_add_empty_element(
+						&EG(included_files), state->file_handle.opened_path)) {
+					state->new_op_array = zend_compile_file(
+						&state->file_handle,
+						type == ZEND_INCLUDE_ONCE
+							? ZEND_INCLUDE : ZEND_REQUIRE);
 				} else {
-					state->resolved_path = zend_string_copy(inc_filename);
+					state->new_op_array = ZEND_FAKE_OP_ARRAY;
 				}
-
-				zend_stream_init_filename_ex(
-					&state->file_handle, state->resolved_path);
-				state->file_handle_initialized = true;
-				if (SUCCESS == zend_stream_open(&state->file_handle)) {
-
-					if (!state->file_handle.opened_path) {
-						state->file_handle.opened_path =
-							zend_string_copy(state->resolved_path);
-					}
-
-					if (zend_hash_add_empty_element(
-							&EG(included_files), state->file_handle.opened_path)) {
-						state->new_op_array = zend_compile_file(
-							&state->file_handle,
-							type == ZEND_INCLUDE_ONCE
-								? ZEND_INCLUDE : ZEND_REQUIRE);
-					} else {
-						state->new_op_array = ZEND_FAKE_OP_ARRAY;
-					}
-				} else if (!EG(exception)) {
-					zend_message_dispatcher(
-						(type == ZEND_INCLUDE_ONCE) ?
-							ZMSG_FAILED_INCLUDE_FOPEN : ZMSG_FAILED_REQUIRE_FOPEN,
-							ZSTR_VAL(inc_filename));
-				}
+			} else if (!EG(exception)) {
+				zend_message_dispatcher(
+					(type == ZEND_INCLUDE_ONCE) ?
+						ZMSG_FAILED_INCLUDE_FOPEN : ZMSG_FAILED_REQUIRE_FOPEN,
+						ZSTR_VAL(inc_filename));
+			}
+			break;
+		case ZEND_INCLUDE:
+		case ZEND_REQUIRE:
+			if (UNEXPECTED(zend_str_has_nul_byte(inc_filename))) {
+				zend_message_dispatcher(
+					(type == ZEND_INCLUDE) ?
+						ZMSG_FAILED_INCLUDE_FOPEN : ZMSG_FAILED_REQUIRE_FOPEN,
+						ZSTR_VAL(inc_filename));
 				break;
-			case ZEND_INCLUDE:
-			case ZEND_REQUIRE:
-				if (UNEXPECTED(zend_str_has_nul_byte(inc_filename))) {
-					zend_message_dispatcher(
-						(type == ZEND_INCLUDE) ?
-							ZMSG_FAILED_INCLUDE_FOPEN : ZMSG_FAILED_REQUIRE_FOPEN,
-							ZSTR_VAL(inc_filename));
-					break;
-				}
-				state->new_op_array = compile_filename(type, inc_filename);
-				break;
-			case ZEND_EVAL:
-				state->eval_desc =
-					zend_make_compiled_string_description("eval()'d code");
-				state->new_op_array = zend_compile_string(
-					inc_filename, state->eval_desc,
-					ZEND_COMPILE_POSITION_AFTER_OPEN_TAG);
-				break;
-			default: ZEND_UNREACHABLE();
-		}
-	} zend_catch {
-		state->bailed_out = true;
-	} zend_end_try();
+			}
+			state->new_op_array = compile_filename(type, inc_filename);
+			break;
+		case ZEND_EVAL:
+			state->eval_desc =
+				zend_make_compiled_string_description("eval()'d code");
+			state->new_op_array = zend_compile_string(
+				inc_filename, state->eval_desc,
+				ZEND_COMPILE_POSITION_AFTER_OPEN_TAG);
+			break;
+		default: ZEND_UNREACHABLE();
+	}
+}
 
+static void zend_include_or_eval_release(zend_include_or_eval_state *state)
+{
 	if (state->file_handle_initialized) {
 		zend_destroy_file_handle(&state->file_handle);
 	}
@@ -5428,6 +5427,47 @@ ZEND_API zend_never_inline zend_op_array* ZEND_FASTCALL zend_include_or_eval(con
 		efree(state->eval_desc);
 	}
 	zend_tmp_string_release(state->tmp_inc_filename);
+}
+
+#ifdef HAVE_NATIVE_ENGINE
+/* A bailout out of the compilation releases the include state before its
+ * jump (zend_native_bailout_unwind()). */
+static void zend_include_or_eval_unwind(zend_native_bailout_record *record)
+{
+	zend_include_or_eval_release((zend_include_or_eval_state *) record);
+}
+#endif
+
+ZEND_API zend_never_inline zend_op_array* ZEND_FASTCALL zend_include_or_eval(const zval *inc_filename_zv, int type) /* {{{ */
+{
+	zend_string *tmp_inc_filename;
+	zend_string *inc_filename = zval_try_get_tmp_string(inc_filename_zv, &tmp_inc_filename);
+
+	if (UNEXPECTED(!inc_filename)) {
+		return NULL;
+	}
+#ifdef HAVE_NATIVE_ENGINE
+	zend_include_or_eval_state state;
+
+	memset(&state, 0, sizeof(state));
+	state.tmp_inc_filename = tmp_inc_filename;
+	ZEND_NATIVE_BAILOUT_RECORD_LINK(&state.record, zend_include_or_eval_unwind);
+	zend_include_or_eval_compile(&state, inc_filename, type);
+	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&state.record);
+	zend_include_or_eval_release(&state);
+	return state.new_op_array;
+#else
+	/* The state outlives a bailout in the catch below. */
+	zend_include_or_eval_state *state = ecalloc(1, sizeof(*state));
+	state->tmp_inc_filename = tmp_inc_filename;
+
+	zend_try {
+		zend_include_or_eval_compile(state, inc_filename, type);
+	} zend_catch {
+		state->bailed_out = true;
+	} zend_end_try();
+
+	zend_include_or_eval_release(state);
 
 	zend_op_array *new_op_array = state->new_op_array;
 	bool bailed_out = state->bailed_out;
@@ -5436,6 +5476,7 @@ ZEND_API zend_never_inline zend_op_array* ZEND_FASTCALL zend_include_or_eval(con
 		zend_bailout();
 	}
 	return new_op_array;
+#endif
 }
 /* }}} */
 

@@ -42,6 +42,7 @@
 #include "Optimizer/zend_optimizer.h"
 #ifdef HAVE_NATIVE_ENGINE
 # include "Native/Compiler/zend_native_executor.h"
+# include "Native/Runtime/Common/zend_native_calls.h"
 #endif
 #include "php.h"
 #include "php_globals.h"
@@ -1295,6 +1296,9 @@ ZEND_API ZEND_COLD ZEND_NORETURN void _zend_bailout(const char *filename, uint32
 	CG(in_compilation) = 0;
 	CG(memoize_mode) = 0;
 	EG(current_execute_data) = NULL;
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_bailout_unwind(EG(bailout));
+#endif
 	LONGJMP(*EG(bailout), FAILURE);
 }
 /* }}} */

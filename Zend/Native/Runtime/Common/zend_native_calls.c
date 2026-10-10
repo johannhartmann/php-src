@@ -129,6 +129,40 @@ static void zend_native_execution_context_build(
 	context->deopt_resume = false;
 }
 
+ZEND_EXT_TLS zend_native_bailout_record *zend_native_bailout_records;
+
+void zend_native_bailout_unwind(const void *target)
+{
+	while (zend_native_bailout_records != NULL
+			&& zend_native_bailout_records->scope == target) {
+		zend_native_bailout_record *record = zend_native_bailout_records;
+
+		/* Unlinked first: a bailout out of the unwinding continues with
+		 * the next record. */
+		zend_native_bailout_records = record->previous;
+		record->unwind(record);
+	}
+}
+
+void *zend_native_bailout_records_suspend(void)
+{
+	zend_native_bailout_record *records = zend_native_bailout_records;
+
+	zend_native_bailout_records = NULL;
+	return records;
+}
+
+void zend_native_bailout_records_resume(void *records)
+{
+	ZEND_ASSERT(zend_native_bailout_records == NULL);
+	zend_native_bailout_records = records;
+}
+
+void zend_native_bailout_records_reset(void)
+{
+	zend_native_bailout_records = NULL;
+}
+
 void *zend_native_call_fiber_suspend(void)
 {
 	zend_native_direct_activation *active = zend_native_active_direct_call;

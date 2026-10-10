@@ -1048,6 +1048,45 @@ const zend_native_execution_context *zend_native_execution_context_shared(void);
  * Fiber switches therefore save and clear the thread-local chain before the
  * C-stack transfer and restore the saved chain when that fiber resumes.
  */
+/*
+ * Unwinding before the bailout jump (ADR 0010: cleanup is reachable from
+ * the active bailout catcher). A native boundary that must clean up when a
+ * bailout passes it links a record into this thread's chain instead of
+ * installing its own zend_try. _zend_bailout() calls
+ * zend_native_bailout_unwind() with its target before the jump: every
+ * record linked while that target was the active catcher lies inside the
+ * catcher's zend_try and is unlinked and unwound, newest first, while the C
+ * stack holding it is still intact. Fibers keep their own chain.
+ */
+typedef struct _zend_native_bailout_record {
+	struct _zend_native_bailout_record *previous;
+	/* EG(bailout) when the record was linked. */
+	const void *scope;
+	void (*unwind)(struct _zend_native_bailout_record *record);
+} zend_native_bailout_record;
+
+extern ZEND_EXT_TLS zend_native_bailout_record *zend_native_bailout_records;
+
+/* Link a record (its unwind function set) while the code it guards runs,
+ * and unlink it when that code returned. */
+#define ZEND_NATIVE_BAILOUT_RECORD_LINK(record_, unwind_) do { \
+		(record_)->previous = zend_native_bailout_records; \
+		(record_)->scope = EG(bailout); \
+		(record_)->unwind = (unwind_); \
+		zend_native_bailout_records = (record_); \
+	} while (0)
+#define ZEND_NATIVE_BAILOUT_RECORD_UNLINK(record_) do { \
+		ZEND_ASSERT(zend_native_bailout_records == (record_)); \
+		zend_native_bailout_records = (record_)->previous; \
+	} while (0)
+
+void zend_native_bailout_unwind(const void *target);
+/* A fiber switch takes the leaving context's chain and gives back the
+ * resumed one's (a new fiber starts with none). */
+void *zend_native_bailout_records_suspend(void);
+void zend_native_bailout_records_resume(void *records);
+void zend_native_bailout_records_reset(void);
+
 void *zend_native_call_fiber_suspend(void);
 void zend_native_call_fiber_resume(void *active_direct_call);
 void zend_native_call_fiber_destroy(void);

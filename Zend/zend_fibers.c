@@ -118,6 +118,9 @@ typedef struct _zend_fiber_vm_state {
 	uint32_t jit_trace_num;
 	JMP_BUF *bailout;
 	zend_fiber *active_fiber;
+#ifdef HAVE_NATIVE_ENGINE
+	void *native_bailout_records;
+#endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	void *stack_base;
 	void *stack_limit;
@@ -141,6 +144,8 @@ static zend_always_inline void zend_fiber_capture_vm_state(
 	int native_rid = zend_native_executor_op_array_handle();
 
 	ZEND_ASSERT(native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES);
+	/* A dead fiber's records went with its unwound frames. */
+	state->native_bailout_records = zend_native_bailout_records_suspend();
 	if (destroying) {
 		zend_native_call_fiber_destroy();
 		context->reserved[native_rid] = NULL;
@@ -175,6 +180,7 @@ static zend_always_inline void zend_fiber_restore_vm_state(zend_fiber_vm_state *
 	native_direct_call = context->reserved[native_rid];
 	context->reserved[native_rid] = NULL;
 	zend_native_call_fiber_resume(native_direct_call);
+	zend_native_bailout_records_resume(state->native_bailout_records);
 #endif
 #ifdef ZEND_CHECK_STACK_LIMIT
 	EG(stack_base) = state->stack_base;
