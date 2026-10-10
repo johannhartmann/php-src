@@ -2750,26 +2750,7 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 	cache_slot = (void **) ((char *) execute_data->run_time_cache
 		+ cache_offset);
 	if (cache_slot[0] != object->ce) {
-		/* Another class than the site's cached one (an inherited method on
-		 * a subclass, magic properties): read through the handler as
-		 * zend_native_object_fetch_explicit() does, without decoding the
-		 * operation again. A temporary receiver and a CV result take the
-		 * general fetch. */
-		if ((fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)
-				&& receiver_slot == NULL && result_type != IS_CV
-				&& EG(exception) == NULL) {
-			zval *value;
-
-			/* Warnings and __get() report the fetch's line. */
-			execute_data->opline = &op_array->opcodes[source_position_id];
-			value = object->handlers->read_property(object,
-				Z_STR(op_array->literals[ZEND_NATIVE_OPERAND_VALUE(op2)]),
-				fetch_type, cache_slot, target);
-
-			zend_native_object_replace(target, value);
-			return true;
-		}
-		return false;
+		goto read_through_handler;
 	}
 	property_offset = (uintptr_t) cache_slot[1];
 	if (EXPECTED(IS_VALID_PROPERTY_OFFSET(property_offset))) {
@@ -2799,21 +2780,21 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 			property = zend_hash_find_known_hash(
 				object->properties, name);
 			if (property == NULL) {
-				return false;
+				goto read_through_handler;
 			}
 		}
 		if (Z_TYPE_P(property) == IS_INDIRECT) {
 			property = Z_INDIRECT_P(property);
 		}
 	} else {
-		return false;
+		goto read_through_handler;
 	}
 	/* Write, read-write and unset fetches address an untyped property. */
 	const bool writes = fetch_type == BP_VAR_W || fetch_type == BP_VAR_RW
 		|| fetch_type == BP_VAR_UNSET;
 	if (Z_TYPE_P(property) == IS_UNDEF
 			|| (writes && cache_slot[2] != NULL)) {
-		return false;
+		goto read_through_handler;
 	}
 	if (writes) {
 		ZVAL_INDIRECT(target, property);
@@ -2827,6 +2808,27 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 		}
 	}
 	return true;
+
+read_through_handler:
+	/* Another class than the site's cached one (an inherited method on a
+	 * subclass), magic, dynamic or uninitialized properties: a read goes
+	 * through the handler as zend_native_object_fetch_explicit() does,
+	 * without decoding the operation again. Writes, a temporary receiver
+	 * and a CV result take the general fetch. */
+	if ((fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)
+			&& receiver_slot == NULL && result_type != IS_CV
+			&& EG(exception) == NULL) {
+		zval *value;
+
+		/* Warnings and __get() report the fetch's line. */
+		execute_data->opline = &op_array->opcodes[source_position_id];
+		value = object->handlers->read_property(object,
+			Z_STR(op_array->literals[ZEND_NATIVE_OPERAND_VALUE(op2)]),
+			fetch_type, cache_slot, target);
+		zend_native_object_replace(target, value);
+		return true;
+	}
+	return false;
 }
 
 zend_native_status zend_native_execute_object_fetch_r(

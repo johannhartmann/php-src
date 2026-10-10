@@ -5190,6 +5190,45 @@ zend_native_status zend_native_value_fetch_dim_r_direct(
 			(zval *) ((char *) execute_data + result_offset), &status)) {
 		return status;
 	}
+	/* $cv[$key] of an object (ArrayAccess, ArrayObject) with a literal or
+	 * CV key, as zend_fetch_dimension_address_read() reads it through the
+	 * handler. */
+	if (container_kind == ZEND_NATIVE_DIM_DIRECT_CV
+			&& key_kind != ZEND_NATIVE_DIM_DIRECT_TMP) {
+		zval *container = (zval *) ((char *) execute_data + (uint32_t) slots);
+		zval *offset = key_kind == ZEND_NATIVE_DIM_DIRECT_CONST
+			? &execute_data->func->op_array.literals[key_offset]
+			: (zval *) ((char *) execute_data + key_offset);
+		zval *result = (zval *) ((char *) execute_data + result_offset);
+
+		ZVAL_DEREF(container);
+		if (key_kind == ZEND_NATIVE_DIM_DIRECT_CONST
+				&& Z_EXTRA_P(offset) == ZEND_EXTRA_VALUE) {
+			offset++;
+		}
+		if (Z_TYPE_P(container) == IS_OBJECT
+				&& Z_TYPE_P(offset) != IS_UNDEF) {
+			zend_object *object = Z_OBJ_P(container);
+			zval *value;
+
+			execute_data->opline = &execute_data->func->op_array.opcodes[
+				(uint32_t) (descriptor >> 32)];
+			GC_ADDREF(object);
+			value = object->handlers->read_dimension(
+				object, offset, BP_VAR_R, result);
+			if (value == NULL) {
+				ZVAL_NULL(result);
+			} else if (value != result) {
+				ZVAL_COPY_DEREF(result, value);
+			} else if (Z_ISREF_P(result)) {
+				zend_unwrap_reference(result);
+			}
+			if (GC_DELREF(object) == 0) {
+				zend_objects_store_del(object);
+			}
+			return zend_native_value_status();
+		}
+	}
 	return zend_native_value_fetch_dim_impl(execute_data,
 		zend_native_value_direct_encoding(execute_data,
 			container_kind, (uint32_t) slots),
