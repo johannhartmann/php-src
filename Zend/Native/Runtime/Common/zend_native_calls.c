@@ -1386,23 +1386,73 @@ ZEND_TLS zend_native_reentry_cache_entry
 static uint64_t zend_native_reentry_persistent_epoch = 1;
 
 static void zend_native_call_recorded_targets_forget(
-	const zend_native_entry_cell *const *cells, uint32_t count);
+	const zend_native_entry_cell *const *cells, uint32_t count,
+	const zend_native_pointer_filter *filter);
+static void zend_native_call_recorded_target_forget_slot(
+	uint32_t slot, const zend_native_entry_cell *cell);
 
 void zend_native_reentry_invalidate_persistent(void)
 {
 	zend_native_reentry_persistent_epoch++;
-	zend_native_call_recorded_targets_forget(NULL, 0);
+	zend_native_call_recorded_targets_forget(NULL, 0, NULL);
 	zend_native_value_forget_return_classes(NULL, 0);
+}
+
+static void zend_native_entry_cell_note_cached(
+	zend_native_entry_cell *cell, uint16_t slot)
+{
+	if (cell->cached == ZEND_NATIVE_CELL_CACHED_MANY) {
+		return;
+	}
+	for (uint8_t index = 0; index < cell->cached; index++) {
+		if (cell->cached_slots[index] == slot) {
+			return;
+		}
+	}
+	if (cell->cached == sizeof(cell->cached_slots)
+			/ sizeof(cell->cached_slots[0])) {
+		cell->cached = ZEND_NATIVE_CELL_CACHED_MANY;
+		return;
+	}
+	cell->cached_slots[cell->cached++] = slot;
 }
 
 void zend_native_reentry_forget_cells(
 	const zend_native_entry_cell *const *cells, uint32_t count)
 {
-	for (uint32_t slot = 0; slot < ZEND_NATIVE_REENTRY_CACHE_SIZE; slot++) {
+	zend_native_pointer_filter filter = {{0}};
+	bool cached = false;
+
+	for (uint32_t index = 0; index < count; index++) {
+		const zend_native_entry_cell *cell = cells[index];
+
+		zend_native_pointer_filter_add(&filter, cell);
+		if (cell->cached == ZEND_NATIVE_CELL_CACHED_MANY) {
+			cached = true;
+			continue;
+		}
+		/* The few slots that hold the cell, unless another cell took
+		 * them since. */
+		for (uint8_t held = 0; held < cell->cached; held++) {
+			const uint16_t slot = cell->cached_slots[held];
+
+			if ((slot & ZEND_NATIVE_CELL_CACHED_RECORDED) != 0) {
+				zend_native_call_recorded_target_forget_slot(
+					slot & ~ZEND_NATIVE_CELL_CACHED_RECORDED, cell);
+			} else if (zend_native_reentry_cache[slot].cell == cell) {
+				memset(&zend_native_reentry_cache[slot], 0,
+					sizeof(zend_native_reentry_cache[slot]));
+			}
+		}
+	}
+	for (uint32_t slot = 0;
+			cached && slot < ZEND_NATIVE_REENTRY_CACHE_SIZE; slot++) {
 		zend_native_reentry_cache_entry *cached =
 			&zend_native_reentry_cache[slot];
 
-		if (cached->cell == NULL) {
+		if (cached->cell == NULL
+				|| !zend_native_pointer_filter_may_hold(
+					&filter, cached->cell)) {
 			continue;
 		}
 		for (uint32_t index = 0; index < count; index++) {
@@ -1412,18 +1462,29 @@ void zend_native_reentry_forget_cells(
 			}
 		}
 	}
-	zend_native_call_recorded_targets_forget(cells, count);
+	if (cached) {
+		zend_native_call_recorded_targets_forget(cells, count, &filter);
+	}
 	{
 		const zend_op *opcodes[64];
 		uint32_t known = 0;
 
-		for (uint32_t index = 0; index < count && known < 64; index++) {
+		bool overflow = false;
+
+		for (uint32_t index = 0; index < count; index++) {
 			if (cells[index]->function != NULL
 					&& ZEND_USER_CODE(cells[index]->function->type)) {
+				if (known == 64) {
+					overflow = true;
+					break;
+				}
 				opcodes[known++] = cells[index]->function->op_array.opcodes;
 			}
 		}
-		if (known != 0) {
+		/* More code than the list holds: forget every return class. */
+		if (overflow) {
+			zend_native_value_forget_return_classes(NULL, 0);
+		} else if (known != 0) {
 			zend_native_value_forget_return_classes(opcodes, known);
 		}
 	}
@@ -1478,6 +1539,8 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 		cached->opcodes = function->op_array.opcodes;
 		cached->last = function->op_array.last;
 		cached->cell = cell;
+		zend_native_entry_cell_note_cached(cell, (uint16_t)
+			(cached - zend_native_reentry_cache));
 		cached->persistent = cell->lease_managed;
 		cached->epoch = cell->lease_managed
 			? zend_native_reentry_persistent_epoch
@@ -1740,6 +1803,34 @@ void zend_native_entry_cell_set_frame_probe(
 	cell->frame_probe_context = context;
 }
 
+/* A supplied argument passes its declared type: a type the mask names, an
+ * object of the class the check accepted last, or the full check. */
+static zend_always_inline bool zend_native_frame_argument_passes(
+	const zend_op_array *op_array, uint32_t ordinal,
+	const zend_arg_info *argument_info, zval *argument)
+{
+	if (!ZEND_TYPE_IS_SET(argument_info->type)
+			|| ZEND_TYPE_CONTAINS_CODE(
+				argument_info->type, Z_TYPE_P(argument))) {
+		return true;
+	}
+	if (Z_TYPE_P(argument) == IS_OBJECT
+			&& ZEND_TYPE_IS_COMPLEX(argument_info->type)
+			&& zend_native_value_class_accepted(
+				op_array, ordinal, Z_OBJCE_P(argument))) {
+		return true;
+	}
+	if (!zend_check_type_ex(&argument_info->type, argument, false, false)) {
+		return false;
+	}
+	if (Z_TYPE_P(argument) == IS_OBJECT
+			&& ZEND_TYPE_IS_COMPLEX(argument_info->type)) {
+		zend_native_value_class_accept(
+			op_array, ordinal, Z_OBJCE_P(argument));
+	}
+	return true;
+}
+
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 {
 	zend_op_array *op_array;
@@ -1764,9 +1855,8 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 		const zval *default_value;
 
 		if (ordinal < supplied) {
-			if (ZEND_TYPE_IS_SET(argument_info->type)
-					&& !zend_check_type_ex(
-						&argument_info->type, argument, false, false)) {
+			if (!zend_native_frame_argument_passes(
+					op_array, ordinal, argument_info, argument)) {
 				zend_verify_arg_error(
 					execute_data->func, argument_info, ordinal + 1, argument);
 				return FAILURE;
@@ -5296,10 +5386,22 @@ typedef struct _zend_native_call_recorded_target {
 static zend_native_call_recorded_target
 	zend_native_call_recorded_targets[ZEND_NATIVE_CALL_RECORDED_TARGETS];
 
+static void zend_native_call_recorded_target_forget_slot(
+	uint32_t slot, const zend_native_entry_cell *cell)
+{
+	zend_native_call_recorded_target *target =
+		&zend_native_call_recorded_targets[slot];
+
+	if (target->cell == cell) {
+		memset(target, 0, sizeof(*target));
+	}
+}
+
 /* Retired persistent cells (all of them for count 0): their recorded
  * targets go too, which outlived the request through them. */
 static void zend_native_call_recorded_targets_forget(
-	const zend_native_entry_cell *const *cells, uint32_t count)
+	const zend_native_entry_cell *const *cells, uint32_t count,
+	const zend_native_pointer_filter *filter)
 {
 	for (uint32_t slot = 0; slot < ZEND_NATIVE_CALL_RECORDED_TARGETS; slot++) {
 		zend_native_call_recorded_target *target =
@@ -5310,6 +5412,9 @@ static void zend_native_call_recorded_targets_forget(
 		}
 		if (count == 0) {
 			memset(target, 0, sizeof(*target));
+			continue;
+		}
+		if (!zend_native_pointer_filter_may_hold(filter, target->cell)) {
 			continue;
 		}
 		for (uint32_t index = 0; index < count; index++) {
@@ -5475,6 +5580,9 @@ static void zend_native_call_recorded_target_store(
 	target->receive = zend_native_call_fast_receive_prepare(
 		resolution->entry_cell, &resolution->function->op_array);
 	target->cell = resolution->entry_cell;
+	zend_native_entry_cell_note_cached(resolution->entry_cell, (uint16_t)
+		(ZEND_NATIVE_CELL_CACHED_RECORDED
+			| (target - zend_native_call_recorded_targets)));
 	target->by_value = true;
 	if (resolution->function != NULL
 			&& resolution->function->type == ZEND_USER_FUNCTION) {

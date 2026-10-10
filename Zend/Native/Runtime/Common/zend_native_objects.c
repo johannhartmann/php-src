@@ -1737,7 +1737,7 @@ static zend_string *zend_native_static_name_explicit(
  */
 static void **zend_native_static_cache_slot(
 	zend_execute_data *execute_data,
-	const zend_native_explicit_object_operation *operation)
+	const zend_native_explicit_object_operation *operation, bool *keyed)
 {
 	const zend_op_array *op_array = &execute_data->func->op_array;
 	const uint32_t fetch = operation->op2.num & ZEND_FETCH_CLASS_MASK;
@@ -1761,11 +1761,17 @@ static void **zend_native_static_cache_slot(
 		offset = operation->extended_value & ~ZEND_FETCH_OBJ_FLAGS;
 	}
 
+	/* static:: names the called scope: its slot holds the property of the
+	 * class it names first, as zend_fetch_static_property_address() keys
+	 * it. */
+	*keyed = operation->op2_type == IS_UNUSED
+		&& fetch == ZEND_FETCH_CLASS_STATIC;
 	if (operation->op1_type != IS_CONST
 			|| (operation->op2_type != IS_CONST
 				&& (operation->op2_type != IS_UNUSED
 					|| (fetch != ZEND_FETCH_CLASS_SELF
-						&& fetch != ZEND_FETCH_CLASS_PARENT)))
+						&& fetch != ZEND_FETCH_CLASS_PARENT
+						&& fetch != ZEND_FETCH_CLASS_STATIC)))
 			|| execute_data->run_time_cache == NULL
 			|| (offset & (sizeof(void *) - 1)) != 0
 			|| (uint64_t) offset + 3 * sizeof(void *)
@@ -1780,14 +1786,25 @@ static zval *zend_native_static_property_explicit(
 	const zend_native_explicit_object_operation *operation, int fetch_type,
 	zend_property_info **property_info, zend_string **temporary)
 {
-	zend_class_entry *class_entry;
+	zend_class_entry *class_entry = NULL;
 	zend_string *name;
 	zval *property;
+	bool keyed = false;
 	void **cache_slot = zend_native_static_cache_slot(
-		execute_data, operation);
+		execute_data, operation, &keyed);
 
 	*property_info = NULL;
 	*temporary = NULL;
+	if (keyed && cache_slot != NULL) {
+		class_entry = zend_fetch_class(NULL, operation->op2.num);
+		if (class_entry == NULL) {
+			return NULL;
+		}
+		if (cache_slot[0] != class_entry) {
+			/* Another called scope: look it up, then cache it. */
+			goto lookup;
+		}
+	}
 	/* The cached property of a fixed class and name, as
 	 * zend_fetch_static_property_address() reads it. */
 	if (cache_slot != NULL && cache_slot[1] != NULL) {
@@ -1804,7 +1821,11 @@ static zval *zend_native_static_property_explicit(
 		}
 		return property;
 	}
-	class_entry = zend_native_static_class_explicit(execute_data, operation);
+lookup:
+	if (class_entry == NULL) {
+		class_entry = zend_native_static_class_explicit(
+			execute_data, operation);
+	}
 	if (class_entry == NULL) {
 		return NULL;
 	}
@@ -2662,7 +2683,8 @@ zend_native_status zend_native_execute_object_fetch_this(
  */
 static zend_always_inline bool zend_native_object_fetch_cached(
 	zend_execute_data *execute_data, uint64_t op1, uint64_t op2,
-	uint64_t result, uint32_t extended_value, int fetch_type)
+	uint64_t result, uint32_t extended_value, uint32_t source_position_id,
+	int fetch_type)
 {
 	const zend_op_array *op_array = &execute_data->func->op_array;
 	const uint8_t result_type = ZEND_NATIVE_OPERAND_TYPE(result);
@@ -2728,6 +2750,25 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 	cache_slot = (void **) ((char *) execute_data->run_time_cache
 		+ cache_offset);
 	if (cache_slot[0] != object->ce) {
+		/* Another class than the site's cached one (an inherited method on
+		 * a subclass, magic properties): read through the handler as
+		 * zend_native_object_fetch_explicit() does, without decoding the
+		 * operation again. A temporary receiver and a CV result take the
+		 * general fetch. */
+		if ((fetch_type == BP_VAR_R || fetch_type == BP_VAR_IS)
+				&& receiver_slot == NULL && result_type != IS_CV
+				&& EG(exception) == NULL) {
+			zval *value;
+
+			/* Warnings and __get() report the fetch's line. */
+			execute_data->opline = &op_array->opcodes[source_position_id];
+			value = object->handlers->read_property(object,
+				Z_STR(op_array->literals[ZEND_NATIVE_OPERAND_VALUE(op2)]),
+				fetch_type, cache_slot, target);
+
+			zend_native_object_replace(target, value);
+			return true;
+		}
 		return false;
 	}
 	property_offset = (uintptr_t) cache_slot[1];
@@ -2797,8 +2838,8 @@ zend_native_status zend_native_execute_object_fetch_r(
 	zend_native_explicit_object_operation operation;
 
 	if (zend_native_object_fetch_cached(execute_data, op1, op2, result,
-			extended_value, BP_VAR_R)) {
-		return ZEND_NATIVE_RETURNED;
+			extended_value, source_position_id, BP_VAR_R)) {
+		return zend_native_object_status();
 	}
 
 	if (!zend_native_object_init_explicit_operation(
@@ -2823,8 +2864,9 @@ zend_native_status zend_native_execute_object_fetch_r(
 		if ((fetch_type == BP_VAR_W || fetch_type == BP_VAR_RW \
 					|| fetch_type == BP_VAR_UNSET || fetch_type == BP_VAR_IS) \
 				&& zend_native_object_fetch_cached(execute_data, op1, op2, \
-					result, extended_value, fetch_type)) { \
-			return ZEND_NATIVE_RETURNED; \
+					result, extended_value, source_position_id, \
+					fetch_type)) { \
+			return zend_native_object_status(); \
 		} \
 		if (!zend_native_object_init_explicit_operation( \
 				execute_data, op1, op2, result, extended_value, \
@@ -2863,8 +2905,8 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 			&& (ZEND_CALL_INFO(execute_data->call)
 				& ZEND_CALL_SEND_ARG_BY_REF) == 0
 			&& zend_native_object_fetch_cached(execute_data, op1, op2, result,
-				extended_value, BP_VAR_R)) {
-		return ZEND_NATIVE_RETURNED;
+				extended_value, source_position_id, BP_VAR_R)) {
+		return zend_native_object_status();
 	}
 	if (!zend_native_object_init_explicit_operation(
 			execute_data, op1, op2, result, extended_value, source_opcode,
@@ -3435,6 +3477,14 @@ zend_native_status zend_native_execute_static_fetch_r(
 			+ cache_offset);
 		zval *property = cache_slot[1];
 
+		/* A static:: slot holds the property of the called scope it names
+		 * first. */
+		if (ZEND_NATIVE_OPERAND_TYPE(op2) == IS_UNUSED
+				&& (ZEND_NATIVE_OPERAND_VALUE(op2) & ZEND_FETCH_CLASS_MASK)
+					== ZEND_FETCH_CLASS_STATIC
+				&& cache_slot[0] != zend_get_called_scope(execute_data)) {
+			property = NULL;
+		}
 		if (property != NULL && Z_TYPE_P(property) != IS_UNDEF) {
 			ZVAL_COPY_DEREF(ZEND_NATIVE_OPERAND_VAR(execute_data, result),
 				property);

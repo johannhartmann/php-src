@@ -74,6 +74,12 @@ typedef struct _zend_native_entry_cell {
 	zend_native_frame_probe_t frame_probe;
 	void *frame_probe_context;
 	bool lease_managed;
+	/* The reentry cache and recorded call target slots that hold this
+	 * cell (cached_slots, ZEND_NATIVE_CELL_CACHED_RECORDED marks a recorded
+	 * target), forgotten one by one with the cell; a cell held in more
+	 * slots (ZEND_NATIVE_CELL_CACHED_MANY) has the caches scanned. */
+	uint8_t cached;
+	uint16_t cached_slots[3];
 	zend_native_call_fast_receive fast_receive;
 	/* The call-cache epoch in which a fast call site's re-arm last
 	 * verified this immutable target under a function name or as a method
@@ -968,9 +974,48 @@ void zend_native_call_fast_undefined_argument(
  * native code copies the element its byte selects. */
 extern zval zend_native_char_strings[256];
 
+#define ZEND_NATIVE_CELL_CACHED_MANY 0xff
+#define ZEND_NATIVE_CELL_CACHED_RECORDED 0x8000
+
+/* A 256-bit filter over a few pointers: scans of the request-spanning
+ * caches test it before comparing against the forgotten ones. */
+typedef struct _zend_native_pointer_filter {
+	uint64_t bits[4];
+} zend_native_pointer_filter;
+
+static zend_always_inline uint32_t zend_native_pointer_filter_bit(
+	const void *pointer)
+{
+	return (uint32_t) (((uintptr_t) pointer
+		* UINT64_C(0x9e3779b97f4a7c15)) >> 56);
+}
+
+static zend_always_inline void zend_native_pointer_filter_add(
+	zend_native_pointer_filter *filter, const void *pointer)
+{
+	const uint32_t bit = zend_native_pointer_filter_bit(pointer);
+
+	filter->bits[bit >> 6] |= UINT64_C(1) << (bit & 63);
+}
+
+static zend_always_inline bool zend_native_pointer_filter_may_hold(
+	const zend_native_pointer_filter *filter, const void *pointer)
+{
+	const uint32_t bit = zend_native_pointer_filter_bit(pointer);
+
+	return (filter->bits[bit >> 6] >> (bit & 63)) & 1;
+}
+
 /* Persistent code was retired or replaced: forget the reentry cells kept
  * across requests. */
 void zend_native_reentry_invalidate_persistent(void);
+/* A class-typed check of an immutable function at opline `position`
+ * (VERIFY_RETURN_TYPE, RECV) accepted an object of persistent class `ce`
+ * last: the check depends only on the class, so the object passes again. */
+bool zend_native_value_class_accepted(const struct _zend_op_array *op_array,
+	uint32_t position, const zend_class_entry *ce);
+void zend_native_value_class_accept(const struct _zend_op_array *op_array,
+	uint32_t position, const zend_class_entry *ce);
 /* Retired persistent code (all of it for count 0): forget the return
  * classes kept for its checks. */
 void zend_native_value_forget_return_classes(
