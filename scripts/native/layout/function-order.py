@@ -9,7 +9,10 @@ page, and clusters are emitted by descending sample density.  The output is a
 linker-script fragment for ld --section-ordering-file (binutils 2.43+).
 
 Usage:
-  function-order.py --binary sapi/fpm/php-fpm --output FILE CALLGRIND...
+  function-order.py --binary sapi/fpm/php-fpm --output FILE CALLGRIND[@WEIGHT]...
+
+A profile's optional weight scales its costs, so that applications whose
+requests differ in length count alike.
 """
 
 import argparse
@@ -21,7 +24,7 @@ import sys
 PAGE_SIZE = 4096
 
 
-def read_profile(path, self_cost, edges):
+def read_profile(path, self_cost, edges, weight=1.0):
     names = {}
 
     def name(token):
@@ -45,7 +48,8 @@ def read_profile(path, self_cost, edges):
             elif line.startswith('calls='):
                 # The cost line after calls= is inclusive cost of the call.
                 call_line = True
-                edges[(function, callee)] += int(line.split()[0][6:])
+                edges[(function, callee)] += \
+                    int(line.split()[0][6:]) * weight
             elif line[:1] in '0123456789+-*':
                 if call_line:
                     call_line = False
@@ -53,7 +57,7 @@ def read_profile(path, self_cost, edges):
                 fields = line.split()
                 if len(fields) >= 2 and function is not None:
                     try:
-                        self_cost[function] += int(fields[-1])
+                        self_cost[function] += int(fields[-1]) * weight
                     except ValueError:
                         pass
 
@@ -80,7 +84,8 @@ def main():
     self_cost = collections.Counter()
     edges = collections.Counter()
     for profile in args.profiles:
-        read_profile(profile, self_cost, edges)
+        path, _, weight = profile.partition('@')
+        read_profile(path, self_cost, edges, float(weight) if weight else 1.0)
     sizes = function_sizes(args.binary)
 
     hot = [function for function, cost in self_cost.most_common()
