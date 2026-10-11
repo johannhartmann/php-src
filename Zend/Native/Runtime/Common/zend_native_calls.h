@@ -447,8 +447,15 @@ static zend_always_inline void zend_native_user_call_descriptor_free(
 
 typedef enum _zend_native_user_call_resolution_status {
 	ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE = 0,
-	ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS = 1
+	ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS = 1,
+	/* zend_native_call_universal_init() of a fast site: the site's fast
+	 * Init ran instead; Send and Do take the fast path. */
+	ZEND_NATIVE_USER_CALL_RESOLUTION_FAST = 2
 } zend_native_user_call_resolution_status;
+
+/* Set in zend_native_call_universal_init()'s argument_count by a site with a
+ * native fast path, which accepts ZEND_NATIVE_USER_CALL_RESOLUTION_FAST. */
+#define ZEND_NATIVE_USER_CALL_UNIVERSAL_FAST_SITE (1u << 31)
 
 typedef enum _zend_native_check_func_arg_result {
 	ZEND_NATIVE_CHECK_FUNC_ARG_BY_VALUE = 0,

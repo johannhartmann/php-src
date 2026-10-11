@@ -6668,6 +6668,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * records the universal mode and runs the universal setup below.
 			 */
 			const bool fast_site = source_call_fast_eligible(call);
+			const bool fast_new_site = fast_site
+				&& call.user_call->init_opcode == ZEND_NEW;
 			TargetBranchState fast_spilled;
 			auto fast_join = text_writer.label_create();
 			if (fast_site) {
@@ -7146,7 +7148,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 					call.call_site->target_id, &assigner), tpde::CCAssignment{});
 				add_const_arg(builder, setup_size, 4);
-				add_const_arg(builder, argument_count, 4);
+				/* A fast new site may run its fast Init after loading its
+				 * class (ZEND_NATIVE_USER_CALL_RESOLUTION_FAST). */
+				add_const_arg(builder, argument_count
+					| (fast_new_site ? uint64_t{
+						ZEND_NATIVE_USER_CALL_UNIVERSAL_FAST_SITE} : 0), 4);
 				builder.add_arg(ValuePart{uses_discarded_return
 						? uint64_t{UINT32_MAX} : result_offset, 4,
 					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
@@ -7156,9 +7162,20 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			auto resolution_spilled = spill_target_branch_state();
 			auto resolved = text_writer.label_create();
-			ASM(CMP32ri, resolution_status.cur_reg_or_load(this),
+			auto status_reg = resolution_status.cur_reg_or_load(this);
+			ASM(CMP32ri, status_reg,
 				ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS);
 			generate_raw_jump(Jump::je, resolved);
+			if (fast_new_site) {
+				auto failed = text_writer.label_create();
+				ASM(CMP32ri, status_reg,
+					ZEND_NATIVE_USER_CALL_RESOLUTION_FAST);
+				generate_raw_jump(Jump::jne, failed);
+				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG,
+					fast_call_slot(node.mir_instruction_index)), 1);
+				generate_raw_jump(Jump::jmp, resolved);
+				label_place(failed);
+			}
 			resolution_status.reset(this);
 			emit_exception_exit(call.exception_block_id);
 			label_place(resolved);

@@ -9301,12 +9301,72 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
 }
 
 /*
+ * The miss of a stale new C(...) fast site whose re-arm failed because C is
+ * not bound yet, as the first new of an autoloaded class in a request finds
+ * it: fetch C as the VM's NEW does, loading it, and when the name now binds
+ * the class the site was published for, run the fast Init. Returns
+ * ZEND_NATIVE_USER_CALL_RESOLUTION_FAST after the fast Init,
+ * ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE with the exception set when C
+ * cannot be fetched, and ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS for the
+ * universal protocol, which then finds C bound.
+ */
+static uint32_t zend_native_call_fast_new_loaded(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor)
+{
+	zend_native_user_call_site_header *header =
+		ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
+	const zend_op_array *op_array = &caller->func->op_array;
+	const uint32_t index = descriptor->init_op1.index;
+	const zval *result;
+	zend_class_entry *ce;
+
+	if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| header->fast_key == NULL
+			|| header->fast_epoch >= zend_native_call_resolution_cache_epoch
+			|| header->fast_rearm_epoch
+				!= zend_native_call_resolution_cache_epoch
+			|| ZEND_OBSERVER_ENABLED
+			|| index + 1 >= (uint32_t) op_array->last_literal
+			|| Z_TYPE(op_array->literals[index]) != IS_STRING
+			|| Z_TYPE(op_array->literals[index + 1]) != IS_STRING
+			|| zend_hash_exists(EG(class_table),
+				Z_STR(op_array->literals[index + 1]))) {
+		return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
+	}
+	result = zend_native_call_source_slot(caller, &descriptor->init_result);
+	if (result == NULL || (const char *) result
+			< (const char *) ZEND_CALL_VAR_NUM(caller, 0)) {
+		return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
+	}
+	caller->opline = &op_array->opcodes[descriptor->init_source_position];
+	EG(current_execute_data) = caller;
+	ce = zend_fetch_class_by_name(Z_STR(op_array->literals[index]),
+		Z_STR(op_array->literals[index + 1]),
+		ZEND_FETCH_CLASS_DEFAULT | ZEND_FETCH_CLASS_EXCEPTION);
+	if (ce == NULL) {
+		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
+	}
+	if (ce != header->fast_key || EG(exception) != NULL) {
+		return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
+	}
+	/* The re-arm now finds C bound. */
+	header->fast_rearm_epoch = 0;
+	return zend_native_call_fast_new(caller, descriptor,
+			(uint32_t) ((const char *) result - (const char *) caller))
+		? ZEND_NATIVE_USER_CALL_RESOLUTION_FAST
+		: ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
+}
+
+/*
  * The universal Init of a source call site, out of line: reserve the setup
  * frame and its activation, make the activation active, resolve the target
  * and push the callee frame, as the generated universal Init did inline.
  * result_offset is the result slot's frame offset, or UINT32_MAX for a
  * discarded result. On failure nothing stays active and the status is
- * returned with the exception set.
+ * returned with the exception set. A fast site
+ * (ZEND_NATIVE_USER_CALL_UNIVERSAL_FAST_SITE) may run its fast Init instead
+ * and return ZEND_NATIVE_USER_CALL_RESOLUTION_FAST.
  */
 uint32_t zend_native_call_universal_init(
 	zend_execute_data *caller,
@@ -9329,6 +9389,15 @@ uint32_t zend_native_call_universal_init(
 	uint32_t call_info;
 	bool allocated = false;
 
+	if ((argument_count & ZEND_NATIVE_USER_CALL_UNIVERSAL_FAST_SITE) != 0) {
+		argument_count &= ~ZEND_NATIVE_USER_CALL_UNIVERSAL_FAST_SITE;
+		if (descriptor->init_opcode == ZEND_NEW) {
+			status = zend_native_call_fast_new_loaded(caller, descriptor);
+			if (status != ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS) {
+				return status;
+			}
+		}
+	}
 	setup = zend_native_frame_activation_reserve(setup_size);
 	if (setup == NULL) {
 		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
