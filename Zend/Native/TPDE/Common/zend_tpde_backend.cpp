@@ -1280,6 +1280,38 @@ static uint32_t source_argument_ssa_variable(
 		? ssa_variable_id : ZEND_MIR_ID_INVALID;
 }
 
+/*
+ * The argument sends a parameter CV as its RECV defined it: the SSA value it
+ * sends is the result of the parameter's RECV or RECV_INIT.
+ */
+static bool source_argument_is_received_parameter(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_call_argument_ref &argument) {
+	if (op_array == nullptr || ssa == nullptr || ssa->vars == nullptr
+			|| ssa->ops == nullptr) {
+		return false;
+	}
+	const uint32_t ssa_variable_id =
+		source_argument_ssa_variable(op_array, ssa, argument);
+	if (ssa_variable_id == ZEND_MIR_ID_INVALID) {
+		return false;
+	}
+	const zend_ssa_var &variable = ssa->vars[ssa_variable_id];
+	if (variable.definition < 0
+			|| static_cast<uint32_t>(variable.definition) >= op_array->last
+			|| variable.var < 0
+			|| static_cast<uint32_t>(variable.var)
+				!= argument.source_operand.index) {
+		return false;
+	}
+	const zend_op &receive = op_array->opcodes[variable.definition];
+	return (receive.opcode == ZEND_RECV || receive.opcode == ZEND_RECV_INIT)
+		&& receive.op1.num == argument.source_operand.index + 1
+		&& ssa->ops[variable.definition].result_def
+			== static_cast<int>(ssa_variable_id);
+}
+
 zend_mir_scalar_type_mask exact_scalar_from_source_argument(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -9606,6 +9638,8 @@ bool initialize_plan(
 									source_op_array, source_ssa, calls,
 									user_bindings, user_binding_count, argument);
 						}
+						/* A parameter CV holds its declared type only while it
+						 * still holds the value its RECV received. */
 						if (!zend_mir_scalar_type_is_exact(
 								descriptor->arguments[n].exact_type)
 								&& descriptor->arguments[n].mode
@@ -9619,7 +9653,9 @@ bool initialize_plan(
 								&& argument.source_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_CV
 								&& argument.source_operand.index
-									< source_op_array->num_args) {
+									< source_op_array->num_args
+								&& source_argument_is_received_parameter(
+									source_op_array, source_ssa, argument)) {
 							descriptor->arguments[n].exact_type =
 								exact_scalar_from_declared_type(
 									source_op_array->arg_info[
