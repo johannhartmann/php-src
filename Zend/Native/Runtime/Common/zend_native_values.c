@@ -658,7 +658,6 @@ zend_native_status zend_native_value_func_get_args(
 			index++;
 		}
 	} ZEND_HASH_FILL_END();
-	Z_ARRVAL_P(result)->nNumOfElements = result_size;
 	return ZEND_NATIVE_RETURNED;
 }
 
@@ -733,9 +732,7 @@ zend_native_status zend_native_value_count(
 		if (fast_value != NULL && fast_result != NULL && !value_tmp) {
 			zval *array = fast_value;
 
-			if (!value_tmp) {
-				ZVAL_DEREF(array);
-			}
+			ZVAL_DEREF(array);
 			if (Z_TYPE_P(array) == IS_ARRAY
 					&& (!result_cv || !Z_REFCOUNTED_P(fast_result))) {
 				count = zend_hash_num_elements(Z_ARRVAL_P(array));
@@ -756,7 +753,6 @@ zend_native_status zend_native_value_count(
 				execute_data, &operation, &result)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	ZVAL_DEREF(value);
 	if (Z_TYPE_P(value) == IS_ARRAY) {
 		count = zend_hash_num_elements(Z_ARRVAL_P(value));
 	} else if (Z_TYPE_P(value) == IS_OBJECT) {
@@ -822,7 +818,6 @@ zend_native_status zend_native_value_get_type(
 				execute_data, &operation, &result)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	ZVAL_DEREF(value);
 	type = zend_zval_get_legacy_type(value);
 	zend_native_value_prepare_result(&operation, result);
 	if (EXPECTED(type != NULL)) {
@@ -901,7 +896,6 @@ zend_native_status zend_native_value_array_key_exists(
 				execute_data, &operation, &result)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	ZVAL_DEREF(subject);
 	if (EXPECTED(Z_TYPE_P(subject) == IS_ARRAY)) {
 		table = Z_ARRVAL_P(subject);
 		protect = !(GC_FLAGS(table) & IS_ARRAY_IMMUTABLE)
@@ -956,9 +950,7 @@ zend_native_status zend_native_value_in_array(
 				&& !needle_tmp && Z_TYPE_P(fast_table) == IS_ARRAY) {
 			zval *value = fast_needle;
 
-			if (!needle_tmp) {
-				ZVAL_DEREF(value);
-			}
+			ZVAL_DEREF(value);
 			if (Z_TYPE_P(value) == IS_STRING
 					&& (!result_cv || !Z_REFCOUNTED_P(fast_result))) {
 				found = zend_hash_exists(
@@ -982,7 +974,6 @@ zend_native_status zend_native_value_in_array(
 				execute_data, &operation, &result)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	ZVAL_DEREF(needle);
 	if (Z_TYPE_P(needle) == IS_STRING) {
 		found = zend_hash_exists(
 			Z_ARRVAL_P(table_value), Z_STR_P(needle));
@@ -1991,8 +1982,6 @@ zend_native_status zend_native_value_binary_op(
 	zval *left;
 	zval *right;
 	zval *result;
-	zval *strict_left;
-	zval *strict_right;
 	zend_result operation_status;
 
 	/*
@@ -2035,15 +2024,6 @@ zend_native_status zend_native_value_binary_op(
 			|| (result = zend_native_value_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
-	}
-	strict_left = left;
-	strict_right = right;
-	if (opline->opcode == ZEND_IS_IDENTICAL
-			|| opline->opcode == ZEND_IS_NOT_IDENTICAL) {
-		ZVAL_DEREF(strict_left);
-		ZVAL_DEREF(strict_right);
-		left = strict_left;
-		right = strict_right;
 	}
 	operation_status = zend_native_binary_op_inline(
 		opline->opcode, result, left, right);
@@ -2283,46 +2263,20 @@ static zend_property_info *zend_native_get_prop_not_accepting_double(
 	return NULL;
 }
 
-static zend_long zend_native_throw_incdec_ref_error(
-	const zend_property_info *property_info, bool increment)
+/* The TypeError of an integer property, or of a reference it holds, that
+ * ++ or -- would leave as a float; the limit it keeps. */
+static zend_long zend_native_throw_incdec_error(
+	const zend_property_info *property_info, bool increment, bool reference)
 {
 	zend_string *type_string = zend_type_to_string(property_info->type);
 
-	if (increment) {
-		zend_type_error(
-			"Cannot increment a reference held by property %s::$%s of type %s past its maximal value",
-			ZSTR_VAL(property_info->ce->name),
-			zend_get_unmangled_property_name(property_info->name),
-			ZSTR_VAL(type_string));
-	} else {
-		zend_type_error(
-			"Cannot decrement a reference held by property %s::$%s of type %s past its minimal value",
-			ZSTR_VAL(property_info->ce->name),
-			zend_get_unmangled_property_name(property_info->name),
-			ZSTR_VAL(type_string));
-	}
-	zend_string_release(type_string);
-	return increment ? ZEND_LONG_MAX : ZEND_LONG_MIN;
-}
-
-static zend_long zend_native_throw_incdec_prop_error(
-	const zend_property_info *property_info, bool increment)
-{
-	zend_string *type_string = zend_type_to_string(property_info->type);
-
-	if (increment) {
-		zend_type_error(
-			"Cannot increment property %s::$%s of type %s past its maximal value",
-			ZSTR_VAL(property_info->ce->name),
-			zend_get_unmangled_property_name(property_info->name),
-			ZSTR_VAL(type_string));
-	} else {
-		zend_type_error(
-			"Cannot decrement property %s::$%s of type %s past its minimal value",
-			ZSTR_VAL(property_info->ce->name),
-			zend_get_unmangled_property_name(property_info->name),
-			ZSTR_VAL(type_string));
-	}
+	zend_type_error(
+		"Cannot %s %sproperty %s::$%s of type %s past its %s value",
+		increment ? "increment" : "decrement",
+		reference ? "a reference held by " : "",
+		ZSTR_VAL(property_info->ce->name),
+		zend_get_unmangled_property_name(property_info->name),
+		ZSTR_VAL(type_string), increment ? "maximal" : "minimal");
 	zend_string_release(type_string);
 	return increment ? ZEND_LONG_MAX : ZEND_LONG_MIN;
 }
@@ -2349,8 +2303,8 @@ static void zend_native_incdec_typed_reference(
 			zend_native_get_prop_not_accepting_double(reference);
 
 		if (UNEXPECTED(property_info != NULL)) {
-			ZVAL_LONG(value, zend_native_throw_incdec_ref_error(
-				property_info, increment));
+			ZVAL_LONG(value, zend_native_throw_incdec_error(
+				property_info, increment, true));
 		}
 	} else if (UNEXPECTED(!zend_verify_ref_assignable_zval(
 			reference, value, ZEND_CALL_USES_STRICT_TYPES(execute_data)))) {
@@ -2381,8 +2335,8 @@ static void zend_native_incdec_typed_property(
 	if (UNEXPECTED(Z_TYPE_P(value) == IS_DOUBLE)
 			&& Z_TYPE_P(copy) == IS_LONG
 			&& !(ZEND_TYPE_FULL_MASK(property_info->type) & MAY_BE_DOUBLE)) {
-		ZVAL_LONG(value, zend_native_throw_incdec_prop_error(
-			property_info, increment));
+		ZVAL_LONG(value, zend_native_throw_incdec_error(
+			property_info, increment, false));
 	} else if (UNEXPECTED(!zend_verify_property_type(
 			property_info, value,
 			ZEND_CALL_USES_STRICT_TYPES(execute_data)))) {
@@ -2413,8 +2367,8 @@ void zend_native_incdec_property_zval(
 		if (UNEXPECTED(Z_TYPE_P(value) != IS_LONG)
 				&& property_info != NULL
 				&& !(ZEND_TYPE_FULL_MASK(property_info->type) & MAY_BE_DOUBLE)) {
-			ZVAL_LONG(value, zend_native_throw_incdec_prop_error(
-				property_info, increment));
+			ZVAL_LONG(value, zend_native_throw_incdec_error(
+				property_info, increment, false));
 		}
 	} else {
 		if (Z_ISREF_P(value)) {
@@ -2458,13 +2412,11 @@ zend_native_status zend_native_value_incdec(
 {
 	zend_native_explicit_value_operation operation_record;
 	const zend_native_explicit_value_operation *opline = &operation_record;
-	zend_reference *reference = NULL;
 	zval *result = NULL;
 	zval *slot;
 	zval *value;
 	bool increment;
 	bool post;
-	zend_result status;
 
 	/*
 	 * ++/-- of an integer CV, or of the integer element or property a
@@ -2531,10 +2483,6 @@ zend_native_status zend_native_value_incdec(
 		}
 		ZVAL_NULL(value);
 	}
-	if (Z_ISREF_P(value)) {
-		reference = Z_REF_P(value);
-		value = Z_REFVAL_P(value);
-	}
 	increment = opline->opcode == ZEND_PRE_INC
 		|| opline->opcode == ZEND_POST_INC;
 	post = opline->opcode == ZEND_POST_INC
@@ -2549,20 +2497,10 @@ zend_native_status zend_native_value_incdec(
 	if (post && result == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (reference != NULL && ZEND_REF_HAS_TYPE_SOURCES(reference)) {
-		zend_native_incdec_typed_reference(
-			execute_data, reference, post ? result : NULL, increment);
-		status = EG(exception) == NULL ? SUCCESS : FAILURE;
-	} else {
-		if (post) {
-			ZVAL_COPY(result, value);
-		}
-		status = increment
-			? increment_function(value) : decrement_function(value);
-	}
-	if (!post && result != NULL) {
-		ZVAL_COPY(result, value);
-	}
+	/* A variable, unlike a property, has no declared type; its
+	 * reference may have type sources. */
+	zend_native_incdec_property_zval(
+		execute_data, value, NULL, result, post, increment);
 	if (opline->op1_type == IS_VAR) {
 		if (Z_TYPE_P(slot) == IS_INDIRECT) {
 			ZVAL_UNDEF(slot);
@@ -2571,8 +2509,7 @@ zend_native_status zend_native_value_incdec(
 			ZVAL_UNDEF(slot);
 		}
 	}
-	return status == SUCCESS
-		? zend_native_value_status() : ZEND_NATIVE_EXCEPTION;
+	return zend_native_value_status();
 }
 
 zend_native_status zend_native_value_cast(
@@ -2638,7 +2575,6 @@ zend_native_status zend_native_value_cast(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	value = operand;
-	ZVAL_DEREF(value);
 	switch (opline->extended_value) {
 		case IS_LONG:
 			ZVAL_LONG(result, zval_get_long(value));
@@ -3729,6 +3665,33 @@ zend_native_status zend_native_value_rope_add(
 		source_position_id, ZEND_ROPE_ADD, false);
 }
 
+/* ROPE_END's string of the pieces rope[0..last], which it releases. */
+static zend_always_inline void zend_native_value_rope_finish(
+	zend_string **rope, uint32_t last, zval *result)
+{
+	size_t length = 0;
+	uint32_t flags = ZSTR_COPYABLE_CONCAT_PROPERTIES;
+	uint32_t index;
+	char *target;
+
+	for (index = 0; index <= last; index++) {
+		if (length > ZSTR_MAX_LEN - ZSTR_LEN(rope[index])) {
+			zend_error_noreturn(E_ERROR, "Integer overflow in memory allocation");
+		}
+		length += ZSTR_LEN(rope[index]);
+		flags &= ZSTR_GET_COPYABLE_CONCAT_PROPERTIES(rope[index]);
+	}
+	ZVAL_STR(result, zend_string_alloc(length, false));
+	GC_ADD_FLAGS(Z_STR_P(result), flags);
+	target = Z_STRVAL_P(result);
+	for (index = 0; index <= last; index++) {
+		memcpy(target, ZSTR_VAL(rope[index]), ZSTR_LEN(rope[index]));
+		target += ZSTR_LEN(rope[index]);
+		zend_string_release_ex(rope[index], false);
+	}
+	*target = '\0';
+}
+
 zend_native_status zend_native_value_rope_end(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result_operand,
@@ -3740,14 +3703,10 @@ zend_native_status zend_native_value_rope_end(
 	zend_string **rope;
 	zend_string *piece;
 	zval *result;
-	size_t length = 0;
-	uint32_t flags = ZSTR_COPYABLE_CONCAT_PROPERTIES;
-	uint32_t index;
-	char *target;
 
 	/* The last piece and the temporary result without decoding. */
 	if (source_opcode == ZEND_ROPE_END) {
-		bool rope_tmp, value_tmp, result_cv = false;
+		bool rope_tmp, value_tmp;
 		zval *fast_rope = zend_native_value_fast_operand(
 			execute_data, op1, &rope_tmp);
 		zval *fast_value = zend_native_value_fast_operand(
@@ -3758,30 +3717,13 @@ zend_native_status zend_native_value_rope_end(
 				== IS_TMP_VAR
 			? ZEND_NATIVE_OPERAND_VAR(execute_data, result_operand) : NULL;
 
-		(void) result_cv;
 		if (fast_rope != NULL && rope_tmp && fast_value != NULL
 				&& fast_result != NULL
 				&& (piece = zend_native_value_fast_rope_piece(
 					fast_value, value_tmp)) != NULL) {
 			rope = (zend_string **) fast_rope;
 			rope[extended_value] = piece;
-			for (index = 0; index <= extended_value; index++) {
-				if (length > ZSTR_MAX_LEN - ZSTR_LEN(rope[index])) {
-					zend_error_noreturn(E_ERROR,
-						"Integer overflow in memory allocation");
-				}
-				length += ZSTR_LEN(rope[index]);
-				flags &= ZSTR_GET_COPYABLE_CONCAT_PROPERTIES(rope[index]);
-			}
-			ZVAL_STR(fast_result, zend_string_alloc(length, false));
-			GC_ADD_FLAGS(Z_STR_P(fast_result), flags);
-			target = Z_STRVAL_P(fast_result);
-			for (index = 0; index <= extended_value; index++) {
-				memcpy(target, ZSTR_VAL(rope[index]), ZSTR_LEN(rope[index]));
-				target += ZSTR_LEN(rope[index]);
-				zend_string_release_ex(rope[index], false);
-			}
-			*target = '\0';
+			zend_native_value_rope_finish(rope, extended_value, fast_result);
 			return ZEND_NATIVE_RETURNED;
 		}
 	}
@@ -3805,22 +3747,7 @@ zend_native_status zend_native_value_rope_end(
 		ZVAL_UNDEF(result);
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	for (index = 0; index <= opline->extended_value; index++) {
-		if (length > ZSTR_MAX_LEN - ZSTR_LEN(rope[index])) {
-			zend_error_noreturn(E_ERROR, "Integer overflow in memory allocation");
-		}
-		length += ZSTR_LEN(rope[index]);
-		flags &= ZSTR_GET_COPYABLE_CONCAT_PROPERTIES(rope[index]);
-	}
-	ZVAL_STR(result, zend_string_alloc(length, false));
-	GC_ADD_FLAGS(Z_STR_P(result), flags);
-	target = Z_STRVAL_P(result);
-	for (index = 0; index <= opline->extended_value; index++) {
-		memcpy(target, ZSTR_VAL(rope[index]), ZSTR_LEN(rope[index]));
-		target += ZSTR_LEN(rope[index]);
-		zend_string_release_ex(rope[index], false);
-	}
-	*target = '\0';
+	zend_native_value_rope_finish(rope, opline->extended_value, result);
 	return ZEND_NATIVE_RETURNED;
 }
 
@@ -4618,8 +4545,6 @@ static bool zend_native_assign_string_offset(
 		memset(Z_STRVAL_P(container) + old_length, ' ',
 			(size_t) (offset - old_length));
 		Z_STRVAL_P(container)[offset + 1] = '\0';
-	} else {
-		zend_string_forget_hash_val(string);
 	}
 	Z_STRVAL_P(container)[offset] = character;
 
@@ -4640,6 +4565,51 @@ static bool zend_native_assign_string_offset(
 
 static zend_always_inline zval *zend_native_value_fast_result_slot(
 	zend_execute_data *execute_data, uint64_t encoded);
+
+/*
+ * The result of an object's read_dimension(), as the VM's dimension fetches
+ * publish it: a write fetch makes an INDIRECT to the returned element and
+ * notices a copy that cannot be modified, a read copies it.
+ */
+static void zend_native_value_publish_dimension(
+	const zend_object *object, zval *returned, zval *result, bool write)
+{
+	if (write) {
+		if (returned == &EG(uninitialized_zval)) {
+			ZVAL_NULL(result);
+			zend_error(E_NOTICE,
+				"Indirect modification of overloaded element of %s has no effect",
+				ZSTR_VAL(object->ce->name));
+		} else if (returned != NULL && Z_TYPE_P(returned) != IS_UNDEF) {
+			if (!Z_ISREF_P(returned)) {
+				if (result != returned) {
+					zend_native_zval_copy_deref_or_dup(result, returned);
+					returned = result;
+				}
+				if (Z_TYPE_P(returned) != IS_OBJECT) {
+					zend_error(E_NOTICE,
+						"Indirect modification of overloaded element of %s has no effect",
+						ZSTR_VAL(object->ce->name));
+				}
+			} else if (Z_REFCOUNT_P(returned) == 1) {
+				ZVAL_UNREF(returned);
+			}
+			if (result != returned) {
+				ZVAL_INDIRECT(result, returned);
+			}
+		} else {
+			ZVAL_UNDEF(result);
+		}
+	} else if (returned != NULL) {
+		if (result != returned) {
+			zend_native_zval_copy_deref_or_dup(result, returned);
+		} else if (Z_ISREF_P(returned)) {
+			zend_unwrap_reference(result);
+		}
+	} else {
+		ZVAL_NULL(result);
+	}
+}
 
 static zend_native_status zend_native_value_fetch_dim_impl(
 	zend_execute_data *execute_data,
@@ -4969,41 +4939,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 				: mode == ZEND_NATIVE_DIM_UNSET ? BP_VAR_UNSET
 				: mode == ZEND_NATIVE_DIM_IS ? BP_VAR_IS : BP_VAR_R,
 			result);
-		if (write) {
-			if (returned == &EG(uninitialized_zval)) {
-				ZVAL_NULL(result);
-				zend_error(E_NOTICE,
-					"Indirect modification of overloaded element of %s has no effect",
-					ZSTR_VAL(object->ce->name));
-			} else if (returned != NULL && Z_TYPE_P(returned) != IS_UNDEF) {
-				if (!Z_ISREF_P(returned)) {
-					if (result != returned) {
-						zend_native_zval_copy_deref_or_dup(result, returned);
-						returned = result;
-					}
-					if (Z_TYPE_P(returned) != IS_OBJECT) {
-						zend_error(E_NOTICE,
-							"Indirect modification of overloaded element of %s has no effect",
-							ZSTR_VAL(object->ce->name));
-					}
-				} else if (Z_REFCOUNT_P(returned) == 1) {
-					ZVAL_UNREF(returned);
-				}
-				if (result != returned) {
-					ZVAL_INDIRECT(result, returned);
-				}
-			} else {
-				ZVAL_UNDEF(result);
-			}
-		} else if (returned != NULL) {
-			if (result != returned) {
-				zend_native_zval_copy_deref_or_dup(result, returned);
-			} else if (Z_ISREF_P(returned)) {
-				zend_unwrap_reference(result);
-			}
-		} else {
-			ZVAL_NULL(result);
-		}
+		zend_native_value_publish_dimension(object, returned, result, write);
 		if (GC_DELREF(object) == 0) {
 			zend_objects_store_del(object);
 		}
@@ -5125,6 +5061,42 @@ fetch_dim_error:
 }
 
 /*
+ * The element of an integer or string key, a numeric string naming an
+ * integer key as the VM's dimension fetches resolve it, or NULL.
+ */
+static zend_always_inline zval *zend_native_array_find_key(
+	HashTable *table, const zval *key)
+{
+	zend_ulong index;
+
+	ZEND_ASSERT(Z_TYPE_P(key) == IS_LONG || Z_TYPE_P(key) == IS_STRING);
+	if (Z_TYPE_P(key) == IS_LONG) {
+		return zend_hash_index_find(table, Z_LVAL_P(key));
+	}
+	return ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(key), Z_STRLEN_P(key), index)
+		? zend_hash_index_find(table, index)
+		: zend_hash_find(table, Z_STR_P(key));
+}
+
+/* As zend_native_array_find_key(), adding a missing key as null. */
+static zend_always_inline zval *zend_native_array_lookup_key(
+	HashTable *table, const zval *key)
+{
+	zend_ulong index;
+	zval *element;
+
+	ZEND_ASSERT(Z_TYPE_P(key) == IS_LONG || Z_TYPE_P(key) == IS_STRING);
+	if (Z_TYPE_P(key) == IS_LONG) {
+		/* A packed hit inline, as the VM's ASSIGN_DIM finds it. */
+		ZEND_HASH_INDEX_LOOKUP(table, Z_LVAL_P(key), element);
+		return element;
+	}
+	return ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(key), Z_STRLEN_P(key), index)
+		? zend_hash_index_lookup(table, index)
+		: zend_hash_lookup(table, Z_STR_P(key));
+}
+
+/*
  * $cv[$key] into a temporary, like the VM's FETCH_DIM_R handler: an array
  * CV, a long or string key (numeric strings normalized) naming an existing
  * element. The element is copied, then a temporary key is released. Missing
@@ -5138,7 +5110,6 @@ static zend_always_inline bool zend_native_value_fetch_dim_r_read_ex(
 	zval *container_slot = container;
 	zval *element;
 	zval copy;
-	zend_ulong index;
 
 	ZVAL_DEREF(container);
 	if (!offset_tmp) {
@@ -5166,20 +5137,11 @@ static zend_always_inline bool zend_native_value_fetch_dim_r_read_ex(
 		*status = ZEND_NATIVE_RETURNED;
 		return true;
 	}
-	if (Z_TYPE_P(container) != IS_ARRAY) {
+	if (Z_TYPE_P(container) != IS_ARRAY
+			|| (Z_TYPE_P(offset) != IS_LONG && Z_TYPE_P(offset) != IS_STRING)) {
 		return false;
 	}
-	if (Z_TYPE_P(offset) == IS_LONG) {
-		element = zend_hash_index_find(
-			Z_ARRVAL_P(container), Z_LVAL_P(offset));
-	} else if (Z_TYPE_P(offset) == IS_STRING) {
-		element = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
-				Z_STRLEN_P(offset), index)
-			? zend_hash_index_find(Z_ARRVAL_P(container), index)
-			: zend_hash_find(Z_ARRVAL_P(container), Z_STR_P(offset));
-	} else {
-		return false;
-	}
+	element = zend_native_array_find_key(Z_ARRVAL_P(container), offset);
 	if (element == NULL) {
 		return false;
 	}
@@ -5379,7 +5341,6 @@ static zend_always_inline bool zend_native_value_fetch_dim_is_fast(
 	zval *target;
 	zval *element;
 	zval copy;
-	zend_ulong index;
 	bool container_tmp;
 	bool offset_tmp;
 	bool target_tmp;
@@ -5403,15 +5364,7 @@ static zend_always_inline bool zend_native_value_fetch_dim_is_fast(
 		return false;
 	}
 	if (Z_TYPE_P(container) == IS_ARRAY) {
-		if (Z_TYPE_P(offset) == IS_LONG) {
-			element = zend_hash_index_find(
-				Z_ARRVAL_P(container), Z_LVAL_P(offset));
-		} else {
-			element = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
-					Z_STRLEN_P(offset), index)
-				? zend_hash_index_find(Z_ARRVAL_P(container), index)
-				: zend_hash_find(Z_ARRVAL_P(container), Z_STR_P(offset));
-		}
+		element = zend_native_array_find_key(Z_ARRVAL_P(container), offset);
 		if (element != NULL && Z_TYPE_P(element) == IS_INDIRECT) {
 			element = Z_INDIRECT_P(element);
 		}
@@ -5674,41 +5627,8 @@ zend_native_status zend_native_value_fetch_list(
 		ZVAL_UNDEF(result);
 		returned = object->handlers->read_dimension(
 			object, offset, writable ? BP_VAR_W : BP_VAR_R, result);
-		if (writable) {
-			if (returned == &EG(uninitialized_zval)) {
-				ZVAL_NULL(result);
-				zend_error(E_NOTICE,
-					"Indirect modification of overloaded element of %s has no effect",
-					ZSTR_VAL(object->ce->name));
-			} else if (returned != NULL && Z_TYPE_P(returned) != IS_UNDEF) {
-				if (!Z_ISREF_P(returned)) {
-					if (result != returned) {
-						zend_native_zval_copy_deref_or_dup(result, returned);
-						returned = result;
-					}
-					if (Z_TYPE_P(returned) != IS_OBJECT) {
-						zend_error(E_NOTICE,
-							"Indirect modification of overloaded element of %s has no effect",
-							ZSTR_VAL(object->ce->name));
-					}
-				} else if (Z_REFCOUNT_P(returned) == 1) {
-					ZVAL_UNREF(returned);
-				}
-				if (result != returned) {
-					ZVAL_INDIRECT(result, returned);
-				}
-			} else {
-				ZVAL_UNDEF(result);
-			}
-		} else if (returned != NULL) {
-			if (result != returned) {
-				zend_native_zval_copy_deref_or_dup(result, returned);
-			} else if (Z_ISREF_P(returned)) {
-				zend_unwrap_reference(result);
-			}
-		} else {
-			ZVAL_NULL(result);
-		}
+		zend_native_value_publish_dimension(
+			object, returned, result, writable);
 		if (GC_DELREF(object) == 0) {
 			zend_objects_store_del(object);
 		}
@@ -5803,14 +5723,12 @@ static zend_native_status zend_native_value_assign_dim_impl(
 					"[] operator not supported for strings");
 				goto assign_dim_error;
 			}
-			if (opline->op2_type != IS_UNUSED) {
-				offset = zend_native_value_read_r_explicit(execute_data, opline,
-					opline->op2_type, opline->op2);
-				if (offset == NULL || EG(exception) != NULL
-						|| !zend_native_string_offset(
-							offset, BP_VAR_RW, &string_offset)) {
-					goto assign_dim_error;
-				}
+			offset = zend_native_value_read_r_explicit(execute_data, opline,
+				opline->op2_type, opline->op2);
+			if (offset == NULL || EG(exception) != NULL
+					|| !zend_native_string_offset(
+						offset, BP_VAR_RW, &string_offset)) {
+				goto assign_dim_error;
 			}
 			zend_wrong_string_offset_error();
 			goto assign_dim_error;
@@ -6218,17 +6136,7 @@ static zend_always_inline bool zend_native_value_assign_dim_store(
 	}
 	/* A missing key is inserted as NULL, which the store overwrites.
 	 * Numeric strings name integer keys. */
-	if (Z_TYPE_P(offset) == IS_LONG) {
-		/* A packed hit inline, as the VM's ASSIGN_DIM finds it. */
-		ZEND_HASH_INDEX_LOOKUP(table, Z_LVAL_P(offset), element);
-	} else {
-		zend_ulong index;
-
-		element = ZEND_HANDLE_NUMERIC_STR(Z_STRVAL_P(offset),
-				Z_STRLEN_P(offset), index)
-			? zend_hash_index_lookup(table, index)
-			: zend_hash_lookup(table, Z_STR_P(offset));
-	}
+	element = zend_native_array_lookup_key(table, offset);
 	if (offset_tmp) {
 		zval_ptr_dtor_nogc(offset);
 		ZVAL_UNDEF(offset);
@@ -6642,7 +6550,6 @@ zval *zend_native_array_insert_index(zval *container, zend_ulong h)
 zval *zend_native_array_assign_lookup(zval *container, const zval *key)
 {
 	HashTable *table;
-	zend_ulong index;
 	zval *element;
 
 	ZVAL_DEREF(container);
@@ -6655,16 +6562,10 @@ zval *zend_native_array_assign_lookup(zval *container, const zval *key)
 	SEPARATE_ARRAY(container);
 	table = Z_ARRVAL_P(container);
 	ZVAL_DEREF(key);
-	if (EXPECTED(Z_TYPE_P(key) == IS_STRING)) {
-		element = ZEND_HANDLE_NUMERIC_STR(
-				Z_STRVAL_P(key), Z_STRLEN_P(key), index)
-			? zend_hash_index_lookup(table, index)
-			: zend_hash_lookup(table, Z_STR_P(key));
-	} else if (Z_TYPE_P(key) == IS_LONG) {
-		element = zend_hash_index_lookup(table, Z_LVAL_P(key));
-	} else {
+	if (Z_TYPE_P(key) != IS_STRING && Z_TYPE_P(key) != IS_LONG) {
 		return NULL;
 	}
+	element = zend_native_array_lookup_key(table, key);
 	return EXPECTED(Z_TYPE_P(element) != IS_INDIRECT) ? element : NULL;
 }
 
@@ -6938,6 +6839,45 @@ zend_native_status zend_native_value_unset_dim(
 }
 
 /*
+ * isset() or empty() (ZEND_ISEMPTY in extended_value) of an array element
+ * under an integer or string key, both dereferenced, as
+ * ZEND_ISSET_ISEMPTY_DIM_OBJ answers it. Returns false for any other
+ * container or key.
+ */
+static zend_always_inline bool zend_native_value_isset_dim_answer(
+	const zval *container, const zval *key, uint32_t extended_value,
+	bool *answer)
+{
+	zval *element;
+
+	if (Z_TYPE_P(container) != IS_ARRAY
+			|| (Z_TYPE_P(key) != IS_LONG && Z_TYPE_P(key) != IS_STRING)) {
+		return false;
+	}
+	element = zend_native_array_find_key(Z_ARRVAL_P(container), key);
+	if (element != NULL && Z_TYPE_P(element) == IS_INDIRECT) {
+		element = Z_INDIRECT_P(element);
+		if (Z_TYPE_P(element) == IS_UNDEF) {
+			element = NULL;
+		}
+	}
+	if ((extended_value & ZEND_ISEMPTY) != 0) {
+		*answer = element == NULL || !i_zend_is_true(element);
+	} else {
+		*answer = element != NULL && Z_TYPE_P(element) > IS_NULL
+			&& (!Z_ISREF_P(element)
+				|| Z_TYPE_P(Z_REFVAL_P(element)) != IS_NULL);
+	}
+	return true;
+}
+
+static zend_native_status zend_native_value_isset_isempty_dim_explicit(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id);
+
+/*
  * isset()/empty() of an array element under a literal, CV or temporary key,
  * with precomputed offsets. Any other container or key takes the generic
  * operation.
@@ -6955,38 +6895,14 @@ zend_native_status zend_native_value_isset_isempty_dim_direct(
 	zval *key = key_kind == ZEND_NATIVE_DIM_DIRECT_CONST
 		? &execute_data->func->op_array.literals[key_offset]
 		: (zval *) ((char *) execute_data + key_offset);
-	zval *element = NULL;
-	zend_ulong index;
 	bool answer;
 
 	ZVAL_DEREF(container);
 	if (key_kind != ZEND_NATIVE_DIM_DIRECT_TMP) {
 		ZVAL_DEREF(key);
 	}
-	if (EXPECTED(Z_TYPE_P(container) == IS_ARRAY)
-			&& (Z_TYPE_P(key) == IS_LONG || Z_TYPE_P(key) == IS_STRING)) {
-		if (Z_TYPE_P(key) == IS_LONG) {
-			element = zend_hash_index_find(
-				Z_ARRVAL_P(container), Z_LVAL_P(key));
-		} else if (ZEND_HANDLE_NUMERIC_STR(
-				Z_STRVAL_P(key), Z_STRLEN_P(key), index)) {
-			element = zend_hash_index_find(Z_ARRVAL_P(container), index);
-		} else {
-			element = zend_hash_find(Z_ARRVAL_P(container), Z_STR_P(key));
-		}
-		if (element != NULL && Z_TYPE_P(element) == IS_INDIRECT) {
-			element = Z_INDIRECT_P(element);
-			if (Z_TYPE_P(element) == IS_UNDEF) {
-				element = NULL;
-			}
-		}
-		if ((extended_value & ZEND_ISEMPTY) != 0) {
-			answer = element == NULL || !i_zend_is_true(element);
-		} else {
-			answer = element != NULL && Z_TYPE_P(element) > IS_NULL
-				&& (!Z_ISREF_P(element)
-					|| Z_TYPE_P(Z_REFVAL_P(element)) != IS_NULL);
-		}
+	if (EXPECTED(zend_native_value_isset_dim_answer(
+			container, key, extended_value, &answer))) {
 		if (key_kind == ZEND_NATIVE_DIM_DIRECT_TMP) {
 			zval_ptr_dtor_nogc(key);
 			ZVAL_UNDEF(key);
@@ -6999,7 +6915,8 @@ zend_native_status zend_native_value_isset_isempty_dim_direct(
 		return EG(exception) == NULL
 			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 	}
-	return zend_native_value_isset_isempty_dim(execute_data,
+	/* The operation form's decode-free test would fail as well. */
+	return zend_native_value_isset_isempty_dim_explicit(execute_data,
 		zend_native_value_direct_encoding(execute_data,
 			container_kind, (uint32_t) slots),
 		zend_native_value_direct_encoding(execute_data, key_kind, key_offset),
@@ -7015,17 +6932,6 @@ zend_native_status zend_native_value_isset_isempty_dim(
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id)
 {
-	zend_native_explicit_value_operation operation;
-	const zend_native_explicit_value_operation *opline = &operation;
-	zend_native_array_key key;
-	HashTable *table;
-	zval *container;
-	zval *offset;
-	zval *result;
-	zval *value = NULL;
-	bool answer;
-	bool table_valid;
-
 	/*
 	 * isset()/empty() of an array element under an integer or string key,
 	 * with any container a CV, temporary or literal holds, without decoding
@@ -7047,38 +6953,14 @@ zend_native_status zend_native_value_isset_isempty_dim(
 				&& result_tmp) {
 			zval *array = fast_container;
 			zval *name = fast_key;
-			zval *element = NULL;
-			zend_ulong index;
+			bool answer;
 
 			ZVAL_DEREF(array);
 			if (!key_tmp) {
 				ZVAL_DEREF(name);
 			}
-			if (Z_TYPE_P(array) == IS_ARRAY
-					&& (Z_TYPE_P(name) == IS_LONG
-						|| Z_TYPE_P(name) == IS_STRING)) {
-				if (Z_TYPE_P(name) == IS_LONG) {
-					element = zend_hash_index_find(
-						Z_ARRVAL_P(array), Z_LVAL_P(name));
-				} else if (ZEND_HANDLE_NUMERIC_STR(
-						Z_STRVAL_P(name), Z_STRLEN_P(name), index)) {
-					element = zend_hash_index_find(Z_ARRVAL_P(array), index);
-				} else {
-					element = zend_hash_find(Z_ARRVAL_P(array), Z_STR_P(name));
-				}
-				if (element != NULL && Z_TYPE_P(element) == IS_INDIRECT) {
-					element = Z_INDIRECT_P(element);
-					if (Z_TYPE_P(element) == IS_UNDEF) {
-						element = NULL;
-					}
-				}
-				if ((extended_value & ZEND_ISEMPTY) != 0) {
-					answer = element == NULL || !i_zend_is_true(element);
-				} else {
-					answer = element != NULL && Z_TYPE_P(element) > IS_NULL
-						&& (!Z_ISREF_P(element)
-							|| Z_TYPE_P(Z_REFVAL_P(element)) != IS_NULL);
-				}
+			if (zend_native_value_isset_dim_answer(
+					array, name, extended_value, &answer)) {
 				if (key_tmp) {
 					zval_ptr_dtor_nogc(fast_key);
 					ZVAL_UNDEF(fast_key);
@@ -7092,6 +6974,28 @@ zend_native_status zend_native_value_isset_isempty_dim(
 			}
 		}
 	}
+	return zend_native_value_isset_isempty_dim_explicit(execute_data,
+		op1, op2, result_operand, extended_value, source_opcode,
+		source_position_id);
+}
+
+static zend_native_status zend_native_value_isset_isempty_dim_explicit(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result_operand,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id)
+{
+	zend_native_explicit_value_operation operation;
+	const zend_native_explicit_value_operation *opline = &operation;
+	zend_native_array_key key;
+	HashTable *table;
+	zval *container;
+	zval *offset;
+	zval *result;
+	zval *value = NULL;
+	bool answer;
+	bool table_valid;
+
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id,

@@ -768,10 +768,8 @@ static zend_native_status zend_native_object_fetch_explicit(
 	zval *value;
 	void **cache_slot = NULL;
 
-	if (receiver == NULL || property == NULL || result == NULL) {
-		zend_throw_error(NULL, "Malformed native object fetch operands");
-		return ZEND_NATIVE_EXCEPTION;
-	}
+	/* The compiler takes the operands from the executing op array. */
+	ZEND_ASSERT(receiver != NULL && property != NULL && result != NULL);
 	if (EG(exception) != NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -810,18 +808,10 @@ static zend_native_status zend_native_object_fetch_explicit(
 			&& execute_data->run_time_cache != NULL) {
 		uint32_t cache_offset =
 			operation->extended_value & ~ZEND_FETCH_OBJ_FLAGS;
-		const uint32_t cache_size =
-			execute_data->func->op_array.cache_size;
 
-		if (cache_offset > cache_size
-				|| 3 * sizeof(void *) > cache_size - cache_offset) {
-			if (temporary != NULL) {
-				zend_tmp_string_release(temporary);
-			}
-			zend_throw_error(NULL,
-				"Malformed native object property cache offset");
-			return ZEND_NATIVE_EXCEPTION;
-		}
+		ZEND_ASSERT(cache_offset <= execute_data->func->op_array.cache_size
+			&& 3 * sizeof(void *) <= execute_data->func->op_array.cache_size
+				- cache_offset);
 		cache_slot = (void **) (
 			(char *) execute_data->run_time_cache + cache_offset);
 	}
@@ -917,11 +907,8 @@ static zend_native_status zend_native_object_assign_explicit(
 	if (receiver != NULL && Z_ISREF_P(receiver)) {
 		receiver = Z_REFVAL_P(receiver);
 	}
-	if (receiver == NULL
-			|| (result == NULL && operation->result_type != IS_UNUSED)) {
-		zend_throw_error(NULL, "Malformed native object assignment operands");
-		return ZEND_NATIVE_EXCEPTION;
-	}
+	ZEND_ASSERT(receiver != NULL
+		&& (result != NULL || operation->result_type == IS_UNUSED));
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
 		zend_native_status status;
 
@@ -944,15 +931,12 @@ static zend_native_status zend_native_object_assign_explicit(
 		name = Z_STR_P(property);
 		if (execute_data->run_time_cache != NULL) {
 			uint32_t cache_offset = operation->extended_value;
-			const uint32_t cache_size =
-				execute_data->func->op_array.cache_size;
 
-			if (cache_offset > cache_size
-					|| 3 * sizeof(void *) > cache_size - cache_offset) {
-				zend_throw_error(NULL,
-					"Malformed native object assignment cache offset");
-				return ZEND_NATIVE_EXCEPTION;
-			}
+			ZEND_ASSERT(
+				cache_offset <= execute_data->func->op_array.cache_size
+				&& 3 * sizeof(void *)
+					<= execute_data->func->op_array.cache_size
+						- cache_offset);
 			cache_slot = (void **) (
 				(char *) execute_data->run_time_cache + cache_offset);
 		}
@@ -1009,12 +993,8 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 	void **cache_slot = NULL;
 	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
 
-	if (receiver == NULL || property == NULL || value == NULL
-			|| (result == NULL && operation->result_type != IS_UNUSED)) {
-		zend_throw_error(NULL,
-			"Malformed native object reference assignment operands");
-		return ZEND_NATIVE_EXCEPTION;
-	}
+	ZEND_ASSERT(receiver != NULL && property != NULL && value != NULL
+		&& (result != NULL || operation->result_type == IS_UNUSED));
 	/* OP_DATA is fetched with BP_VAR_W by the VM.  An undefined CV therefore
 	 * becomes NULL before reference type validation and binding. */
 	if (operation->auxiliary_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
@@ -1049,18 +1029,10 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 			&& execute_data->run_time_cache != NULL) {
 		uint32_t cache_offset =
 			operation->extended_value & ~ZEND_RETURNS_FUNCTION;
-		const uint32_t cache_size =
-			execute_data->func->op_array.cache_size;
 
-		if (cache_offset > cache_size
-				|| 3 * sizeof(void *) > cache_size - cache_offset) {
-			if (temporary != NULL) {
-				zend_tmp_string_release(temporary);
-			}
-			zend_throw_error(NULL,
-				"Malformed native object reference assignment cache offset");
-			return ZEND_NATIVE_EXCEPTION;
-		}
+		ZEND_ASSERT(cache_offset <= execute_data->func->op_array.cache_size
+			&& 3 * sizeof(void *) <= execute_data->func->op_array.cache_size
+				- cache_offset);
 		cache_slot = (void **) (
 			(char *) execute_data->run_time_cache + cache_offset);
 	}
@@ -1188,12 +1160,8 @@ static zend_native_status zend_native_object_assign_op_explicit(
 	if (EG(exception) != NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	if (receiver == NULL || property == NULL || right == NULL
-			|| (result == NULL && operation->result_type != IS_UNUSED)) {
-		zend_throw_error(NULL,
-			"Malformed native object compound assignment operands");
-		return ZEND_NATIVE_EXCEPTION;
-	}
+	ZEND_ASSERT(receiver != NULL && property != NULL && right != NULL
+		&& (result != NULL || operation->result_type == IS_UNUSED));
 	if (operation->op1_type == IS_CV
 			&& Z_TYPE_P(receiver) == IS_UNDEF) {
 		receiver = zend_native_object_read_r_explicit(
@@ -1659,21 +1627,20 @@ static zend_native_status zend_native_object_clone_explicit(
 	return zend_native_object_status();
 }
 
-static zend_class_entry *zend_native_static_class_explicit(
-	zend_execute_data *execute_data,
-	const zend_native_explicit_object_operation *operation)
+static zend_class_entry *zend_native_class_operand_explicit(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand)
 {
 	zval *class_name;
 	zend_string *lower_name = NULL;
 
-	if (operation->op2_type == IS_CONST) {
+	if (type == IS_CONST) {
 		class_name = zend_native_object_read_explicit(
-			execute_data, operation->op2_type, operation->op2);
+			execute_data, type, operand);
 		if (class_name == NULL || Z_TYPE_P(class_name) != IS_STRING) {
 			zend_type_error("Class name must be a valid object or a string");
 			return NULL;
 		}
-		if (operation->op2.constant + 1
+		if (operand.constant + 1
 				< execute_data->func->op_array.last_literal
 				&& Z_TYPE_P(class_name + 1) == IS_STRING) {
 			lower_name = Z_STR_P(class_name + 1);
@@ -1682,17 +1649,26 @@ static zend_class_entry *zend_native_static_class_explicit(
 			Z_STR_P(class_name), lower_name,
 			ZEND_FETCH_CLASS_DEFAULT | ZEND_FETCH_CLASS_EXCEPTION);
 	}
-	if (operation->op2_type == IS_UNUSED) {
-		return zend_fetch_class(NULL, operation->op2.num);
+	if (type == IS_UNUSED) {
+		return zend_fetch_class(NULL, operand.num);
 	}
 	class_name = zend_native_object_read_explicit(
-		execute_data, operation->op2_type, operation->op2);
+		execute_data, type, operand);
 	if (class_name == NULL || Z_TYPE_P(class_name) != IS_PTR
 			|| Z_CE_P(class_name) == NULL) {
 		zend_type_error("Class name must be a valid object or a string");
 		return NULL;
 	}
 	return Z_CE_P(class_name);
+}
+
+/* The class of a static property operation: its op2. */
+static zend_class_entry *zend_native_static_class_explicit(
+	zend_execute_data *execute_data,
+	const zend_native_explicit_object_operation *operation)
+{
+	return zend_native_class_operand_explicit(
+		execute_data, operation->op2_type, operation->op2);
 }
 
 static zend_string *zend_native_static_name_explicit(
@@ -2173,41 +2149,6 @@ static zend_native_status zend_native_static_unset_explicit(
 	zend_native_object_consume(
 		execute_data, operation->op1_type, operation->op1, NULL);
 	return zend_native_object_status();
-}
-
-static zend_class_entry *zend_native_class_operand_explicit(
-	zend_execute_data *execute_data, uint8_t type, znode_op operand)
-{
-	zval *class_name;
-	zend_string *lower_name = NULL;
-
-	if (type == IS_CONST) {
-		class_name = zend_native_object_read_explicit(
-			execute_data, type, operand);
-		if (class_name == NULL || Z_TYPE_P(class_name) != IS_STRING) {
-			zend_type_error("Class name must be a valid object or a string");
-			return NULL;
-		}
-		if (operand.constant + 1
-				< execute_data->func->op_array.last_literal
-				&& Z_TYPE_P(class_name + 1) == IS_STRING) {
-			lower_name = Z_STR_P(class_name + 1);
-		}
-		return zend_fetch_class_by_name(
-			Z_STR_P(class_name), lower_name,
-			ZEND_FETCH_CLASS_DEFAULT | ZEND_FETCH_CLASS_EXCEPTION);
-	}
-	if (type == IS_UNUSED) {
-		return zend_fetch_class(NULL, operand.num);
-	}
-	class_name = zend_native_object_read_explicit(
-		execute_data, type, operand);
-	if (class_name == NULL || Z_TYPE_P(class_name) != IS_PTR
-			|| Z_CE_P(class_name) == NULL) {
-		zend_type_error("Class name must be a valid object or a string");
-		return NULL;
-	}
-	return Z_CE_P(class_name);
 }
 
 static zend_native_status zend_native_class_constant_explicit(
