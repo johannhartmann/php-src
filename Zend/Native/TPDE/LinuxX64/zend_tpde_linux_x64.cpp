@@ -22771,13 +22771,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						{
 							ScratchReg counted{this};
 							auto counted_reg = counted.alloc_gp();
-							for (uint32_t index = 0;
-									index < compiled_variable_count; ++index) {
-								if (!compiled_variable_used(index)) {
-									continue;
-								}
-								const int32_t offset = static_cast<int32_t>(
-									(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval));
+							auto release_slot = [&](int32_t offset) {
 								ASM(TEST8mi,
 									FE_MEM(post_callee_reg, 0, FE_NOREG,
 										offset + static_cast<int32_t>(
@@ -22804,46 +22798,23 @@ bool ZendCompilerX64::compile_inst_impl(
 											offsetof(zval, u1.type_info))),
 									IS_UNDEF);
 								label_place(released);
+							};
+							for (uint32_t index = 0;
+									index < compiled_variable_count; ++index) {
+								if (compiled_variable_used(index)) {
+									release_slot(static_cast<int32_t>(
+										(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)));
+								}
 							}
 							for (uint32_t index = 0;
 									index < argument_count; ++index) {
 								const uint32_t ordinal =
 									call.direct_call->arguments[index].ordinal;
-								if (ordinal < fixed_argument_count) {
-									continue;
+								if (ordinal >= fixed_argument_count) {
+									release_slot(static_cast<int32_t>((ZEND_CALL_FRAME_SLOT
+										+ first_extra_argument_slot + ordinal
+										- fixed_argument_count) * sizeof(zval)));
 								}
-								const uint32_t frame_slot =
-									first_extra_argument_slot
-										+ ordinal - fixed_argument_count;
-								const int32_t offset = static_cast<int32_t>(
-									(ZEND_CALL_FRAME_SLOT + frame_slot)
-										* sizeof(zval));
-								ASM(TEST8mi,
-									FE_MEM(post_callee_reg, 0, FE_NOREG,
-										offset + static_cast<int32_t>(
-											offsetof(zval, u1.v.type_flags))),
-									IS_TYPE_REFCOUNTED);
-								auto released = text_writer.label_create();
-								generate_raw_jump(Jump::je, released);
-								ASM(MOV64rm, counted_reg,
-									FE_MEM(post_callee_reg, 0, FE_NOREG, offset));
-								ASM(CMP32mi,
-									FE_MEM(counted_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zend_refcounted_h, refcount))),
-									1);
-								generate_raw_jump(Jump::je, complete_fast);
-								ASM(SUB32mi,
-									FE_MEM(counted_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zend_refcounted_h, refcount))),
-									1);
-								ASM(MOV32mi,
-									FE_MEM(post_callee_reg, 0, FE_NOREG,
-										offset + static_cast<int32_t>(
-											offsetof(zval, u1.type_info))),
-									IS_UNDEF);
-								label_place(released);
 							}
 						}
 						if (call.direct_call->receiver_kind
