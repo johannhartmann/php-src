@@ -9587,34 +9587,27 @@ bool zend_native_call_fast_new(
 				caller, descriptor, NULL) != ce) {
 		return false;
 	}
+	/*
+	 * The publication instantiated the key and proved its constructor (none
+	 * for a site without a call), its create_object and its standard
+	 * constructor lookup, all fixed once a class is linked; the key outlives
+	 * the site's epoch or re-arm. Only the class constants may still need
+	 * an update, which can run user code.
+	 */
+	ZEND_ASSERT(ce != NULL && ce->constructor == header->fast_function
+		&& (ce->ce_flags & ZEND_ACC_UNINSTANTIABLE) == 0
+		&& (header->fast_function != NULL
+			|| (header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) != 0)
+		&& (ce->create_object == NULL
+			|| ((header->fast_flags & ZEND_NATIVE_CALL_FAST_INTERNAL) != 0
+				&& ce->default_object_handlers->get_constructor
+					== zend_std_get_constructor)));
+	if (!zend_native_call_class_constants_updated(ce)) {
+		return false;
+	}
 	if (header->fast_function == NULL) {
 		/* No constructor: only the object, no frame. */
-		if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
-				|| ce == NULL || ce->constructor != NULL
-				|| ce->create_object != NULL
-				|| !zend_native_call_class_constants_updated(ce)
-				|| (ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT
-					| ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
-					| ZEND_ACC_EXPLICIT_ABSTRACT_CLASS | ZEND_ACC_ENUM
-					| ZEND_ACC_UNINSTANTIABLE)) != 0) {
-			return false;
-		}
 		return object_init_ex(result, ce) == SUCCESS;
-	}
-	/* An internal constructor's class may create its objects itself; the
-	 * publication checked that its objects take the standard constructor
-	 * lookup. */
-	if (ce == NULL || ce->constructor != header->fast_function
-			|| (ce->create_object != NULL
-				&& ((header->fast_flags & ZEND_NATIVE_CALL_FAST_INTERNAL) == 0
-					|| ce->default_object_handlers->get_constructor
-						!= zend_std_get_constructor))
-			|| !zend_native_call_class_constants_updated(ce)
-			|| (ce->ce_flags & (ZEND_ACC_INTERFACE | ZEND_ACC_TRAIT
-				| ZEND_ACC_IMPLICIT_ABSTRACT_CLASS
-				| ZEND_ACC_EXPLICIT_ABSTRACT_CLASS | ZEND_ACC_ENUM
-				| ZEND_ACC_UNINSTANTIABLE)) != 0) {
-		return false;
 	}
 	/* An internal class's create_object may observe the line (an
 	 * exception records it). */
