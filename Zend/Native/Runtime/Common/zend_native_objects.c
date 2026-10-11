@@ -122,14 +122,7 @@ static zval *zend_native_object_read_r_explicit(
 
 	if (value != NULL && type == IS_CV
 			&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
-
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return NULL;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
-		return &EG(uninitialized_zval);
+		return zend_native_undefined_cv(execute_data, operand.var);
 	}
 	return value;
 }
@@ -139,13 +132,19 @@ static zval *zend_native_object_read_r_source_explicit(
 	const zend_native_explicit_object_operation *operation,
 	uint8_t type, znode_op operand)
 {
-	zval *value = zend_native_object_read_r_explicit(
+	zval *value = zend_native_object_read_explicit(
 		execute_data, type, operand);
 
-	if (EG(exception) != NULL) {
-		(void) zend_native_prepare_finally_exception(
-			execute_data, operation->source_position_id);
-		return NULL;
+	/* Only the warning of an undefined CV can raise; helpers are entered
+	 * without a pending exception. */
+	if (value != NULL && type == IS_CV
+			&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+		value = zend_native_undefined_cv(execute_data, operand.var);
+		if (EG(exception) != NULL) {
+			(void) zend_native_prepare_finally_exception(
+				execute_data, operation->source_position_id);
+			return NULL;
+		}
 	}
 	return value;
 }
@@ -313,20 +312,11 @@ zend_native_status zend_native_throw_source_zval(
 			execute_data, source_position_id);
 	}
 	if (operand_type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
-
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			zend_throw_error(NULL, "Malformed native throw variable");
-			return zend_native_throw_exception_status(
-				execute_data, source_position_id);
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		value = zend_native_undefined_cv(execute_data, operand.var);
 		if (EG(exception) != NULL) {
 			return zend_native_throw_exception_status(
 				execute_data, source_position_id);
 		}
-		value = &EG(uninitialized_zval);
 	}
 	if (Z_ISREF_P(value)) {
 		value = Z_REFVAL_P(value);
@@ -2416,13 +2406,8 @@ static zend_native_status zend_native_fetch_class_explicit(
 		} else {
 			if (class_name != NULL && operation->op2_type == IS_CV
 					&& Z_ISUNDEF_P(class_name)) {
-				uint32_t variable = EX_VAR_TO_NUM(operation->op2.var);
-
-				if (variable < execute_data->func->op_array.last_var) {
-					zend_error_unchecked(E_WARNING,
-						"Undefined variable $%S",
-						execute_data->func->op_array.vars[variable]);
-				}
+				(void) zend_native_undefined_cv(
+					execute_data, operation->op2.var);
 			}
 			if (EG(exception) == NULL) {
 				zend_throw_error(NULL,
@@ -2569,14 +2554,8 @@ static zend_native_status zend_native_get_class_explicit(
 	} else {
 		if (object != NULL && operation->op1_type == IS_CV
 				&& Z_TYPE_P(object) == IS_UNDEF) {
-			uint32_t variable = EX_VAR_TO_NUM(operation->op1.var);
-
-			if (variable < execute_data->func->op_array.last_var) {
-				zend_error_unchecked(E_WARNING,
-					"Undefined variable $%S",
-					execute_data->func->op_array.vars[variable]);
-			}
-			object = &EG(uninitialized_zval);
+			object = zend_native_undefined_cv(
+				execute_data, operation->op1.var);
 		}
 		if (EG(exception) == NULL) {
 			zend_type_error(

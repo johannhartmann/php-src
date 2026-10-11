@@ -60,6 +60,18 @@ static zend_always_inline zval *zend_native_value_fast_operand(
 	}
 }
 
+ZEND_COLD zend_never_inline zval *zend_native_undefined_cv(
+	zend_execute_data *execute_data, uint32_t var)
+{
+	ZEND_ASSERT(EX_VAR_TO_NUM(var)
+		< (uint32_t) execute_data->func->op_array.last_var);
+	if (EXPECTED(EG(exception) == NULL)) {
+		zend_error_unchecked(E_WARNING, "Undefined variable $%S",
+			execute_data->func->op_array.vars[EX_VAR_TO_NUM(var)]);
+	}
+	return &EG(uninitialized_zval);
+}
+
 void zend_native_zval_copy_deref_or_dup(zval *target, const zval *source)
 {
 	/* Self-aliasing is reserved for acquiring an owner after a shallow move. */
@@ -167,12 +179,7 @@ static zval *zend_native_value_read_r_explicit(
 
 	if (value != NULL && operand_type == IS_CV
 			&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return NULL;
-		}
-		zend_error_unchecked(E_WARNING, "Undefined variable $%S",
-			execute_data->func->op_array.vars[variable_index]);
+		(void) zend_native_undefined_cv(execute_data, operand.var);
 		if (EG(exception) != NULL) {
 			(void) zend_native_prepare_finally_exception(
 				execute_data, operation->source_position_id);
@@ -523,14 +530,8 @@ zend_native_status zend_native_value_echo(
 			zend_write(ZSTR_VAL(string), ZSTR_LEN(string));
 		} else if (operation.op1_type == IS_CV
 				&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-			uint32_t variable_index = EX_VAR_TO_NUM(operation.op1.var);
-
-			if (variable_index >= execute_data->func->op_array.last_var) {
-				zend_string_release_ex(string, false);
-				return ZEND_NATIVE_EXCEPTION;
-			}
-			zend_error(E_WARNING, "Undefined variable $%s",
-				ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+			(void) zend_native_undefined_cv(
+				execute_data, operation.op1.var);
 		}
 		zend_string_release_ex(string, false);
 	}
@@ -1499,7 +1500,6 @@ zend_native_status zend_native_value_check_var(
 	zend_native_explicit_value_operation operation;
 	const zend_native_explicit_value_operation *opline = &operation;
 	zval *value;
-	uint32_t variable_index;
 
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
@@ -1510,12 +1510,7 @@ zend_native_status zend_native_value_check_var(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (UNEXPECTED(Z_TYPE_INFO_P(value) == IS_UNDEF)) {
-		variable_index = EX_VAR_TO_NUM(opline->op1.var);
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		(void) zend_native_undefined_cv(execute_data, opline->op1.var);
 	}
 	return zend_native_value_status();
 }
@@ -1658,16 +1653,10 @@ static zend_never_inline zend_native_status zend_native_value_assign_general(
 		variable = Z_INDIRECT_P(variable);
 	}
 	if (opline->op2_type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op2.var);
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		value = zend_native_undefined_cv(execute_data, opline->op2.var);
 		if (EG(exception) != NULL) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
-		value = &EG(uninitialized_zval);
 	}
 	if (value_type == IS_CONST || value_type == IS_CV) {
 		zend_native_zval_copy_deref_or_dup(&materialized, value);
@@ -1856,9 +1845,15 @@ zend_native_status zend_native_value_concat_assign_direct(
 			const size_t added = Z_STRLEN_P(value);
 
 			if (EXPECTED(added <= ZSTR_MAX_LEN - length)) {
+				/* The properties both strings share survive, as
+				 * concat_function() keeps them. */
+				const uint32_t flags = ZSTR_GET_COPYABLE_CONCAT_PROPERTIES_BOTH(
+					string, Z_STR_P(value));
+
 				string = zend_string_extend(string, length + added, 0);
 				memcpy(ZSTR_VAL(string) + length, Z_STRVAL_P(value), added);
 				ZSTR_VAL(string)[length + added] = '\0';
+				GC_ADD_FLAGS(string, flags);
 				ZVAL_NEW_STR(variable, string);
 				return ZEND_NATIVE_RETURNED;
 			}
@@ -1913,13 +1908,7 @@ static zend_native_status zend_native_value_assign_op_apply(
 		}
 		variable = Z_INDIRECT_P(variable);
 	} else if (UNEXPECTED(Z_TYPE_P(variable) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
-
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		(void) zend_native_undefined_cv(execute_data, opline->op1.var);
 		if (EG(exception) != NULL) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -2259,14 +2248,8 @@ zend_native_status zend_native_value_type_check(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (opline->op1_type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
-
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
 		matches = (opline->extended_value & MAY_BE_NULL) != 0;
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		(void) zend_native_undefined_cv(execute_data, opline->op1.var);
 		if (EG(exception) != NULL) {
 			ZVAL_UNDEF(result);
 			return ZEND_NATIVE_EXCEPTION;
@@ -2542,12 +2525,7 @@ zend_native_status zend_native_value_incdec(
 		}
 	}
 	if (opline->op1_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		(void) zend_native_undefined_cv(execute_data, opline->op1.var);
 		if (EG(exception) != NULL) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -3085,12 +3063,7 @@ zend_native_status zend_native_value_qm_assign(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (opline->op1_type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		(void) zend_native_undefined_cv(execute_data, opline->op1.var);
 		ZVAL_NULL(result);
 		return zend_native_value_status();
 	}
@@ -3644,12 +3617,7 @@ static zend_string *zend_native_value_rope_piece(
 			? zend_string_copy(Z_STR_P(value)) : Z_STR_P(value);
 	}
 	if (opline->op2_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op2.var);
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return NULL;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		(void) zend_native_undefined_cv(execute_data, opline->op2.var);
 		if (EG(exception) != NULL) {
 			return NULL;
 		}
@@ -4856,13 +4824,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			&& opline->op1_type == IS_CV
 			&& Z_TYPE_P(container) == IS_UNDEF) {
 		if (mode == ZEND_NATIVE_DIM_RW) {
-			uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
-
-			if (variable_index >= execute_data->func->op_array.last_var) {
-				return ZEND_NATIVE_EXCEPTION;
-			}
-			zend_error(E_WARNING, "Undefined variable $%s",
-				ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+			(void) zend_native_undefined_cv(execute_data, opline->op1.var);
 			container_warning_exception = EG(exception);
 		} else if (zend_native_value_read_r_explicit(execute_data, opline,
 				opline->op1_type, opline->op1) == NULL
@@ -7300,6 +7262,7 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_object(
 	zend_object *zobj = Z_OBJ_P(object);
 	zval *result = zend_native_value_slot(
 		execute_data, opline->result_type, opline->result);
+	HashTable *properties;
 
 	if (result == NULL) {
 		return ZEND_NATIVE_ITERATOR_EXCEPTION;
@@ -7375,15 +7338,31 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_object(
 				ZVAL_UNDEF(source_slot);
 			}
 		}
-		Z_FE_ITER_P(result) = zend_hash_iterator_add(
-			Z_OBJPROP_P(object), 0);
+		/* A shared property table is separated before the iteration
+		 * writes through it, as ZEND_FE_RESET_RW does. */
+		zend_object *iterated = Z_OBJ_P(object);
+
+		if (iterated->properties != NULL
+				&& UNEXPECTED(GC_REFCOUNT(iterated->properties) > 1)) {
+			if (!(GC_FLAGS(iterated->properties) & IS_ARRAY_IMMUTABLE)) {
+				GC_DELREF(iterated->properties);
+			}
+			iterated->properties = zend_array_dup(iterated->properties);
+		}
+		properties = Z_OBJPROP_P(object);
 	} else {
-		HashTable *properties = zobj->properties != NULL
-			? zobj->properties : zobj->handlers->get_properties(zobj);
-		if (properties != NULL && GC_REFCOUNT(properties) > 1
-				&& !(GC_FLAGS(properties) & IS_ARRAY_IMMUTABLE)) {
-			GC_DELREF(properties);
-			properties = zobj->properties = zend_array_dup(properties);
+		/* ZEND_FE_RESET_R asks get_properties() only for an object
+		 * without a property table. */
+		properties = zobj->properties;
+		if (properties != NULL) {
+			if (UNEXPECTED(GC_REFCOUNT(properties) > 1)) {
+				if (!(GC_FLAGS(properties) & IS_ARRAY_IMMUTABLE)) {
+					GC_DELREF(properties);
+				}
+				properties = zobj->properties = zend_array_dup(properties);
+			}
+		} else {
+			properties = zobj->handlers->get_properties(zobj);
 		}
 		ZVAL_COPY_VALUE(result, object);
 		if (opline->op1_type != IS_TMP_VAR) {
@@ -7391,22 +7370,21 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_object(
 		} else {
 			ZVAL_UNDEF(source_slot);
 		}
-		if (properties == NULL || zend_hash_num_elements(properties) == 0) {
-			Z_FE_ITER_P(result) = (uint32_t) -1;
-			if (opline->op1_type == IS_VAR) {
-				zend_native_iterator_release_operand(
-					execute_data, opline->op1_type, opline->op1);
-			}
-			return ZEND_NATIVE_ITERATOR_END;
-		}
-		Z_FE_ITER_P(result) = zend_hash_iterator_add(properties, 0);
 	}
+	if (zend_hash_num_elements(properties) == 0) {
+		Z_FE_ITER_P(result) = (uint32_t) -1;
+		if (opline->op1_type == IS_VAR) {
+			zend_native_iterator_release_operand(
+				execute_data, opline->op1_type, opline->op1);
+		}
+		return ZEND_NATIVE_ITERATOR_END;
+	}
+	Z_FE_ITER_P(result) = zend_hash_iterator_add(properties, 0);
 	if (opline->op1_type == IS_VAR) {
 		zend_native_iterator_release_operand(
 			execute_data, opline->op1_type, opline->op1);
 	}
-	return zend_hash_num_elements(Z_OBJPROP_P(object)) == 0
-		? ZEND_NATIVE_ITERATOR_END : ZEND_NATIVE_ITERATOR_NEXT;
+	return ZEND_NATIVE_ITERATOR_NEXT;
 }
 
 static zend_native_iterator_branch_result zend_native_iterator_reset(

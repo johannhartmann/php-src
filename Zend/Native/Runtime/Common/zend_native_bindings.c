@@ -42,11 +42,14 @@ static bool zend_native_dynamic_init_explicit_operation(
 	uint32_t source_position_id, uint8_t expected_opcode,
 	zend_native_explicit_dynamic_operation *operation)
 {
-	if (operation == NULL || source_opcode != expected_opcode
-			|| execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| source_position_id >= execute_data->func->op_array.last
-			|| !zend_native_dynamic_decode_explicit_operand(
+	/* The compiler emitted the opcode, position and operands from the
+	 * executing op array. */
+	ZEND_ASSERT(operation != NULL && source_opcode == expected_opcode
+		&& execute_data != NULL && execute_data->func != NULL
+		&& ZEND_USER_CODE(execute_data->func->type)
+		&& source_position_id < execute_data->func->op_array.last);
+	(void) expected_opcode;
+	if (!zend_native_dynamic_decode_explicit_operand(
 				execute_data, op1, &operation->op1_type, &operation->op1)
 			|| !zend_native_dynamic_decode_explicit_operand(
 				execute_data, op2, &operation->op2_type, &operation->op2)
@@ -198,17 +201,12 @@ static zend_native_status zend_native_dynamic_fetch(
 		name = Z_STR_P(name_value);
 	} else {
 		if (opline->op1_type == IS_CV && Z_TYPE_P(name_value) == IS_UNDEF) {
-			uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
-
-			if (variable_index < execute_data->func->op_array.last_var) {
-				zend_error(E_WARNING, "Undefined variable $%s",
-					ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
-			}
+			name_value = zend_native_undefined_cv(
+				execute_data, opline->op1.var);
 			if (EG(exception) != NULL) {
 				ZVAL_UNDEF(result);
 				return ZEND_NATIVE_EXCEPTION;
 			}
-			name_value = &EG(uninitialized_zval);
 		}
 		name = zval_try_get_tmp_string(name_value, &temporary_name);
 		if (name == NULL) {
@@ -346,16 +344,10 @@ static zend_string *zend_native_dynamic_name(
 		return Z_TYPE_P(value) == IS_STRING ? Z_STR_P(value) : NULL;
 	}
 	if (opline->op1_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
-		uint32_t variable_index = EX_VAR_TO_NUM(opline->op1.var);
-
-		if (variable_index < execute_data->func->op_array.last_var) {
-			zend_error(E_WARNING, "Undefined variable $%s",
-				ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
-		}
+		value = zend_native_undefined_cv(execute_data, opline->op1.var);
 		if (EG(exception) != NULL) {
 			return NULL;
 		}
-		value = &EG(uninitialized_zval);
 	}
 	return zval_try_get_tmp_string(value, temporary);
 }
@@ -545,6 +537,19 @@ zend_native_status zend_native_dynamic_fetch_constant(
 	zend_constant *constant = NULL;
 	void **cache_slot;
 
+	/* Like the VM, the run-time cache slot names a found constant, which
+	 * answers before the operation is decoded. */
+	cache_slot = execute_data->run_time_cache != NULL
+		? (void **) ((char *) execute_data->run_time_cache + extended_value)
+		: NULL;
+	if (cache_slot != NULL && *cache_slot != NULL
+			&& !IS_SPECIAL_CACHE_VAL(*cache_slot)) {
+		ZEND_ASSERT(ZEND_NATIVE_OPERAND_TYPE(result_operand) == IS_TMP_VAR
+			|| ZEND_NATIVE_OPERAND_TYPE(result_operand) == IS_VAR);
+		ZVAL_COPY_OR_DUP(ZEND_NATIVE_OPERAND_VAR(execute_data, result_operand),
+			&((zend_constant *) *cache_slot)->value);
+		return ZEND_NATIVE_RETURNED;
+	}
 	if (!zend_native_dynamic_init_explicit_operation(
 			execute_data, op1, op2, result_operand, auxiliary, extended_value,
 			source_opcode, source_position_id, ZEND_FETCH_CONSTANT, &operation)
@@ -554,15 +559,6 @@ zend_native_status zend_native_dynamic_fetch_constant(
 			|| (result = zend_native_dynamic_slot(
 			execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
-	}
-	/* Like the VM, the runtime cache slot names a found constant. */
-	cache_slot = execute_data->run_time_cache != NULL
-		? (void **) ((char *) execute_data->run_time_cache + extended_value)
-		: NULL;
-	if (cache_slot != NULL && *cache_slot != NULL
-			&& !IS_SPECIAL_CACHE_VAL(*cache_slot)) {
-		ZVAL_COPY_OR_DUP(result, &((zend_constant *) *cache_slot)->value);
-		return ZEND_NATIVE_RETURNED;
 	}
 	literal = zend_native_dynamic_read(
 		execute_data, opline->op2_type, opline->op2);

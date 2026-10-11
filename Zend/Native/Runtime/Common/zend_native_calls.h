@@ -1173,11 +1173,6 @@ zend_result zend_native_internal_call_begin(
 	zend_execute_data *caller,
 	const zend_native_internal_call_cell *cell,
 	const zend_native_direct_internal_call_descriptor *descriptor);
-zend_result zend_native_call_set_zval_argument(
-	zend_execute_data *caller,
-	uint32_t ordinal,
-	const zval *value,
-	zend_native_call_argument_mode mode);
 zend_result zend_native_call_set_source_argument(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor,

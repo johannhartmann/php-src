@@ -13,6 +13,12 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The address of a reserved helper ID, which generated code never calls. */
+static void zend_native_runtime_reserved_helper(void)
+{
+	ZEND_UNREACHABLE();
+}
+
 #define ZEND_NATIVE_EFFECT_FRAME_READ ( \
 	ZEND_NATIVE_RUNTIME_EFFECT_FRAME_READ \
 	| ZEND_NATIVE_RUNTIME_EFFECT_HEAP_READ)
@@ -142,9 +148,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
 			| ZEND_NATIVE_EFFECT_MAY_FAIL,
 		(const void *) zend_native_internal_call_begin},
-	{ZEND_NATIVE_HELPER_CALL_SET_ZVAL,
-		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
-		(const void *) zend_native_call_set_zval_argument},
+	{ZEND_NATIVE_HELPER_RESERVED_8, 0,
+		(const void *) zend_native_runtime_reserved_helper},
 	{ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH, ZEND_NATIVE_EFFECT_CALL,
 		(const void *) zend_native_internal_call_invoke_finish},
 	{ZEND_NATIVE_HELPER_INTERRUPT_POLL,

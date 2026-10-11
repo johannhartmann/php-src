@@ -22,6 +22,14 @@
 	ZEND_CALL_VAR((execute_data), ZEND_NATIVE_OPERAND_VALUE(encoded))
 
 #ifndef __cplusplus
+/*
+ * A read of the undefined CV at frame offset var, as the VM's
+ * zval_undefined_cv() makes it: the warning, unless an exception is
+ * pending, and the null the read yields.
+ */
+ZEND_COLD zval *zend_native_undefined_cv(
+	zend_execute_data *execute_data, uint32_t var);
+
 static zend_always_inline bool zend_native_decode_explicit_operand(
 	const zend_execute_data *execute_data, uint64_t encoded,
 	uint8_t *operand_type, znode_op *operand)

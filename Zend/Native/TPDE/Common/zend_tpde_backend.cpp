@@ -14453,14 +14453,19 @@ extern "C" zend_result zend_native_image_deserialize(
 					std::free(cell);
 					goto invalid_image;
 				}
-				cell->function = const_cast<zend_function *>(
-					static_cast<const zend_function *>(resolved_function));
-				cell->called_scope = const_cast<zend_class_entry *>(
-					static_cast<const zend_class_entry *>(resolved_scope));
-				cell->receiver_kind =
-					static_cast<zend_native_internal_receiver_kind>(
-						serialized.receiver_kind);
-				zend_native_internal_call_cell_derive(cell);
+				/* The checks of a compiled cell hold for a loaded one. */
+				if (zend_native_internal_call_cell_init(cell,
+						const_cast<zend_function *>(
+							static_cast<const zend_function *>(
+								resolved_function)),
+						const_cast<zend_class_entry *>(
+							static_cast<const zend_class_entry *>(
+								resolved_scope)),
+						static_cast<zend_native_internal_receiver_kind>(
+							serialized.receiver_kind)) != SUCCESS) {
+					std::free(cell);
+					goto invalid_image;
+				}
 				void *resized = std::realloc(
 					image->owned_internal_call_cells,
 					static_cast<size_t>(

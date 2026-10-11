@@ -23,29 +23,25 @@ typedef struct _zend_native_generator_operation {
 	const zend_op *opline;
 } zend_native_generator_operation;
 
-static bool zend_native_generator_decode_operand(
-	zend_execute_data *execute_data, uint64_t encoded,
-	uint8_t *operand_type, znode_op *operand)
-{
-	return zend_native_decode_explicit_operand(
-		execute_data, encoded, operand_type, operand);
-}
-
 static bool zend_native_generator_init_operation(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t source_opcode, uint32_t source_position_id,
 	uint8_t expected_opcode, zend_native_generator_operation *operation)
 {
-	if (execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| source_opcode != expected_opcode
-			|| source_position_id >= execute_data->func->op_array.last
-			|| !zend_native_generator_decode_operand(
+	/* The compiler emitted the opcode, position and operands from the
+	 * executing op array. */
+	ZEND_ASSERT(execute_data != NULL && execute_data->func != NULL
+		&& ZEND_USER_CODE(execute_data->func->type)
+		&& source_opcode == expected_opcode
+		&& source_position_id < execute_data->func->op_array.last);
+	(void) source_opcode;
+	(void) expected_opcode;
+	if (!zend_native_decode_explicit_operand(
 				execute_data, op1, &operation->op1_type, &operation->op1)
-			|| !zend_native_generator_decode_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, op2, &operation->op2_type, &operation->op2)
-			|| !zend_native_generator_decode_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, result,
 				&operation->result_type, &operation->result)) {
 		return false;
@@ -63,22 +59,6 @@ static zend_always_inline zval *zend_native_generator_operand(
 		return &execute_data->func->op_array.literals[operand.constant];
 	}
 	return type == IS_UNUSED ? NULL : ZEND_CALL_VAR(execute_data, operand.var);
-}
-
-static zend_always_inline zval *zend_native_generator_read_r_operand(
-	zend_execute_data *execute_data, uint8_t type, znode_op operand)
-{
-	zval *value = zend_native_generator_operand(execute_data, type, operand);
-
-	if (type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
-
-		ZEND_ASSERT(variable_index < execute_data->func->op_array.last_var);
-		zend_error_unchecked(E_WARNING, "Undefined variable $%S",
-			execute_data->func->op_array.vars[variable_index]);
-		return &EG(uninitialized_zval);
-	}
-	return value;
 }
 
 static zend_always_inline void zend_native_generator_free_operand(
@@ -260,8 +240,12 @@ zend_native_status zend_native_generator_yield(
 				value_slot, operation.op1_type);
 		}
 	} else {
-		value = zend_native_generator_read_r_operand(
-			execute_data, operation.op1_type, operation.op1);
+		/* The operand as GET_OP1_ZVAL_PTR(BP_VAR_R) reads it. */
+		value = value_slot;
+		if (operation.op1_type == IS_CV
+				&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+			value = zend_native_undefined_cv(execute_data, operation.op1.var);
+		}
 		if (operation.op1_type == IS_CONST) {
 			ZVAL_COPY(&generator->value, value);
 		} else if (operation.op1_type == IS_TMP_VAR) {
@@ -282,17 +266,19 @@ zend_native_status zend_native_generator_yield(
 	}
 
 	if (operation.op2_type != IS_UNUSED) {
-		zval *key = zend_native_generator_read_r_operand(
+		zval *key_slot = zend_native_generator_operand(
 			execute_data, operation.op2_type, operation.op2);
-		if ((operation.op2_type & (IS_CV | IS_VAR))
+		zval *key = key_slot;
+
+		if (operation.op2_type == IS_CV
+				&& UNEXPECTED(Z_TYPE_P(key) == IS_UNDEF)) {
+			key = zend_native_undefined_cv(execute_data, operation.op2.var);
+		} else if ((operation.op2_type & (IS_CV | IS_VAR))
 				&& Z_TYPE_P(key) == IS_REFERENCE) {
 			key = Z_REFVAL_P(key);
 		}
 		ZVAL_COPY(&generator->key, key);
-		zend_native_generator_free_operand(
-			zend_native_generator_operand(
-				execute_data, operation.op2_type, operation.op2),
-			operation.op2_type);
+		zend_native_generator_free_operand(key_slot, operation.op2_type);
 		if (Z_TYPE(generator->key) == IS_LONG
 				&& Z_LVAL(generator->key)
 					> generator->largest_used_integer_key) {
@@ -321,6 +307,7 @@ zend_native_status zend_native_generator_yield_from(
 {
 	zend_native_generator_operation operation;
 	zend_generator *generator;
+	zval *value_slot;
 	zval *value;
 
 	(void) extended_value;
@@ -332,7 +319,7 @@ zend_native_status zend_native_generator_yield_from(
 		zend_throw_error(NULL, "Invalid native generator delegation frame");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	value = zend_native_generator_operand(
+	value = value_slot = zend_native_generator_operand(
 		execute_data, operation.op1_type, operation.op1);
 	if (UNEXPECTED(generator->flags & ZEND_GENERATOR_FORCED_CLOSE)) {
 		zend_native_generator_cleanup_suspended_arguments(execute_data);
@@ -354,10 +341,7 @@ zend_native_status zend_native_generator_yield_from(
 	if (Z_TYPE_P(value) == IS_ARRAY) {
 		ZVAL_COPY(&generator->values, value);
 		Z_FE_POS(generator->values) = 0;
-		zend_native_generator_free_operand(
-			zend_native_generator_operand(
-				execute_data, operation.op1_type, operation.op1),
-			operation.op1_type);
+		zend_native_generator_free_operand(value_slot, operation.op1_type);
 	} else if (operation.op1_type != IS_CONST
 			&& Z_TYPE_P(value) == IS_OBJECT
 			&& Z_OBJCE_P(value)->get_iterator != NULL) {
@@ -366,9 +350,7 @@ zend_native_status zend_native_generator_yield_from(
 			zend_generator *delegate = (zend_generator *) Z_OBJ_P(value);
 			Z_ADDREF_P(value);
 			zend_native_generator_free_operand(
-				zend_native_generator_operand(
-					execute_data, operation.op1_type, operation.op1),
-				operation.op1_type);
+				value_slot, operation.op1_type);
 			if (UNEXPECTED(delegate->execute_data == NULL)) {
 				zend_throw_error(NULL,
 					"Generator passed to yield from was aborted without proper return and is unable to continue");
@@ -396,9 +378,7 @@ zend_native_status zend_native_generator_yield_from(
 			zend_object_iterator *iterator =
 				ce->get_iterator(ce, value, 0);
 			zend_native_generator_free_operand(
-				zend_native_generator_operand(
-					execute_data, operation.op1_type, operation.op1),
-				operation.op1_type);
+				value_slot, operation.op1_type);
 			if (UNEXPECTED(iterator == NULL)
 					|| UNEXPECTED(EG(exception) != NULL)) {
 				if (EG(exception) == NULL) {
@@ -421,10 +401,7 @@ zend_native_status zend_native_generator_yield_from(
 	} else {
 		zend_throw_error(NULL,
 			"Can use \"yield from\" only with arrays and Traversables");
-		zend_native_generator_free_operand(
-			zend_native_generator_operand(
-				execute_data, operation.op1_type, operation.op1),
-			operation.op1_type);
+		zend_native_generator_free_operand(value_slot, operation.op1_type);
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (operation.result_type != IS_UNUSED) {
