@@ -757,14 +757,16 @@ static bool zend_mir_emit_terminator_edges(
 	zend_mir_instruction_id terminator,
 	uint32_t edge_count)
 {
-	zend_mir_control_flow_edge_mapping *mappings = NULL;
+	/* Only multiway branches have more than two edges. */
+	zend_mir_control_flow_edge_mapping local_mappings[2];
+	zend_mir_control_flow_edge_mapping *mappings = local_mappings;
 	uint32_t i;
 	bool success = false;
 
-	if (edge_count != 0) {
-		if (edges == NULL) {
-			goto done;
-		}
+	if (edge_count != 0 && edges == NULL) {
+		goto done;
+	}
+	if (edge_count > 2) {
 		mappings = calloc(edge_count, sizeof(*mappings));
 		if (mappings == NULL) {
 			goto done;
@@ -839,7 +841,9 @@ static bool zend_mir_emit_terminator_edges(
 	success = true;
 
 done:
-	free(mappings);
+	if (mappings != local_mappings) {
+		free(mappings);
+	}
 	return success;
 }
 
