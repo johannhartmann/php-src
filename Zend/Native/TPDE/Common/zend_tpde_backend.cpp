@@ -5936,6 +5936,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->argument_abi);
 	std::free(plan->typed_component_call_eligible);
 	std::free(plan->effect_closed_inline_eligible);
+	std::free(plan->effect_closed_argument_used);
 	destroy_machine_cfg(&plan->entry_machine_cfg);
 	destroy_machine_cfg(&plan->typed_body_machine_cfg);
 	std::free(plan->value_index);
@@ -11104,68 +11105,88 @@ static bool machine_plan_prefers_effect_closed_inline(
 				&& arm_branch_count == 2 && phi_count != 0));
 }
 
-static bool machine_plan_effect_closed_argument_is_used(
-		const zend_tpde_plan *callee, uint32_t argument) {
-	if (callee == nullptr || argument >= callee->argument_count
-			|| callee->argument_value_indices == nullptr) {
+/*
+ * Freeze which arguments a member's body reads: an operand or source binding
+ * whose register alias chain reaches the argument's value. A chain that
+ * leaves the value table or does not end counts as reading every argument.
+ */
+static bool freeze_effect_closed_argument_use(zend_tpde_plan *plan) {
+	if (plan->argument_count == 0) {
 		return true;
 	}
-	const int32_t argument_value =
-		callee->argument_value_indices[argument];
-	if (argument_value < 0
-			|| static_cast<uint32_t>(argument_value)
-				>= callee->value_count) {
+	plan->effect_closed_argument_used = static_cast<uint8_t *>(
+		std::calloc(plan->argument_count, sizeof(uint8_t)));
+	if (plan->effect_closed_argument_used == nullptr) {
+		return false;
+	}
+	uint8_t *used = plan->effect_closed_argument_used;
+	if (plan->argument_value_indices == nullptr) {
+		std::fill_n(used, plan->argument_count, 1);
 		return true;
 	}
-	auto reaches_argument = [&](int32_t value_index) {
+	std::vector<uint8_t> argument_value(plan->value_count, 0);
+	for (uint32_t argument = 0; argument < plan->argument_count; ++argument) {
+		const int32_t value = plan->argument_value_indices[argument];
+		if (value < 0 || static_cast<uint32_t>(value) >= plan->value_count) {
+			used[argument] = 1;
+		} else {
+			argument_value[static_cast<uint32_t>(value)] = 1;
+		}
+	}
+	bool all_used = false;
+	auto mark = [&](int32_t value_index) {
 		for (uint32_t depth = 0;
-				value_index >= 0 && depth < callee->value_count;
+				value_index >= 0 && depth < plan->value_count;
 				++depth) {
-			if (value_index == argument_value) {
-				return true;
+			if (static_cast<uint32_t>(value_index) >= plan->value_count) {
+				all_used = true;
+				return;
 			}
-			if (static_cast<uint32_t>(value_index)
-					>= callee->value_count) {
-				return true;
+			if (argument_value[static_cast<uint32_t>(value_index)] != 0) {
+				for (uint32_t argument = 0;
+						argument < plan->argument_count; ++argument) {
+					if (plan->argument_value_indices[argument]
+							== value_index) {
+						used[argument] = 1;
+					}
+				}
 			}
 			const int32_t alias =
-				callee->values[static_cast<uint32_t>(value_index)]
+				plan->values[static_cast<uint32_t>(value_index)]
 					.register_alias_value_index;
 			if (alias < 0 || alias == value_index) {
-				return false;
+				return;
 			}
 			value_index = alias;
 		}
-		return value_index >= 0;
+		if (value_index >= 0) {
+			all_used = true;
+		}
 	};
-	auto binding_reaches_argument =
-		[&](const zend_tpde_source_value_binding &binding) {
-			return binding.value_index >= 0
-				&& reaches_argument(binding.value_index);
-		};
-
 	for (uint32_t index = 0;
-			index < callee->instruction_count; ++index) {
+			!all_used && index < plan->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction =
-			callee->instructions[index];
+			plan->instructions[index];
 		for (uint32_t operand = 0;
 				operand < instruction.operand_count; ++operand) {
-			const int32_t value_index = zend_tpde_value_index(
-				callee, zend_tpde_operand_at(
-					callee, &instruction, operand));
-			if (value_index >= 0 && reaches_argument(value_index)) {
-				return true;
-			}
+			mark(zend_tpde_value_index(plan,
+				zend_tpde_operand_at(plan, &instruction, operand)));
 		}
-		if (binding_reaches_argument(instruction.source_op1_binding)
-				|| binding_reaches_argument(
-					instruction.source_op2_binding)
-				|| binding_reaches_argument(
-					instruction.source_auxiliary_binding)) {
-			return true;
-		}
+		mark(instruction.source_op1_binding.value_index);
+		mark(instruction.source_op2_binding.value_index);
+		mark(instruction.source_auxiliary_binding.value_index);
 	}
-	return false;
+	if (all_used) {
+		std::fill_n(used, plan->argument_count, 1);
+	}
+	return true;
+}
+
+static bool machine_plan_effect_closed_argument_is_used(
+		const zend_tpde_plan *callee, uint32_t argument) {
+	return callee == nullptr || argument >= callee->argument_count
+		|| callee->effect_closed_argument_used == nullptr
+		|| callee->effect_closed_argument_used[argument] != 0;
 }
 
 static bool freeze_typed_component_calls(
@@ -13275,6 +13296,15 @@ static bool freeze_component_machine_plan(
 		uint32_t component_count,
 		zend_native_diagnostic *diag) {
 	freeze_component_numeric_operands(plans, component_count);
+	for (uint32_t component = 0;
+			component < component_count; ++component) {
+		if (!freeze_effect_closed_argument_use(&plans[component])) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+				"unable to freeze component argument use");
+			return false;
+		}
+	}
 	for (uint32_t component = 0;
 			component < component_count; ++component) {
 		for (uint32_t value = 0;
