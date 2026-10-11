@@ -4659,21 +4659,18 @@ static bool zend_native_call_callable_location(
  */
 static bool zend_native_call_callable_identity(
 	const zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor,
 	const zend_native_user_call_resolution *resolution,
-	uint8_t *kind, uint8_t *receiver, uint32_t *offset)
+	uint8_t receiver, uint32_t offset, uint8_t *kind)
 {
 	const zend_function *function = resolution->function;
 	zval *callable;
 
-	if (caller->run_time_cache == NULL
-			|| !zend_native_call_callable_location(
-				caller, descriptor, receiver, offset)) {
+	if (caller->run_time_cache == NULL) {
 		return false;
 	}
-	callable = *receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL
-		? &caller->func->op_array.literals[*offset]
-		: (zval *) ((char *) caller + *offset);
+	callable = receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL
+		? &caller->func->op_array.literals[offset]
+		: (zval *) ((char *) caller + offset);
 	ZVAL_DEREF(callable);
 	if ((function->common.fn_flags & ZEND_ACC_CLOSURE) != 0
 			|| (resolution->call_info & ZEND_CALL_CLOSURE) != 0) {
@@ -5616,16 +5613,14 @@ static void zend_native_call_recorded_target_store(
 
 static void zend_native_call_recorded_target_record(
 	const zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor,
-	const zend_native_user_call_resolution *resolution)
+	const zend_native_user_call_resolution *resolution,
+	uint8_t receiver, uint32_t offset)
 {
 	const zend_function *function = resolution->function;
 	const void *key;
 	const zend_string *method = NULL;
 	const zend_class_entry *scope = NULL;
 	uint8_t kind;
-	uint8_t receiver;
-	uint32_t offset;
 	zval *callable;
 
 	if (resolution->target_kind != ZEND_NATIVE_USER_CALL_TARGET_NATIVE_USER
@@ -5636,9 +5631,7 @@ static void zend_native_call_recorded_target_record(
 			|| (function->common.fn_flags
 				& (ZEND_ACC_GENERATOR | ZEND_ACC_DEPRECATED
 					| ZEND_ACC_NODISCARD | ZEND_ACC_CALL_VIA_TRAMPOLINE))
-				!= 0
-			|| !zend_native_call_callable_location(
-				caller, descriptor, &receiver, &offset)) {
+				!= 0) {
 		return;
 	}
 	callable = receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL
@@ -5828,6 +5821,92 @@ static zend_always_inline bool zend_native_call_recorded_target_current(
 	return true;
 }
 
+/* The run-time cache of a recorded target's function, initialized by its
+ * first call. */
+static zend_always_inline void **zend_native_call_target_run_time_cache(
+	zend_function *function)
+{
+	void **run_time_cache = RUN_TIME_CACHE(&function->op_array);
+
+	if (UNEXPECTED(run_time_cache == NULL)) {
+		zend_init_func_run_time_cache(&function->op_array);
+		run_time_cache = RUN_TIME_CACHE(&function->op_array);
+	}
+	return run_time_cache;
+}
+
+/*
+ * Links the frame pushed for a recorded target as EX(call). Until the Do,
+ * its run-time cache slot carries how the target receives its parameters
+ * (zend_native_call_fast_do()) and its return value slot the run-time
+ * cache (the native call entry).
+ */
+static zend_always_inline zend_native_call_dynamic_init_result
+zend_native_call_recorded_frame_link(zend_execute_data *caller,
+	zend_execute_data *call, const zend_native_call_recorded_target *target,
+	void **run_time_cache)
+{
+	call->run_time_cache = (void **) target->receive;
+	call->return_value = (zval *) run_time_cache;
+	call->prev_execute_data = caller->call;
+	caller->call = call;
+	return (zend_native_call_dynamic_init_result) {
+		target->entry, target->do_entry};
+}
+
+/*
+ * Pushes a method frame for the receiver zend_native_call_method_receiver()
+ * found, as ZEND_INIT_METHOD_CALL does: a CV receiver is retained by the
+ * call, a temporary one moves into it.
+ */
+static zend_always_inline zend_execute_data *
+zend_native_call_method_frame_push(
+	const zend_mir_source_operand_ref *receiver, zval *slot,
+	zend_object *object, zend_function *function, uint32_t argument_count)
+{
+	zend_execute_data *call = zend_vm_stack_push_call_frame(
+		ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_HAS_THIS
+			| (slot != NULL ? ZEND_CALL_RELEASE_THIS : 0),
+		function, argument_count, object);
+
+	if (slot != NULL) {
+		if (receiver->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			GC_ADDREF(object);
+		} else {
+			ZVAL_UNDEF(slot);
+		}
+	}
+	return call;
+}
+
+/*
+ * The receiver of a method site's Init: $this, or the CV or temporary the
+ * emitter proved its operand to be (source_call_fast_static(),
+ * source_call_fast_dynamic()); NULL when it holds no object. *slot is the
+ * receiver's frame slot, NULL for $this.
+ */
+static zend_always_inline zend_object *zend_native_call_method_receiver(
+	zend_execute_data *caller, const zend_mir_source_operand_ref *receiver,
+	zval **slot)
+{
+	zval *value;
+
+	if (receiver->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		*slot = NULL;
+		return Z_TYPE(caller->This) == IS_OBJECT ? Z_OBJ(caller->This) : NULL;
+	}
+	ZEND_ASSERT(zend_native_call_source_slot(caller, receiver) != NULL);
+	if (receiver->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		value = *slot = ZEND_CALL_VAR_NUM(caller, receiver->index);
+		/* A global or static CV receiver is a reference. */
+		ZVAL_DEREF(value);
+	} else {
+		value = *slot = ZEND_CALL_VAR_NUM(caller,
+			(uint32_t) caller->func->op_array.last_var + receiver->index);
+	}
+	return Z_TYPE_P(value) == IS_OBJECT ? Z_OBJ_P(value) : NULL;
+}
+
 /*
  * The fast path of a call_user_func*() or $f(...) site: find the callable's
  * recorded native target, push its frame as ZEND_INIT_USER_CALL does and
@@ -5837,7 +5916,8 @@ static zend_always_inline bool zend_native_call_recorded_target_current(
  */
 zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor)
+	const zend_native_user_call_descriptor *descriptor,
+	uint64_t callable_location)
 {
 	const zend_native_call_dynamic_init_result miss = {NULL, NULL};
 	zend_native_call_recorded_target *target;
@@ -5845,8 +5925,6 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	zend_object *owned = NULL;
 	void *object_or_called_scope = NULL;
 	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_DYNAMIC;
-	uint8_t receiver;
-	uint32_t offset;
 	zval *slot;
 	zval *callable;
 	zend_execute_data *call;
@@ -5857,13 +5935,25 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
 		return zend_native_call_fast_dynamic_method_init(caller, descriptor);
 	}
-	if (!zend_native_call_callable_location(
-			caller, descriptor, &receiver, &offset)) {
-		return miss;
+#if ZEND_DEBUG
+	{
+		uint8_t receiver;
+		uint32_t offset;
+
+		ZEND_ASSERT(zend_native_call_callable_location(
+				caller, descriptor, &receiver, &offset)
+			&& offset == (uint32_t) callable_location
+			&& (receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL)
+				== ((callable_location
+					& ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_SLOT) == 0)
+			&& (receiver == ZEND_NATIVE_CALL_RECEIVER_TEMPORARY)
+				== ((callable_location
+					& ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_TEMPORARY) != 0));
 	}
-	slot = receiver == ZEND_NATIVE_CALL_RECEIVER_LITERAL
-		? &caller->func->op_array.literals[offset]
-		: (zval *) ((char *) caller + offset);
+#endif
+	slot = (callable_location & ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_SLOT) != 0
+		? (zval *) ((char *) caller + (uint32_t) callable_location)
+		: &caller->func->op_array.literals[(uint32_t) callable_location];
 	callable = slot;
 	ZVAL_DEREF(callable);
 	if (Z_TYPE_P(callable) == IS_STRING) {
@@ -5949,17 +6039,14 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	} else {
 		return miss;
 	}
-	void **run_time_cache = RUN_TIME_CACHE(&function->op_array);
+	void **run_time_cache = zend_native_call_target_run_time_cache(function);
 
-	if (run_time_cache == NULL) {
-		zend_init_func_run_time_cache(&function->op_array);
-		run_time_cache = RUN_TIME_CACHE(&function->op_array);
-	}
 	call = zend_vm_stack_push_call_frame(call_info, function,
 		descriptor->initial_argument_count, object_or_called_scope);
 	/* The call references the closure or receiver; a temporary callable is
 	 * consumed, handing over its reference where it holds the target. */
-	if (receiver == ZEND_NATIVE_CALL_RECEIVER_TEMPORARY) {
+	if ((callable_location & ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_TEMPORARY)
+			!= 0) {
 		if (owned != NULL && slot == callable
 				&& Z_TYPE_P(slot) == IS_OBJECT && Z_OBJ_P(slot) == owned) {
 			ZVAL_UNDEF(slot);
@@ -5973,15 +6060,8 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	} else if (owned != NULL) {
 		GC_ADDREF(owned);
 	}
-	/* Until the Do, the frame's run-time cache slot carries how the
-	 * target receives its parameters (zend_native_call_fast_do()) and
-	 * its return value slot the run-time cache (the native call entry). */
-	call->run_time_cache = (void **) target->receive;
-	call->return_value = (zval *) run_time_cache;
-	call->prev_execute_data = caller->call;
-	caller->call = call;
-	return (zend_native_call_dynamic_init_result) {
-		target->entry, target->do_entry};
+	return zend_native_call_recorded_frame_link(
+		caller, call, target, run_time_cache);
 }
 
 /*
@@ -6058,49 +6138,29 @@ zend_native_call_dynamic_init_result zend_native_call_fast_method_init(
 	const zend_native_call_dynamic_init_result miss = {NULL, NULL};
 	const zend_native_user_call_site_header *header =
 		ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
-	const zend_op_array *op_array = &caller->func->op_array;
 	const zend_mir_source_operand_ref *receiver = &descriptor->init_op1;
-	const uint32_t name_index = descriptor->init_op2.index + 1;
 	zend_native_call_recorded_target *target;
 	zend_object *object;
-	zval *slot = NULL;
-	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_HAS_THIS;
+	zval *slot;
 	const zend_string *name;
 	void **run_time_cache;
 	zend_execute_data *call;
 
 	if (ZEND_OBSERVER_ENABLED || EG(exception) != NULL
-			|| header->fast_ref_mask != 0
-			|| descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-			|| name_index >= (uint32_t) op_array->last_literal) {
+			|| header->fast_ref_mask != 0) {
 		return miss;
 	}
-	if (receiver->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		if (Z_TYPE(caller->This) != IS_OBJECT) {
-			return miss;
-		}
-		object = Z_OBJ(caller->This);
-	} else {
-		slot = zend_native_call_source_slot(caller, receiver);
-		if (slot == NULL) {
-			return miss;
-		}
-		if (receiver->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			zval *value = slot;
-
-			ZVAL_DEREF(value);
-			if (Z_TYPE_P(value) != IS_OBJECT) {
-				return miss;
-			}
-			object = Z_OBJ_P(value);
-		} else if (Z_TYPE_P(slot) == IS_OBJECT) {
-			object = Z_OBJ_P(slot);
-		} else {
-			return miss;
-		}
-		call_info |= ZEND_CALL_RELEASE_THIS;
+	object = zend_native_call_method_receiver(caller, receiver, &slot);
+	if (object == NULL) {
+		return miss;
 	}
-	name = Z_STR(op_array->literals[name_index]);
+	/* The site names its method by a literal (source_call_fast_static()),
+	 * whose lowercased copy follows it. */
+	ZEND_ASSERT(descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& descriptor->init_op2.index + 1
+			< (uint32_t) caller->func->op_array.last_literal);
+	name = Z_STR(caller->func->op_array.literals[
+		descriptor->init_op2.index + 1]);
 	target = zend_native_call_recorded_target_slot(
 		object->ce, name, caller->func->common.scope);
 	if (target->key != object->ce || target->method != name
@@ -6111,31 +6171,11 @@ zend_native_call_dynamic_init_result zend_native_call_fast_method_init(
 			|| !zend_native_call_recorded_target_current(target)) {
 		return miss;
 	}
-	run_time_cache = RUN_TIME_CACHE(&target->function->op_array);
-	if (run_time_cache == NULL) {
-		zend_init_func_run_time_cache(&target->function->op_array);
-		run_time_cache = RUN_TIME_CACHE(&target->function->op_array);
-	}
-	call = zend_vm_stack_push_call_frame(call_info, target->function,
-		descriptor->argument_count, object);
-	/* A CV receiver is retained by the call, a temporary one moves into
-	 * it, as ZEND_INIT_METHOD_CALL does. */
-	if (slot != NULL) {
-		if (receiver->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			GC_ADDREF(object);
-		} else {
-			ZVAL_UNDEF(slot);
-		}
-	}
-	/* Until the Do, the frame's run-time cache slot carries how the
-	 * target receives its parameters and its return value slot the
-	 * run-time cache, as for a dynamic fast frame. */
-	call->run_time_cache = (void **) target->receive;
-	call->return_value = (zval *) run_time_cache;
-	call->prev_execute_data = caller->call;
-	caller->call = call;
-	return (zend_native_call_dynamic_init_result) {
-		target->entry, target->do_entry};
+	run_time_cache = zend_native_call_target_run_time_cache(target->function);
+	call = zend_native_call_method_frame_push(receiver, slot, object,
+		target->function, descriptor->argument_count);
+	return zend_native_call_recorded_frame_link(
+		caller, call, target, run_time_cache);
 }
 
 /*
@@ -6193,45 +6233,24 @@ zend_native_call_fast_dynamic_method_init(
 	const zend_mir_source_operand_ref *receiver = &descriptor->init_op1;
 	zend_native_call_recorded_target *target;
 	zend_object *object;
-	zval *slot = NULL;
+	zval *slot;
 	zval *name;
-	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION | ZEND_CALL_HAS_THIS;
 	void **run_time_cache;
 	zend_execute_data *call;
 
-	if (descriptor->init_op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-			|| (name = zend_native_call_source_slot(
-				caller, &descriptor->init_op2)) == NULL) {
-		return miss;
-	}
+	/* The emitter takes this path for a method named by a CV
+	 * (source_call_fast_dynamic()). */
+	ZEND_ASSERT(descriptor->init_op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		&& zend_native_call_source_slot(caller, &descriptor->init_op2)
+			!= NULL);
+	name = ZEND_CALL_VAR_NUM(caller, descriptor->init_op2.index);
 	ZVAL_DEREF(name);
 	if (Z_TYPE_P(name) != IS_STRING || !ZSTR_IS_INTERNED(Z_STR_P(name))) {
 		return miss;
 	}
-	if (receiver->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-		if (Z_TYPE(caller->This) != IS_OBJECT) {
-			return miss;
-		}
-		object = Z_OBJ(caller->This);
-	} else {
-		slot = zend_native_call_source_slot(caller, receiver);
-		if (slot == NULL) {
-			return miss;
-		}
-		if (receiver->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			zval *value = slot;
-
-			ZVAL_DEREF(value);
-			if (Z_TYPE_P(value) != IS_OBJECT) {
-				return miss;
-			}
-			object = Z_OBJ_P(value);
-		} else if (Z_TYPE_P(slot) == IS_OBJECT) {
-			object = Z_OBJ_P(slot);
-		} else {
-			return miss;
-		}
-		call_info |= ZEND_CALL_RELEASE_THIS;
+	object = zend_native_call_method_receiver(caller, receiver, &slot);
+	if (object == NULL) {
+		return miss;
 	}
 	target = zend_native_call_recorded_target_slot(
 		object->ce, Z_STR_P(name), caller->func->common.scope);
@@ -6242,26 +6261,11 @@ zend_native_call_fast_dynamic_method_init(
 			|| !zend_native_call_recorded_target_current(target)) {
 		return miss;
 	}
-	run_time_cache = RUN_TIME_CACHE(&target->function->op_array);
-	if (run_time_cache == NULL) {
-		zend_init_func_run_time_cache(&target->function->op_array);
-		run_time_cache = RUN_TIME_CACHE(&target->function->op_array);
-	}
-	call = zend_vm_stack_push_call_frame(call_info, target->function,
-		descriptor->initial_argument_count, object);
-	if (slot != NULL) {
-		if (receiver->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			GC_ADDREF(object);
-		} else {
-			ZVAL_UNDEF(slot);
-		}
-	}
-	call->run_time_cache = (void **) target->receive;
-	call->return_value = (zval *) run_time_cache;
-	call->prev_execute_data = caller->call;
-	caller->call = call;
-	return (zend_native_call_dynamic_init_result) {
-		target->entry, target->do_entry};
+	run_time_cache = zend_native_call_target_run_time_cache(target->function);
+	call = zend_native_call_method_frame_push(receiver, slot, object,
+		target->function, descriptor->initial_argument_count);
+	return zend_native_call_recorded_frame_link(
+		caller, call, target, run_time_cache);
 }
 
 /* A literal, CV, temporary or VAR operand of a fast send; *temporary
@@ -6496,8 +6500,12 @@ static void zend_native_call_resolution_cache_store(
 	 * a closure's function lives in its object, and the address of a freed
 	 * closure, receiver or name string identifies nothing. */
 	if (dynamic) {
+		if (!zend_native_call_callable_location(caller, descriptor,
+				&callable_receiver, &callable_offset)) {
+			return;
+		}
 		zend_native_call_recorded_target_record(
-			caller, descriptor, resolution);
+			caller, resolution, callable_receiver, callable_offset);
 	} else if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL
 			&& descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		zend_native_call_recorded_dynamic_method_record(
@@ -6506,9 +6514,8 @@ static void zend_native_call_resolution_cache_store(
 		zend_native_call_recorded_method_record(
 			caller, descriptor, resolution);
 	}
-	if (dynamic && !zend_native_call_callable_identity(caller, descriptor,
-				resolution, &callable_kind, &callable_receiver,
-				&callable_offset)) {
+	if (dynamic && !zend_native_call_callable_identity(caller, resolution,
+				callable_receiver, callable_offset, &callable_kind)) {
 		return;
 	}
 	if ((resolution->target_kind != ZEND_NATIVE_USER_CALL_TARGET_NATIVE_USER
@@ -9765,15 +9772,19 @@ static bool zend_native_call_fast_receive_frame(
 	const bool variadic = (op_array->fn_flags & ZEND_ACC_VARIADIC) != 0;
 	uint32_t index;
 
-	if (receive == NULL
-			|| receive->state != ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE
-			|| receive->num_args != declared || run_time_cache == NULL
+	/* A published site's receive and run-time cache, or the ones a dynamic
+	 * Init found for its target's cell; a closure shares its declaring
+	 * function's parameters. */
+	ZEND_ASSERT(receive != NULL && run_time_cache != NULL);
+	if (receive->state != ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE
+			|| supplied < receive->inline_defaults_from
 			|| (ZEND_CALL_INFO(callee) & (ZEND_CALL_HAS_EXTRA_NAMED_PARAMS
 				| ZEND_CALL_MAY_HAVE_UNDEF)) != 0
 			|| (variadic
 				&& ZEND_TYPE_IS_SET(op_array->arg_info[declared].type))) {
 		return false;
 	}
+	ZEND_ASSERT(receive->num_args == declared);
 	for (index = 0; index < received; index++) {
 		const zval *argument = ZEND_CALL_ARG(callee, index + 1);
 

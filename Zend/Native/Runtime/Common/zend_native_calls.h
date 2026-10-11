@@ -976,9 +976,19 @@ typedef struct _zend_native_call_dynamic_init_result {
 	zend_native_frame_entry_t entry;
 	void *do_entry;
 } zend_native_call_dynamic_init_result;
+/*
+ * Where a call_user_func*() or $f(...) site's callable lives, which its
+ * emitter passes to zend_native_call_fast_dynamic_init(): the low 32 bits
+ * are a literal's index, or with CALLABLE_SLOT a frame slot's byte offset;
+ * CALLABLE_TEMPORARY marks a TMP or VAR slot the Init consumes. A variable
+ * method site passes 0.
+ */
+#define ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_SLOT (UINT64_C(1) << 32)
+#define ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_TEMPORARY (UINT64_C(1) << 33)
 zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor);
+	const zend_native_user_call_descriptor *descriptor,
+	uint64_t callable_location);
 zend_native_call_dynamic_init_result zend_native_call_fast_method_init(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor);

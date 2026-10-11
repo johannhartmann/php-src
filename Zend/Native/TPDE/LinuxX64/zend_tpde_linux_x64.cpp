@@ -838,6 +838,21 @@ class ZendCompilerX64 final
 				|| call.call_argument_count != descriptor->argument_count) {
 			return false;
 		}
+		/* The callable is a literal, a CV or a temporary, whose location
+		 * the Init takes (source_call_fast_callable_location()). */
+		if (!variable_method
+				&& descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& ((descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& descriptor->init_op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| (descriptor->init_op2.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_CV
+						&& descriptor->init_op2.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						&& descriptor->init_op2.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR))) {
+			return false;
+		}
 		if (descriptor->do_result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
 				&& ((descriptor->do_result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 						&& descriptor->do_result.kind
@@ -886,6 +901,29 @@ class ZendCompilerX64 final
 	 * temporary. The runtime publishes a site's target only when that target
 	 * takes exactly these arguments by value.
 	 */
+	/*
+	 * The callable location zend_native_call_fast_dynamic_init() takes for
+	 * a call_user_func*() or $f(...) site (ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_*),
+	 * 0 for a variable method site.
+	 */
+	uint64_t source_call_fast_callable_location(
+			const zend_native_user_call_descriptor *descriptor) const {
+		const zend_mir_source_operand_ref &callable = descriptor->init_op2;
+		if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
+			return 0;
+		}
+		if (callable.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			return callable.index;
+		}
+		const bool temporary = callable.slot_kind != ZEND_MIR_SOURCE_SLOT_CV;
+		return (uint64_t{ZEND_CALL_FRAME_SLOT} + callable.index
+				+ (temporary ? uint64_t{
+					adaptor->plan()->source_frame_variable_count} : 0))
+				* sizeof(zval)
+			| ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_SLOT
+			| (temporary ? ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_TEMPORARY : 0);
+	}
+
 	bool source_call_fast_eligible(const zend_tpde_instruction &call) const {
 		return source_call_fast_static(call) || source_call_fast_dynamic(call);
 	}
@@ -6746,6 +6784,8 @@ bool ZendCompilerX64::compile_inst_impl(
 							this, std::move(descriptor_scratch));
 						builder.add_arg(std::move(descriptor_part),
 							tpde::CCAssignment{});
+						add_const_arg(builder,
+							source_call_fast_callable_location(descriptor), 8);
 						builder.call(runtime_symbol(
 							ZEND_NATIVE_HELPER_CALL_FAST_DYNAMIC_INIT));
 						ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
