@@ -2432,8 +2432,9 @@ struct zend_tpde_plan {
 	zend_tpde_local_abi_type typed_body_return_abi;
 	uint8_t *typed_component_call_eligible;
 	uint8_t *effect_closed_inline_eligible;
-	/* Per argument: whether this member's body reads it. An effect-closed
-	 * inline clone neither checks nor transports an unread argument. */
+	/* Per argument: whether an effect-closed inline clone of this member
+	 * needs it, because its body reads it or its receive checks its type.
+	 * The clone neither checks nor transports any other argument. */
 	uint8_t *effect_closed_argument_used;
 	bool typed_body_eligible;
 	bool has_register_component_results;

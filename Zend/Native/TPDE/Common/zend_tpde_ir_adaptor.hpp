@@ -1506,6 +1506,13 @@ private:
 						&argument)) {
 				return fail_inline();
 			}
+			/* Neither transport nor unbox an argument an effect-closed body
+			 * never reads; the planner left it unchecked too. */
+			if (effect_closed_inline
+					&& callee->effect_closed_argument_used != nullptr
+					&& callee->effect_closed_argument_used[argument_index] == 0) {
+				continue;
+			}
 			const zend_tpde_value &callee_value =
 				callee->values[static_cast<uint32_t>(callee_value_index)];
 			const TypedBodyAbiType callee_argument_abi =

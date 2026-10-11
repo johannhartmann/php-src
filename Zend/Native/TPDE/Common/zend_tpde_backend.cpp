@@ -6675,6 +6675,8 @@ bool initialize_plan(
 				* sizeof(*plan->argument_value_indices)));
 	plan->argument_abi = static_cast<zend_tpde_local_abi_type *>(
 		std::calloc(plan->argument_count, sizeof(*plan->argument_abi)));
+	plan->effect_closed_argument_used = static_cast<uint8_t *>(
+		std::calloc(plan->argument_count, sizeof(uint8_t)));
 	for (uint32_t i = 0;
 			i < plan->argument_count && plan->argument_value_indices != nullptr;
 			++i) {
@@ -6718,7 +6720,8 @@ bool initialize_plan(
 				&& (plan->values == nullptr || plan->value_index == nullptr))
 			|| (plan->argument_count != 0
 				&& (plan->argument_value_indices == nullptr
-					|| plan->argument_abi == nullptr))
+					|| plan->argument_abi == nullptr
+					|| plan->effect_closed_argument_used == nullptr))
 			|| (plan->instruction_count != 0
 				&& (plan->instructions == nullptr
 					|| plan->instruction_index == nullptr))
@@ -7292,6 +7295,14 @@ bool initialize_plan(
 				arg_info == nullptr ? nullptr : &arg_info->type,
 				by_reference,
 				ZEND_TPDE_LOCAL_ABI_TRANSFER_BORROWED);
+		/* An effect-closed clone has no receive: it needs every argument
+		 * whose declared type the receive would check or coerce. */
+		plan->effect_closed_argument_used[argument] = arg_info == nullptr
+			? source_op_array == nullptr
+				|| argument >= source_op_array->num_args
+			: ZEND_TYPE_IS_SET(arg_info->type)
+				&& (ZEND_TYPE_FULL_MASK(arg_info->type) & MAY_BE_ANY)
+					!= MAY_BE_ANY;
 		if (arg_info != nullptr && ZEND_TYPE_IS_SET(arg_info->type)
 				&& plan->argument_abi[argument].machine_kind
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
@@ -11106,23 +11117,20 @@ static bool machine_plan_prefers_effect_closed_inline(
 }
 
 /*
- * Freeze which arguments a member's body reads: an operand or source binding
- * whose register alias chain reaches the argument's value. A chain that
- * leaves the value table or does not end counts as reading every argument.
+ * Add the arguments a member's body reads to those its receive checks: an
+ * operand or source binding whose register alias chain reaches the
+ * argument's value. A chain that leaves the value table or does not end
+ * counts as reading every argument.
  */
-static bool freeze_effect_closed_argument_use(zend_tpde_plan *plan) {
-	if (plan->argument_count == 0) {
-		return true;
-	}
-	plan->effect_closed_argument_used = static_cast<uint8_t *>(
-		std::calloc(plan->argument_count, sizeof(uint8_t)));
-	if (plan->effect_closed_argument_used == nullptr) {
-		return false;
+static void freeze_effect_closed_argument_use(zend_tpde_plan *plan) {
+	if (plan->argument_count == 0
+			|| plan->effect_closed_argument_used == nullptr) {
+		return;
 	}
 	uint8_t *used = plan->effect_closed_argument_used;
 	if (plan->argument_value_indices == nullptr) {
 		std::fill_n(used, plan->argument_count, 1);
-		return true;
+		return;
 	}
 	std::vector<uint8_t> argument_value(plan->value_count, 0);
 	for (uint32_t argument = 0; argument < plan->argument_count; ++argument) {
@@ -11179,7 +11187,6 @@ static bool freeze_effect_closed_argument_use(zend_tpde_plan *plan) {
 	if (all_used) {
 		std::fill_n(used, plan->argument_count, 1);
 	}
-	return true;
 }
 
 static bool machine_plan_effect_closed_argument_is_used(
@@ -13298,12 +13305,7 @@ static bool freeze_component_machine_plan(
 	freeze_component_numeric_operands(plans, component_count);
 	for (uint32_t component = 0;
 			component < component_count; ++component) {
-		if (!freeze_effect_closed_argument_use(&plans[component])) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-				"unable to freeze component argument use");
-			return false;
-		}
+		freeze_effect_closed_argument_use(&plans[component]);
 	}
 	for (uint32_t component = 0;
 			component < component_count; ++component) {
