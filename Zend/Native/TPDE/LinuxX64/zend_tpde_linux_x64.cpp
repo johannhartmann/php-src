@@ -21050,6 +21050,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(TEST64rr, cache_reg, cache_reg);
 						generate_raw_jump(Jump::je, call_slow_target());
 					}
+					int32_t called_scope_slot = 0;
 					if (call.direct_call->receiver_kind
 							== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
 						ASM(MOVZXr32m8, first_reg,
@@ -21083,6 +21084,15 @@ bool ZendCompilerX64::compile_inst_impl(
 						label_place(called_scope_ready);
 						ASM(TEST64rr, first_reg, first_reg);
 						generate_raw_jump(Jump::je, call_slow_target());
+						/* The walk below consumes the register; the callee's
+						 * This takes the called scope from the slot. */
+						called_scope_slot = inst_stack_slot(sizeof(void *));
+						if (called_scope_slot >= 0) {
+							return false;
+						}
+						ASM(MOV64mr,
+							FE_MEM(FE_BP, 0, FE_NOREG, called_scope_slot),
+							first_reg);
 						load_callee_function(second_reg);
 						ASM(MOV64rm, second_reg,
 							FE_MEM(second_reg, 0, FE_NOREG,
@@ -21425,25 +21435,10 @@ bool ZendCompilerX64::compile_inst_impl(
 						if ((call.direct_call->flags
 								& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
 								!= 0) {
+							/* The called scope the receiver check derived. */
+							ZEND_ASSERT(called_scope_slot < 0);
 							ASM(MOV64rm, second_reg,
-								FE_MEM(frame_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zend_execute_data, This))));
-							ASM(MOVZXr32m8, first_reg,
-								FE_MEM(frame_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zend_execute_data, This)
-											+ offsetof(zval, u1.type_info))));
-							ASM(CMP32ri, first_reg, IS_OBJECT);
-							auto called_scope_ready =
-								text_writer.label_create();
-							generate_raw_jump(
-								Jump::jne, called_scope_ready);
-							ASM(MOV64rm, second_reg,
-								FE_MEM(second_reg, 0, FE_NOREG,
-									static_cast<int32_t>(
-										offsetof(zend_object, ce))));
-							label_place(called_scope_ready);
+								FE_MEM(FE_BP, 0, FE_NOREG, called_scope_slot));
 						} else {
 							ASM(MOV64rm, second_reg,
 								FE_MEM(descriptor_reg, 0, FE_NOREG,
