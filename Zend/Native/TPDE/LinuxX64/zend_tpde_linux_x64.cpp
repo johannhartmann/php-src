@@ -10446,22 +10446,74 @@ bool ZendCompilerX64::compile_inst_impl(
 				IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
 			const uint32_t result_offset =
 				static_cast<uint32_t>(frameless_direct.slots);
+			/*
+			 * The literal table of literal arguments, from the EX(func) the
+			 * opline publication loads: held in a free register that no
+			 * argument takes (none of RAX, R10, R11 is one), until the last
+			 * argument. Without one free, each literal loads it.
+			 */
+			std::optional<ScratchReg> literals;
+			AsmReg literals_reg = AsmReg::make_invalid();
+			if (((descriptor >> ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT)
+					& ((uint64_t{1} << count) - 1)) != 0) {
+				for (const AsmReg candidate :
+						{AsmReg{AsmReg::AX}, AsmReg{AsmReg::R10},
+							AsmReg{AsmReg::R11}}) {
+					if (!register_file.is_used(candidate)
+							&& ((register_file.allocatable
+								>> candidate.id()) & 1) != 0) {
+						literals.emplace(this);
+						literals_reg = literals->alloc_specific(candidate);
+						break;
+					}
+				}
+			}
 			{
 				ScratchReg opline{this};
 				const AsmReg opline_reg = opline.alloc_gp();
 				const uint64_t opline_offset =
 					uint64_t{operation.source_position_id} * sizeof(zend_op);
-				emit_publish_opline(frame_reg, opline_reg,
-					static_cast<int32_t>(opline_offset));
+				if (literals_reg.valid()) {
+					ASM(MOV64rm, literals_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, func))));
+					ASM(MOV64rm, opline_reg, FE_MEM(literals_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_op_array, opcodes))));
+					if (opline_offset != 0) {
+						ASM(ADD64ri, opline_reg,
+							static_cast<int32_t>(opline_offset));
+					}
+					ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_execute_data, opline))), opline_reg);
+					ASM(MOV64rm, literals_reg, FE_MEM(literals_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_op_array, literals))));
+				} else {
+					emit_publish_opline(frame_reg, opline_reg,
+						static_cast<int32_t>(opline_offset));
+				}
 				ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(result_offset
 						+ offsetof(zval, u1.type_info))), IS_NULL);
 			}
 			auto address_arg = [&](uint32_t offset, bool literal,
 					bool may_be_reference) {
+				/* Built in its argument register when that is free: the
+				 * call then moves nothing. */
 				ScratchReg address{this};
-				const AsmReg address_reg = address.alloc_gp();
-				if (literal) {
+				const AsmReg argument = next_gp_argument(&assigner);
+				const AsmReg address_reg = argument.valid()
+						&& !register_file.is_used(argument)
+						&& ((register_file.allocatable >> argument.id()) & 1)
+							!= 0
+					? address.alloc_specific(argument) : address.alloc_gp();
+				if (literal && literals_reg.valid()) {
+					ASM(LEA64rm, address_reg, FE_MEM(literals_reg, 0,
+						FE_NOREG, static_cast<int32_t>(
+							offset * sizeof(zval))));
+				} else if (literal) {
 					emit_literal_base(address_reg, frame_reg);
 					ASM(LEA64rm, address_reg, FE_MEM(address_reg, 0,
 						FE_NOREG, static_cast<int32_t>(
@@ -10505,6 +10557,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				address_arg(offsets[index], literal,
 					!literal && (may_be & MAY_BE_REF) != 0);
+			}
+			if (literals.has_value()) {
+				literals->reset();
 			}
 			/* After the arguments, which hold the argument registers. */
 			ScratchReg target{this};
