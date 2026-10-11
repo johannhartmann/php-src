@@ -5106,6 +5106,7 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_op_array(
 	zend_mir_control_flow_map map;
 	zend_mir_source_call_view calls;
 	zend_mir_source_call_target_resolver resolver;
+	void *call_inventory;
 	uint32_t index;
 
 	memset(&integration, 0, sizeof(integration));
@@ -5118,7 +5119,7 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_op_array(
 			ZEND_MIR_LOWERING_REJECTED, ZEND_MIRL_INVALID_SOURCE);
 	}
 	status = zend_mir_zend_source_preflight(
-		script, op_array, ssa, &frontend_diagnostic);
+		script, op_array, ssa, &frontend_diagnostic, &call_inventory);
 	if (status != ZEND_MIR_LOWERING_SUCCESS) {
 		return zend_mir_lowering_make_result(
 			status, frontend_diagnostic.code);
@@ -5134,8 +5135,10 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_op_array(
 		&frontend_diagnostic);
 	if (status == ZEND_MIR_LOWERING_SUCCESS) {
 		status = zend_mir_zend_source_enable(
-			&integration.source, script, op_array, ssa,
+			&integration.source, script, op_array, ssa, call_inventory,
 			&frontend_diagnostic);
+	} else {
+		zend_mir_zend_source_release_call_inventory(call_inventory);
 	}
 	if (status == ZEND_MIR_LOWERING_SUCCESS
 			&& !zend_mir_prepare_overlay(

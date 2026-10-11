@@ -288,6 +288,7 @@ static bool zend_mir_prior_call_result(
 	return false;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_is_call_init(uint32_t opcode)
 {
 	switch (opcode) {
@@ -603,6 +604,7 @@ done:
 	free(stack);
 	return result;
 }
+#endif
 
 static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 	zend_mir_lowering_context *context,
@@ -757,7 +759,6 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 	for (index = 0; index < plan->site_count; index++) {
 		zend_mir_source_call_site_ref *site = &plan->sites[index];
 		zend_mir_call_plan_entry *entry = &plan->entries[index];
-		zend_mir_source_opcode_ref do_opcode;
 		bool site_borrows_scalars;
 		uint32_t argument_index;
 		if (!calls->call_site_at(calls->context, index, site)
@@ -766,14 +767,23 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 				|| site->argument_span.count
 					> plan->argument_count - site->argument_span.offset
 				|| site->do_opline_index
-					>= calls->source_opcode_count(calls->context)
-				|| !calls->source_opcode_at(
-					calls->context, site->do_opline_index, &do_opcode)
-				|| do_opcode.opline_index != site->do_opline_index
-				|| memcmp(&site->result_operand, &do_opcode.result,
-					sizeof(site->result_operand)) != 0) {
+					>= calls->source_opcode_count(calls->context)) {
 			return ZEND_MIRL_MALFORMED_CALL_SEQUENCE;
 		}
+#if !defined(NDEBUG)
+		{
+			/* The inventory took the result operand from this decode. */
+			zend_mir_source_opcode_ref do_opcode;
+
+			if (!calls->source_opcode_at(
+						calls->context, site->do_opline_index, &do_opcode)
+					|| do_opcode.opline_index != site->do_opline_index
+					|| memcmp(&site->result_operand, &do_opcode.result,
+						sizeof(site->result_operand)) != 0) {
+				return ZEND_MIRL_MALFORMED_CALL_SEQUENCE;
+			}
+		}
+#endif
 		/*
 		 * A call instruction either carries every argument as a machine
 		 * operand or carries none of them and lets the source-backed runtime
@@ -1008,6 +1018,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 		entry->diagnostic_code = ZEND_MIRL_OK;
 		entry->argument_span = site->argument_span;
 	}
+#if !defined(NDEBUG)
+	/* The frontend inventory builds sites, arguments and nesting with a call
+	 * stack and preflight checks the target/opcode pairs, so the sequence
+	 * grammar holds by construction. */
 	{
 		zend_mir_lowering_diagnostic_code grammar =
 			zend_mir_source_sequence(
@@ -1016,6 +1030,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 			return grammar;
 		}
 	}
+#endif
 	plan->public_plan.entries = plan->entries;
 	plan->public_plan.count = plan->site_count;
 	plan->public_plan.complete = true;

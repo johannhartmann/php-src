@@ -88,14 +88,17 @@ typedef struct _zend_mir_zend_source {
 void zend_mir_zend_source_reset(zend_mir_zend_source *source);
 
 /*
- * Add the process-local call inventory to an initialized source.
- * The original (unprojected) op-array and SSA remain borrowed until release.
+ * Add the process-local call inventory built by
+ * zend_mir_zend_source_preflight() to an initialized source. The source takes
+ * ownership of the inventory, also on failure. The original (unprojected)
+ * op-array and SSA remain borrowed until release.
  */
 zend_mir_lowering_status zend_mir_zend_source_enable(
 	zend_mir_zend_source *source,
 	const struct _zend_script *script,
 	const struct _zend_op_array *op_array,
 	const struct _zend_ssa *ssa,
+	void *call_inventory,
 	zend_mir_frontend_diagnostic *diagnostic);
 
 void zend_mir_zend_source_release(zend_mir_zend_source *source);

@@ -146,11 +146,19 @@ bool zend_mir_frontend_source_position_at(
 	uint32_t index,
 	zend_mir_source_position_ref *out);
 
+/*
+ * Build and check the call inventory before the source is initialized. On
+ * success the caller owns *call_inventory_out and passes it to
+ * zend_mir_zend_source_enable() or releases it.
+ */
 zend_mir_lowering_status zend_mir_zend_source_preflight(
 	const zend_script *script,
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
-	zend_mir_frontend_diagnostic *diagnostic);
+	zend_mir_frontend_diagnostic *diagnostic,
+	void **call_inventory_out);
+
+void zend_mir_zend_source_release_call_inventory(void *call_inventory);
 
 zend_function *zend_mir_zend_source_resolve_user_method_call(
 	const zend_script *script,

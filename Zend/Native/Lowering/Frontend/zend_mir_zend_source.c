@@ -2876,6 +2876,22 @@ static bool zend_mir_frontend_call_result_is_scalar(
 		&& ssa->ops[opline_index].result_def == (int) ssa_variable_id;
 }
 
+static void zend_mir_frontend_attach_call_inventory(
+	zend_mir_zend_source *source, zend_mir_frontend_call_inventory *inventory,
+	const zend_script *script, const zend_op_array *op_array,
+	const zend_ssa *ssa)
+{
+	source->call_inventory = inventory;
+	source->call_op_array = op_array;
+	source->call_ssa = ssa;
+	source->script = script;
+	source->call_site_count = inventory->site_count;
+	source->call_target_count = inventory->target_count;
+	source->call_argument_count = inventory->argument_count;
+	source->call_parameter_mode_count = inventory->parameter_mode_count;
+	source->calls_enabled = true;
+}
+
 static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 	zend_mir_zend_source *source, const zend_script *script,
 	const zend_op_array *op_array, const zend_ssa *ssa,
@@ -3154,15 +3170,8 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 	}
 	free(discarded_sites);
 	free(stack);
-	source->call_inventory = inventory;
-	source->call_op_array = op_array;
-	source->call_ssa = ssa;
-	source->script = script;
-	source->call_site_count = inventory->site_count;
-	source->call_target_count = inventory->target_count;
-	source->call_argument_count = inventory->argument_count;
-	source->call_parameter_mode_count = inventory->parameter_mode_count;
-	source->calls_enabled = true;
+	zend_mir_frontend_attach_call_inventory(
+		source, inventory, script, op_array, ssa);
 	return ZEND_MIR_LOWERING_SUCCESS;
 
 malformed:
@@ -3315,7 +3324,7 @@ bool zend_mir_frontend_result_fact_at(
 static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 	const zend_script *script, const zend_op_array *op_array,
 	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic,
-	bool allow_empty_calls)
+	bool allow_empty_calls, void **call_inventory_out)
 {
 	zend_mir_zend_source source;
 	zend_mir_frontend_call_inventory *inventory;
@@ -3526,30 +3535,39 @@ static zend_mir_lowering_status zend_mir_zend_source_preflight_direct_calls(
 			return ZEND_MIR_LOWERING_DEFERRED;
 		}
 	}
+	*call_inventory_out = source.call_inventory;
+	source.call_inventory = NULL;
 	zend_mir_zend_source_release(&source);
 	return ZEND_MIR_LOWERING_SUCCESS;
 }
 
 zend_mir_lowering_status zend_mir_zend_source_preflight(
 	const zend_script *script, const zend_op_array *op_array,
-	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic)
+	const zend_ssa *ssa, zend_mir_frontend_diagnostic *diagnostic,
+	void **call_inventory_out)
 {
+	*call_inventory_out = NULL;
 	return zend_mir_zend_source_preflight_direct_calls(
-		script, op_array, ssa, diagnostic, true);
+		script, op_array, ssa, diagnostic, true, call_inventory_out);
+}
+
+void zend_mir_zend_source_release_call_inventory(void *call_inventory)
+{
+	zend_mir_frontend_release_call_inventory(call_inventory);
 }
 
 zend_mir_lowering_status zend_mir_zend_source_enable(
 	zend_mir_zend_source *source, const zend_script *script,
 	const zend_op_array *op_array, const zend_ssa *ssa,
-	zend_mir_frontend_diagnostic *diagnostic)
+	void *call_inventory, zend_mir_frontend_diagnostic *diagnostic)
 {
-	zend_mir_frontend_call_inventory *inventory;
-	zend_mir_lowering_status status;
+	zend_mir_frontend_call_inventory *inventory = call_inventory;
 	zend_mir_value_fact_ref fact;
 	uint32_t index;
 
 	if (!zend_mir_source_is_initialized(source) || source->calls_enabled || script == NULL || op_array == NULL || ssa == NULL
-			|| ssa->cfg.blocks == NULL) {
+			|| ssa->cfg.blocks == NULL || inventory == NULL) {
+		zend_mir_frontend_release_call_inventory(inventory);
 		zend_mir_frontend_set_diagnostic(
 			diagnostic, ZEND_MIR_LOWERING_REJECTED,
 			ZEND_MIRL_INVALID_SOURCE,
@@ -3558,12 +3576,8 @@ zend_mir_lowering_status zend_mir_zend_source_enable(
 			ZEND_MIR_ID_INVALID);
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	status = zend_mir_frontend_build_call_inventory(
-		source, script, op_array, ssa, diagnostic);
-	if (status != ZEND_MIR_LOWERING_SUCCESS) {
-		return status;
-	}
-	inventory = source->call_inventory;
+	zend_mir_frontend_attach_call_inventory(
+		source, inventory, script, op_array, ssa);
 	inventory->base_value_fact_count = source->value_fact_count;
 	for (index = 0; index < inventory->site_count; index++) {
 		if (zend_mir_id_is_valid(
