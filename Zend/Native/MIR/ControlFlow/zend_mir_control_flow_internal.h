@@ -20,7 +20,6 @@ typedef struct _zend_mir_control_flow_cycle_graph {
 typedef struct _zend_mir_control_flow_cycle_analysis {
 	uint8_t *edge_statepoints;
 	uint32_t edge_count;
-	bool has_irreducible_cycle;
 } zend_mir_control_flow_cycle_analysis;
 
 typedef struct _zend_mir_control_flow_map_storage {

@@ -103,6 +103,7 @@ bool zend_mir_control_flow_cycle_analysis_init(
 	uint32_t order_count = 0;
 	uint32_t component_count = 0;
 	uint32_t i;
+	bool any_irreducible = false;
 	bool success = false;
 
 	if (analysis == NULL || graph == NULL
@@ -123,6 +124,37 @@ bool zend_mir_control_flow_cycle_analysis_init(
 		block_count + 1, sizeof(*out_offsets));
 	in_offsets = zend_mir_cf_allocate(
 		block_count + 1, sizeof(*in_offsets));
+	if ((edge_count != 0 && analysis->edge_statepoints == NULL)
+			|| out_offsets == NULL || in_offsets == NULL) {
+		goto done;
+	}
+	for (i = 0; i < block_count; i++) {
+		bool irreducible;
+		if (!graph->block_at(graph->context, i, &irreducible)) {
+			goto done;
+		}
+		any_irreducible |= irreducible;
+	}
+	for (i = 0; i < edge_count; i++) {
+		uint32_t from;
+		uint32_t to;
+		bool requires_statepoint;
+		if (!graph->edge_at(graph->context, i, &from, &to,
+				&requires_statepoint)
+				|| from >= block_count || to >= block_count
+				|| out_offsets[from + 1] == UINT32_MAX
+				|| in_offsets[to + 1] == UINT32_MAX) {
+			goto done;
+		}
+		out_offsets[from + 1]++;
+		in_offsets[to + 1]++;
+		analysis->edge_statepoints[i] = requires_statepoint;
+	}
+	/* Only cycles through irreducible blocks add statepoints. */
+	if (!any_irreducible) {
+		success = true;
+		goto done;
+	}
 	order = zend_mir_cf_allocate(block_count, sizeof(*order));
 	components = zend_mir_cf_allocate(block_count, sizeof(*components));
 	component_sizes = zend_mir_cf_allocate(
@@ -132,19 +164,13 @@ bool zend_mir_control_flow_cycle_analysis_init(
 	seen = zend_mir_cf_allocate(block_count, sizeof(*seen));
 	frames = zend_mir_cf_allocate(block_count, sizeof(*frames));
 	stack = zend_mir_cf_allocate(block_count, sizeof(*stack));
-	if ((edge_count != 0 && analysis->edge_statepoints == NULL)
-			|| out_offsets == NULL || in_offsets == NULL || order == NULL
-			|| components == NULL || component_sizes == NULL
+	if (order == NULL || components == NULL || component_sizes == NULL
 			|| component_irreducible == NULL || seen == NULL
 			|| frames == NULL || stack == NULL) {
 		goto done;
 	}
 	for (i = 0; i < block_count; i++) {
-		bool irreducible;
 		components[i] = UINT32_MAX;
-		if (!graph->block_at(graph->context, i, &irreducible)) {
-			goto done;
-		}
 	}
 	if (edge_count != 0) {
 		out_edges = zend_mir_cf_allocate(edge_count, sizeof(*out_edges));
@@ -161,15 +187,9 @@ bool zend_mir_control_flow_cycle_analysis_init(
 	for (i = 0; i < edge_count; i++) {
 		bool requires_statepoint;
 		if (!graph->edge_at(graph->context, i, &edge_from[i], &edge_to[i],
-				&requires_statepoint)
-				|| edge_from[i] >= block_count || edge_to[i] >= block_count
-				|| out_offsets[edge_from[i] + 1] == UINT32_MAX
-				|| in_offsets[edge_to[i] + 1] == UINT32_MAX) {
+				&requires_statepoint)) {
 			goto done;
 		}
-		out_offsets[edge_from[i] + 1]++;
-		in_offsets[edge_to[i] + 1]++;
-		analysis->edge_statepoints[i] = requires_statepoint;
 	}
 	for (i = 1; i <= block_count; i++) {
 		if (out_offsets[i] > UINT32_MAX - out_offsets[i - 1]
@@ -259,7 +279,6 @@ bool zend_mir_control_flow_cycle_analysis_init(
 				&& component_irreducible[component]
 				&& (component_sizes[component] > 1
 					|| edge_from[i] == edge_to[i])) {
-			analysis->has_irreducible_cycle = true;
 			analysis->edge_statepoints[i] = 1;
 		}
 	}
