@@ -83,7 +83,7 @@ static zend_mir_lowering_status zend_mir_lower_source_zval_return(
 			&& source_opcode->op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		return ZEND_MIR_LOWERING_STATUS_INVALID;
 	}
-	if (context->zend_source == NULL || !zend_mir_straight_line_has_cfg_proof(provider_context->proofs)
+	if (!zend_mir_straight_line_has_cfg_proof(provider_context->proofs)
 			|| !zend_mir_zend_source_return_source_zval(
 				context->zend_source, source_opcode->opline_index)) {
 		if (diagnostic_out != NULL) {
@@ -260,9 +260,7 @@ zend_mir_lowering_status zend_mir_lower_return(
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
 	if (source_opcode->op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-			|| (context->zend_source != NULL
-				&& source_opcode->op1.kind
-					== ZEND_MIR_SOURCE_OPERAND_LITERAL)) {
+			|| source_opcode->op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 		return zend_mir_lower_source_zval_return(
 			context, source_opcode, mutator, provider_context, diagnostic_out);
 	}

@@ -14,12 +14,6 @@
 
 #include "zend_mir_straight_line.h"
 
-static bool zend_mir_straight_line_uses_canonical_locations(
-	const zend_mir_lowering_context *context)
-{
-	return context != NULL && context->zend_source != NULL;
-}
-
 static bool zend_mir_straight_line_mutator_has_frame_ops(
 	const zend_mir_mutator *mutator)
 {
@@ -390,38 +384,6 @@ static bool zend_mir_straight_line_entry_contract_holds(
 #endif
 }
 
-static bool zend_mir_straight_line_slot_value(
-	zend_mir_straight_line_provider_context *provider_context,
-	zend_mir_straight_line_slot *slot,
-	zend_mir_frame_slot_ref *frame_slot)
-{
-	zend_mir_straight_line_value value;
-
-	memset(frame_slot, 0, sizeof(*frame_slot));
-	frame_slot->slot_id = slot->slot_id;
-	frame_slot->index = slot->index;
-	frame_slot->kind = slot->kind;
-	frame_slot->representation =
-		ZEND_MIR_FRAME_SLOT_REPRESENTATION_CANONICAL_ZVAL;
-	frame_slot->materialization = slot->materialization;
-	frame_slot->ownership = slot->ownership;
-	frame_slot->value_id = ZEND_MIR_ID_INVALID;
-	if (slot->materialization == ZEND_MIR_MATERIALIZATION_UNDEF) {
-		return true;
-	}
-	if (slot->materialization != ZEND_MIR_MATERIALIZATION_MATERIALIZED
-			|| !zend_mir_straight_line_value_at(
-				provider_context->lifetime, slot->value_id, &value)
-			|| !zend_mir_ownership_state_is_usable(value.ownership)
-			|| !zend_mir_scalar_type_is_exact(value.exact_type)
-			|| (value.fact_flags & ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0
-			|| value.representation != slot->value_representation) {
-		return false;
-	}
-	frame_slot->value_id = value.value_id;
-	return true;
-}
-
 bool zend_mir_straight_line_emit_frame_for_class(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,
@@ -439,11 +401,6 @@ bool zend_mir_straight_line_emit_frame_for_class(
 	zend_mir_source_map_id map_id;
 	zend_mir_function_id function_id =
 		zend_mir_lowering_context_function_id(context);
-	const uint32_t frame_slot_count =
-		zend_mir_straight_line_uses_canonical_locations(context)
-			? 0 : entry->slot_count;
-	uint32_t first_slot = 0;
-	uint32_t index;
 
 	if (!zend_mir_id_is_valid(function_id)
 			|| !zend_mir_straight_line_entry_contract_holds(provider_context)
@@ -452,22 +409,8 @@ bool zend_mir_straight_line_emit_frame_for_class(
 		return false;
 	}
 
-	for (index = 0; index < frame_slot_count; index++) {
-		zend_mir_frame_slot_ref slot;
-		uint32_t slot_index;
-
-		if (!zend_mir_straight_line_slot_value(
-				provider_context, &entry->slots[index], &slot)
-				|| !mutator->add_frame_slot(
-					mutator->context, &slot, &slot_index)
-				|| (index != 0 && slot_index != first_slot + index)) {
-			return false;
-		}
-		if (index == 0) {
-			first_slot = slot_index;
-		}
-	}
-
+	/* Values live in their canonical frame locations, so the frame state
+	 * carries no slots. */
 	memset(&frame, 0, sizeof(frame));
 	frame.id = ZEND_MIR_ID_INVALID;
 	frame.function_id = function_id;
@@ -475,8 +418,6 @@ bool zend_mir_straight_line_emit_frame_for_class(
 	frame.function_kind = entry->function_kind;
 	frame.opline_index = source_opcode->opline_index;
 	frame.opline_phase = ZEND_MIR_OPLINE_PHASE_BEFORE;
-	frame.slots.offset = frame_slot_count != 0 ? first_slot : 0;
-	frame.slots.count = frame_slot_count;
 	frame.return_continuation.kind = ZEND_MIR_CONTINUATION_KIND_TERMINAL;
 	frame.return_continuation.frame_state_id = ZEND_MIR_ID_INVALID;
 	frame.return_continuation.opline_index = ZEND_MIR_ID_INVALID;
@@ -543,7 +484,6 @@ zend_mir_lowering_status zend_mir_lower_entry_state(
 	zend_mir_instruction_id instruction_id;
 	zend_mir_frame_state_id frame_id;
 	zend_mir_source_position_id source_id;
-	uint32_t index;
 
 	if (diagnostic_out != NULL) {
 		*diagnostic_out = ZEND_MIRL_MUTATION_FAILED;
@@ -583,18 +523,6 @@ zend_mir_lowering_status zend_mir_lower_entry_state(
 			|| !mutator->add_instruction(
 				mutator->context, &instruction, &instruction_id)) {
 		return ZEND_MIR_LOWERING_FAILED;
-	}
-	for (index = 0;
-			!zend_mir_straight_line_uses_canonical_locations(context)
-				&& index < provider_context->entry->slot_count;
-			index++) {
-		const zend_mir_straight_line_slot *slot =
-			&provider_context->entry->slots[index];
-		if (slot->materialization == ZEND_MIR_MATERIALIZATION_MATERIALIZED
-				&& !mutator->add_operand(
-					mutator->context, instruction_id, slot->value_id)) {
-			return ZEND_MIR_LOWERING_FAILED;
-		}
 	}
 	provider_context->lifetime->entry_emitted = true;
 	provider_context->lifetime->entry_frame_state_id = frame_id;

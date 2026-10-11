@@ -228,8 +228,7 @@ static bool zend_mir_phi_is_dynamic(
 static bool zend_mir_phi_is_dead(
 	const zend_mir_lowering_context *context, uint32_t ssa_variable_id)
 {
-	const zend_ssa *ssa = context->zend_source != NULL
-		? (const zend_ssa *) context->zend_source->ssa : NULL;
+	const zend_ssa *ssa = (const zend_ssa *) context->zend_source->ssa;
 
 	return ssa != NULL && ssa->vars != NULL
 		&& ssa_variable_id < (uint32_t) ssa->vars_count
@@ -484,7 +483,7 @@ static bool zend_mir_phi_analysis_init(
 	free(phi_by_result);
 	phi_by_result = NULL;
 
-	if (context->zend_source == NULL || ssa_count == 0 || analysis->phi_count == 0) {
+	if (ssa_count == 0 || analysis->phi_count == 0) {
 		return true;
 	}
 	parents = malloc((size_t) ssa_count * sizeof(*parents));
@@ -634,8 +633,7 @@ static bool zend_mir_cf_fact_for_ssa(
 			&& ssa_variable_id
 				< context->source->ssa_count(context->source->context)
 			&& analysis->dynamic_members[ssa_variable_id])
-			|| (context != NULL && context->zend_source != NULL
-				&& context->source != NULL
+			|| (context != NULL && context->source != NULL
 				&& context->source->ssa_count != NULL
 				&& ssa_variable_id
 					< context->source->ssa_count(context->source->context)
@@ -715,8 +713,6 @@ static bool zend_mir_validate_branch_proofs(
 	for (i = 0; i < opcode_count; i++) {
 		zend_mir_source_opcode_ref opcode;
 		zend_mir_branch_kind kind;
-		zend_mir_value_fact_ref input_fact;
-		zend_mir_representation input_representation;
 		if (!context->source->opcode_at(
 				context->source->context, i, &opcode)) {
 			return false;
@@ -804,46 +800,15 @@ static bool zend_mir_validate_branch_proofs(
 			}
 			continue;
 		}
-		if (context->zend_source != NULL) {
-			if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
-					|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-					|| ((kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
-							|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT
-							|| kind == ZEND_MIR_BRANCH_COALESCE
-							|| kind == ZEND_MIR_BRANCH_JMP_SET
-							|| kind == ZEND_MIR_BRANCH_JMP_NULL)
-						? opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
-						: opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
-				return false;
-			}
-			continue;
-		}
-		if (opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
-				|| !zend_mir_fact_for_operand(
-					context, analysis, &opcode.op1,
-					&input_fact, &input_representation)
-				|| (input_fact.flags
-					& ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0
-				|| (input_fact.exact_type == ZEND_MIR_SCALAR_TYPE_F64
-					&& (input_fact.flags
-						& ZEND_MIR_VALUE_FACT_FINITE) == 0)) {
-			return false;
-		}
-		if (kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
-				|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT) {
-			zend_mir_value_fact_ref result_fact;
-			zend_mir_representation result_representation;
-			if (opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
-					|| !zend_mir_cf_fact_for_ssa(context, analysis,
-						opcode.result.ssa_variable_id, &result_fact,
-						&result_representation)
-					|| result_fact.exact_type != ZEND_MIR_SCALAR_TYPE_I1
-					|| result_representation != ZEND_MIR_REPRESENTATION_I1
-					|| (result_fact.flags
-						& ZEND_MIR_VALUE_FACT_NON_REFCOUNTED) == 0) {
-				return false;
-			}
-		} else if (opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		if (opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| opcode.op2.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| ((kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
+						|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT
+						|| kind == ZEND_MIR_BRANCH_COALESCE
+						|| kind == ZEND_MIR_BRANCH_JMP_SET
+						|| kind == ZEND_MIR_BRANCH_JMP_NULL)
+					? opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA
+					: opcode.result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED)) {
 			return false;
 		}
 	}
@@ -923,8 +888,7 @@ static bool zend_mir_validate_scalar_phis(
 			}
 		}
 		if (phi.kind == ZEND_MIR_SOURCE_PHI_PI_RANGE
-				&& !(context->zend_source != NULL
-					&& result_representation == ZEND_MIR_REPRESENTATION_ZVAL)
+				&& result_representation != ZEND_MIR_REPRESENTATION_ZVAL
 				&& !(result_fact.exact_type == ZEND_MIR_SCALAR_TYPE_F64
 					&& result_representation == ZEND_MIR_REPRESENTATION_DOUBLE)) {
 			const bool has_range = (result_fact.flags
@@ -1169,7 +1133,6 @@ static bool zend_mir_lower_blocks(
 					terminator_source->op1.ssa_variable_id)) {
 			zend_mir_value_fact_ref condition_fact;
 			zend_mir_representation condition_representation;
-			zend_mir_branch_kind branch_kind;
 
 			machine_condition = zend_mir_fact_for_operand(
 				context, analysis, &terminator_source->op1,
@@ -1178,47 +1141,6 @@ static bool zend_mir_lower_blocks(
 				&& condition_representation != ZEND_MIR_REPRESENTATION_ZVAL
 				&& condition_representation != ZEND_MIR_REPRESENTATION_VOID
 				&& condition_representation != ZEND_MIR_REPRESENTATION_CONTROL;
-			branch_kind = zend_mir_branch_kind_for_opcode(
-				terminator_source->zend_opcode_number);
-			if (machine_condition
-					&& (branch_kind
-							== ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
-						|| branch_kind
-							== ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT
-						|| branch_kind == ZEND_MIR_BRANCH_JMP_SET
-						|| branch_kind == ZEND_MIR_BRANCH_COALESCE
-						|| branch_kind == ZEND_MIR_BRANCH_JMP_NULL)
-					&& !(context->zend_source != NULL)) {
-				zend_mir_representation result_representation;
-				zend_mir_value_fact_ref result_fact;
-				const bool boolean_result = branch_kind
-						== ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
-					|| branch_kind
-						== ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT;
-
-				/*
-				 * Result-producing branches publish either the tested boolean or
-				 * their input into the result identity.  If a dynamic PHI requires
-				 * that identity to remain boxed, execute the source branch instead
-				 * of defining one MIR value with two representations.  With a Zend
-				 * source attached, the source-backed lowering materializes the
-				 * boxed result around the machine branch itself, so this check
-				 * applies only without one.
-				 */
-				if (terminator_source->result.kind
-						!= ZEND_MIR_SOURCE_OPERAND_SSA
-						|| !zend_mir_fact_for_operand(
-							context,
-							analysis,
-							&terminator_source->result,
-							&result_fact,
-							&result_representation)
-						|| result_representation != (boolean_result
-							? ZEND_MIR_REPRESENTATION_I1
-							: condition_representation)) {
-					machine_condition = false;
-				}
-			}
 		}
 		if (!zend_mir_emit_terminator(
 				context, mutator, terminator_source, &block,
