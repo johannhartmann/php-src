@@ -261,39 +261,40 @@ static bool zend_mir_byref_argument_ssa(
 		& (ZEND_SEND_BY_REF | ZEND_SEND_PREFER_REF)) != 0;
 }
 
-static bool zend_mir_cv_has_reference_binding(
-	const zend_op_array *op_array, int slot)
+/* Marks the CVs that a global, static or by-reference lexical binding
+ * aliases. */
+static void zend_mir_index_cv_reference_bindings(
+	const zend_op_array *op_array, uint8_t *reference_bound)
 {
 	uint32_t index;
 
-	if (op_array == NULL || slot < 0
-			|| (uint32_t) slot >= op_array->last_var) {
-		return false;
-	}
 	for (index = 0; index < op_array->last; index++) {
 		const zend_op *opline = &op_array->opcodes[index];
+		uint32_t slot;
 
 		switch (opline->opcode) {
 			case ZEND_BIND_GLOBAL:
 			case ZEND_BIND_STATIC:
 			case ZEND_BIND_INIT_STATIC_OR_JMP:
-				if (opline->op1_type == IS_CV
-						&& EX_VAR_TO_NUM(opline->op1.var) == slot) {
-					return true;
+				if (opline->op1_type != IS_CV) {
+					continue;
 				}
+				slot = EX_VAR_TO_NUM(opline->op1.var);
 				break;
 			case ZEND_BIND_LEXICAL:
-				if ((opline->extended_value & ZEND_BIND_REF) != 0
-						&& opline->op2_type == IS_CV
-						&& EX_VAR_TO_NUM(opline->op2.var) == slot) {
-					return true;
+				if ((opline->extended_value & ZEND_BIND_REF) == 0
+						|| opline->op2_type != IS_CV) {
+					continue;
 				}
+				slot = EX_VAR_TO_NUM(opline->op2.var);
 				break;
 			default:
-				break;
+				continue;
+		}
+		if (slot < op_array->last_var) {
+			reference_bound[slot] = 1;
 		}
 	}
-	return false;
 }
 
 static bool zend_mir_checked_add(
@@ -394,34 +395,48 @@ static bool zend_mir_executes_reentrant_boundary(uint8_t opcode)
 		|| opcode == ZEND_INCLUDE_OR_EVAL;
 }
 
-static bool zend_mir_top_level_global_crosses_boundary(
-	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t variable)
+static void zend_mir_note_use(uint32_t *use_end, const zend_ssa *ssa,
+	int variable, uint32_t end)
 {
-	const zend_ssa_var *ssa_variable;
-	uint32_t first;
-	uint32_t last = 0;
+	if (variable >= 0 && variable < ssa->vars_count) {
+		use_end[variable] = end;
+	}
+}
+
+/*
+ * Marks the CV versions of a top-level op_array that a call or include can
+ * observe: a reentrant opline lies between the definition and the last
+ * opline that uses the version at or after it, or the end of the op_array
+ * when a phi uses it. Returns false only when allocation fails.
+ */
+static bool zend_mir_index_top_level_globals_crossing_boundaries(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint8_t *crosses_boundary)
+{
+	const uint32_t variable_count = (uint32_t) ssa->vars_count;
+	uint32_t *use_end;
+	uint32_t *reentrant_before;
 	uint32_t index;
 	uint32_t block;
 
-	if (op_array == NULL || ssa == NULL || op_array->function_name != NULL
-			|| variable >= (uint32_t) ssa->vars_count) {
+	use_end = zend_mir_lowering_calloc(variable_count, sizeof(*use_end));
+	reentrant_before = zend_mir_lowering_calloc(
+		op_array->last + 1, sizeof(*reentrant_before));
+	if (use_end == NULL || reentrant_before == NULL) {
+		free(reentrant_before);
+		free(use_end);
 		return false;
 	}
-	ssa_variable = &ssa->vars[variable];
-	if (ssa_variable->var < 0
-			|| (uint32_t) ssa_variable->var >= op_array->last_var) {
-		return false;
-	}
-	first = ssa_variable->definition >= 0
-		? (uint32_t) ssa_variable->definition : 0;
-	for (index = first; index < op_array->last; index++) {
+	/* use_end is one past the last using opline, or last + 1 for a phi use. */
+	for (index = 0; index < op_array->last; index++) {
 		const zend_ssa_op *ssa_op = &ssa->ops[index];
 
-		if (ssa_op->op1_use == (int) variable
-				|| ssa_op->op2_use == (int) variable
-				|| ssa_op->result_use == (int) variable) {
-			last = index;
-		}
+		zend_mir_note_use(use_end, ssa, ssa_op->op1_use, index + 1);
+		zend_mir_note_use(use_end, ssa, ssa_op->op2_use, index + 1);
+		zend_mir_note_use(use_end, ssa, ssa_op->result_use, index + 1);
+		reentrant_before[index + 1] = reentrant_before[index]
+			+ (zend_mir_executes_reentrant_boundary(
+				op_array->opcodes[index].opcode) ? 1 : 0);
 	}
 	for (block = 0; block < ssa->cfg.blocks_count; block++) {
 		const zend_ssa_phi *phi;
@@ -432,20 +447,33 @@ static bool zend_mir_top_level_global_crosses_boundary(
 			for (predecessor = 0;
 					predecessor < ssa->cfg.blocks[block].predecessors_count;
 					predecessor++) {
-				if (phi->sources[predecessor] == (int) variable) {
-					last = op_array->last;
-					break;
-				}
+				zend_mir_note_use(use_end, ssa, phi->sources[predecessor],
+					op_array->last + 1);
 			}
 		}
 	}
-	for (index = first; index < last; index++) {
-		if (zend_mir_executes_reentrant_boundary(
-				op_array->opcodes[index].opcode)) {
-			return true;
+	for (index = 0; index < variable_count; index++) {
+		const zend_ssa_var *variable = &ssa->vars[index];
+		uint32_t first;
+		uint32_t last = 0;
+
+		if (variable->var < 0
+				|| (uint32_t) variable->var >= op_array->last_var) {
+			continue;
 		}
+		first = variable->definition >= 0
+			? (uint32_t) variable->definition : 0;
+		if (use_end[index] == op_array->last + 1) {
+			last = op_array->last;
+		} else if (use_end[index] != 0 && use_end[index] - 1 >= first) {
+			last = use_end[index] - 1;
+		}
+		crosses_boundary[index] = first < last
+			&& reentrant_before[last] != reentrant_before[first];
 	}
-	return false;
+	free(reentrant_before);
+	free(use_end);
+	return true;
 }
 
 static bool zend_mir_exception_fragment(uint8_t opcode)
@@ -1028,23 +1056,83 @@ static bool zend_mir_guarded_long_inc(
 			integration, op_array, ssa, inc_index, slot);
 }
 
-static bool zend_mir_entry_value_only_overwritten(
-	const zend_op_array *op_array, const zend_ssa *ssa, int variable)
+/*
+ * The SSA variables of every slot in index order, and the variables that an
+ * opline or phi reads other than as the overwritten operand of an ASSIGN.
+ */
+typedef struct _zend_mir_induction_index {
+	uint32_t *slot_offsets;
+	uint32_t *slot_variables;
+	uint8_t *read;
+} zend_mir_induction_index;
+
+static void zend_mir_induction_index_release(zend_mir_induction_index *index)
 {
+	free(index->read);
+	free(index->slot_variables);
+	free(index->slot_offsets);
+}
+
+static void zend_mir_note_read(uint8_t *read, const zend_ssa *ssa, int variable)
+{
+	if (variable >= 0 && variable < ssa->vars_count) {
+		read[variable] = 1;
+	}
+}
+
+static bool zend_mir_induction_index_init(
+	zend_mir_induction_index *induction, const zend_op_array *op_array,
+	const zend_ssa *ssa, uint32_t slot_count)
+{
+	const uint32_t variable_count = (uint32_t) ssa->vars_count;
+	uint32_t *cursor;
 	uint32_t index;
 	uint32_t block;
 
+	memset(induction, 0, sizeof(*induction));
+	induction->slot_offsets = zend_mir_lowering_calloc(
+		slot_count + 1, sizeof(*induction->slot_offsets));
+	induction->slot_variables = zend_mir_lowering_calloc(
+		variable_count == 0 ? 1 : variable_count,
+		sizeof(*induction->slot_variables));
+	induction->read = zend_mir_lowering_calloc(
+		variable_count == 0 ? 1 : variable_count, sizeof(*induction->read));
+	cursor = zend_mir_lowering_calloc(
+		slot_count == 0 ? 1 : slot_count, sizeof(*cursor));
+	if (induction->slot_offsets == NULL || induction->slot_variables == NULL
+			|| induction->read == NULL || cursor == NULL) {
+		free(cursor);
+		zend_mir_induction_index_release(induction);
+		return false;
+	}
+	for (index = 0; index < variable_count; index++) {
+		const int slot = ssa->vars[index].var;
+
+		if (slot >= 0 && (uint32_t) slot < slot_count) {
+			induction->slot_offsets[slot + 1]++;
+		}
+	}
+	for (index = 0; index < slot_count; index++) {
+		induction->slot_offsets[index + 1] += induction->slot_offsets[index];
+		cursor[index] = induction->slot_offsets[index];
+	}
+	for (index = 0; index < variable_count; index++) {
+		const int slot = ssa->vars[index].var;
+
+		if (slot >= 0 && (uint32_t) slot < slot_count) {
+			induction->slot_variables[cursor[slot]++] = index;
+		}
+	}
+	free(cursor);
 	for (index = 0; index < op_array->last; index++) {
 		const zend_ssa_op *ssa_op = &ssa->ops[index];
-		if (ssa_op->op1_use == variable
-				&& !(op_array->opcodes[index].opcode == ZEND_ASSIGN
-					&& ssa_op->op1_def >= 0)) {
-			return false;
+
+		if (!(op_array->opcodes[index].opcode == ZEND_ASSIGN
+				&& ssa_op->op1_def >= 0)) {
+			zend_mir_note_read(induction->read, ssa, ssa_op->op1_use);
 		}
-		if (ssa_op->op2_use == variable
-				|| ssa_op->result_use == variable) {
-			return false;
-		}
+		zend_mir_note_read(induction->read, ssa, ssa_op->op2_use);
+		zend_mir_note_read(induction->read, ssa, ssa_op->result_use);
 	}
 	for (block = 0; block < ssa->cfg.blocks_count; block++) {
 		const zend_ssa_phi *phi;
@@ -1053,9 +1141,8 @@ static bool zend_mir_entry_value_only_overwritten(
 			for (predecessor = 0;
 					predecessor < ssa->cfg.blocks[block].predecessors_count;
 					predecessor++) {
-				if (phi->sources[predecessor] == variable) {
-					return false;
-				}
+				zend_mir_note_read(
+					induction->read, ssa, phi->sources[predecessor]);
 			}
 		}
 	}
@@ -1064,25 +1151,28 @@ static bool zend_mir_entry_value_only_overwritten(
 
 static bool zend_mir_infer_long_induction_slot(
 	zend_mir_integration *integration,
-	const zend_op_array *op_array, const zend_ssa *ssa, int slot)
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	const zend_mir_induction_index *induction, int slot)
 {
+	const uint32_t first = induction->slot_offsets[slot];
+	const uint32_t end = induction->slot_offsets[slot + 1];
+	uint32_t position;
 	uint32_t index;
 	bool has_seed = false;
 	bool has_defined_value = false;
 
-	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
-		const zend_ssa_var *variable = &ssa->vars[index];
+	for (position = first; position < end; position++) {
+		const zend_ssa_var *variable;
 		const zend_ssa_op *ssa_op;
 		uint8_t opcode;
 		zend_mir_value_fact_ref source;
 
-		if (variable->var != slot) {
-			continue;
-		}
+		index = induction->slot_variables[position];
+		variable = &ssa->vars[index];
 		if (variable->definition < 0) {
+			/* The entry value may be overwritten, but not read. */
 			if (variable->definition_phi == NULL
-					&& !zend_mir_entry_value_only_overwritten(
-						op_array, ssa, (int) index)) {
+					&& induction->read[index]) {
 				return false;
 			}
 			continue;
@@ -1122,10 +1212,12 @@ static bool zend_mir_infer_long_induction_slot(
 	if (!has_seed || !has_defined_value) {
 		return false;
 	}
-	for (index = 0; index < (uint32_t) ssa->vars_count; index++) {
-		const zend_ssa_var *variable = &ssa->vars[index];
-		if (variable->var == slot
-				&& (variable->definition >= 0
+	for (position = first; position < end; position++) {
+		const zend_ssa_var *variable;
+
+		index = induction->slot_variables[position];
+		variable = &ssa->vars[index];
+		if ((variable->definition >= 0
 					|| variable->definition_phi != NULL)
 				&& !zend_mir_set_inferred_fact(
 					integration, index, ZEND_MIR_SCALAR_TYPE_I64, 0,
@@ -1377,10 +1469,19 @@ static bool zend_mir_infer_scalar_facts(
 			break;
 		}
 	}
-	for (index = 0; index < (uint32_t) op_array->last_var + op_array->T;
-			index++) {
-		(void) zend_mir_infer_long_induction_slot(
-			integration, op_array, ssa, (int) index);
+	{
+		const uint32_t slot_count = (uint32_t) op_array->last_var + op_array->T;
+		zend_mir_induction_index induction;
+
+		if (!zend_mir_induction_index_init(
+				&induction, op_array, ssa, slot_count)) {
+			return false;
+		}
+		for (index = 0; index < slot_count; index++) {
+			(void) zend_mir_infer_long_induction_slot(
+				integration, op_array, ssa, &induction, (int) index);
+		}
+		zend_mir_induction_index_release(&induction);
 	}
 	for (index = 0; index < ssa->cfg.blocks_count; index++) {
 		const zend_ssa_phi *phi;
@@ -2483,6 +2584,8 @@ static bool zend_mir_prepare_overlay(
 	uint32_t block_index;
 	uint32_t index;
 	uint8_t *crosses_exception_continuation;
+	uint8_t *reference_bound;
+	uint8_t *crosses_boundary;
 
 	if (integration == NULL || op_array == NULL || ssa == NULL
 			|| (op_array->last != 0
@@ -2542,12 +2645,25 @@ static bool zend_mir_prepare_overlay(
 	crosses_exception_continuation = zend_mir_lowering_calloc(
 		op_array->last_var == 0 ? 1 : op_array->last_var,
 		sizeof(*crosses_exception_continuation));
-	if (crosses_exception_continuation == NULL
+	reference_bound = zend_mir_lowering_calloc(
+		op_array->last_var == 0 ? 1 : op_array->last_var,
+		sizeof(*reference_bound));
+	crosses_boundary = zend_mir_lowering_calloc(
+		ssa->vars_count == 0 ? 1 : (uint32_t) ssa->vars_count,
+		sizeof(*crosses_boundary));
+	if (crosses_exception_continuation == NULL || reference_bound == NULL
+			|| crosses_boundary == NULL
 			|| !zend_mir_index_exception_continuation_cvs(
-				op_array, ssa, crosses_exception_continuation)) {
+				op_array, ssa, crosses_exception_continuation)
+			|| (op_array->function_name == NULL && ssa->vars_count != 0
+				&& !zend_mir_index_top_level_globals_crossing_boundaries(
+					op_array, ssa, crosses_boundary))) {
+		free(crosses_boundary);
+		free(reference_bound);
 		free(crosses_exception_continuation);
 		return false;
 	}
+	zend_mir_index_cv_reference_bindings(op_array, reference_bound);
 	integration->overlay_synthetic_one_literal =
 		integration->source.literal_count;
 	for (block_index = 0;
@@ -2583,6 +2699,8 @@ static bool zend_mir_prepare_overlay(
 	}
 	if (!zend_mir_infer_scalar_facts(
 				integration, op_array, ssa)) {
+		free(crosses_boundary);
+		free(reference_bound);
 		free(crosses_exception_continuation);
 		return false;
 	}
@@ -2598,10 +2716,10 @@ static bool zend_mir_prepare_overlay(
 					ssa->vars[index].var])
 				|| zend_mir_byref_argument_ssa(op_array, ssa, index)
 				|| ssa->vars[index].alias != NO_ALIAS
-				|| zend_mir_cv_has_reference_binding(
-					op_array, ssa->vars[index].var)
-				|| zend_mir_top_level_global_crosses_boundary(
-					op_array, ssa, index)) {
+				|| (ssa->vars[index].var >= 0
+					&& (uint32_t) ssa->vars[index].var < op_array->last_var
+					&& reference_bound[ssa->vars[index].var])
+				|| crosses_boundary[index]) {
 			integration->overlay_inferred_fact_valid[index] = 0;
 			integration->overlay_fact_modes[index] =
 				ZEND_MIR_FACT_SOURCE_ZVAL;
@@ -2612,6 +2730,8 @@ static bool zend_mir_prepare_overlay(
 				ZEND_MIR_FACT_ORIGINAL;
 		}
 	}
+	free(crosses_boundary);
+	free(reference_bound);
 	free(crosses_exception_continuation);
 	for (index = 0; index < op_array->last; index++) {
 		uint8_t opcode = op_array->opcodes[index].opcode;
