@@ -1399,16 +1399,18 @@ static bool zend_mir_value_copy_table(
 {
 	const unsigned char *bytes = (const unsigned char *) source;
 
-	while (table->count < count) {
-		if (!zend_mir_module_grow_table(
-				module, table, item_size, alignment, UINT32_MAX)) {
-			return false;
-		}
-		memcpy((unsigned char *) table->items
-				+ (size_t) table->count * item_size,
-			bytes + (size_t) table->count * item_size, item_size);
-		table->count++;
+	if (table->count >= count) {
+		return true;
 	}
+	if (!zend_mir_module_reserve_table(
+			module, table, item_size, alignment, UINT32_MAX, count)) {
+		return false;
+	}
+	memcpy((unsigned char *) table->items
+			+ (size_t) table->count * item_size,
+		bytes + (size_t) table->count * item_size,
+		(size_t) (count - table->count) * item_size);
+	table->count = count;
 	return true;
 }
 

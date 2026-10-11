@@ -165,6 +165,10 @@ bool zend_mir_module_fail(zend_mir_module *module, zend_mir_diagnostic_code code
 bool zend_mir_module_require_building(zend_mir_module *module);
 bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *table,
 	size_t item_size, size_t item_alignment, uint32_t limit);
+/* Grows the table as growing it one item at a time up to count items would. */
+bool zend_mir_module_reserve_table(zend_mir_module *module,
+	zend_mir_core_table *table, size_t item_size, size_t item_alignment,
+	uint32_t limit, uint32_t count);
 bool zend_mir_module_find_value(const zend_mir_module *module, zend_mir_value_id id,
 	uint32_t *index_out);
 bool zend_mir_module_prepare_value_index(zend_mir_module *module);

@@ -290,8 +290,9 @@ zend_mir_module *zend_mir_module_create(zend_mir_module_id module_id,
 	return module;
 }
 
-bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *table,
-		size_t item_size, size_t item_alignment, uint32_t limit)
+bool zend_mir_module_reserve_table(zend_mir_module *module,
+		zend_mir_core_table *table, size_t item_size, size_t item_alignment,
+		uint32_t limit, uint32_t count)
 {
 	uint32_t required;
 	uint32_t capacity;
@@ -299,8 +300,8 @@ bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *ta
 	void *items;
 
 	if (!zend_mir_module_require_building(module) || table == NULL
-			|| item_size == 0 || table->count >= limit
-			|| !zend_mir_core_next_id(table->count, &required)) {
+			|| item_size == 0 || count == 0 || count - 1 >= limit
+			|| !zend_mir_core_next_id(count - 1, &required)) {
 		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 			"core table count limit exceeded");
 	}
@@ -313,19 +314,17 @@ bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *ta
 		capacity = limit;
 	}
 	while (capacity < required) {
-		if (capacity > UINT32_MAX / 2) {
-			capacity = limit;
-		} else {
-			capacity *= 2;
-			if (capacity > limit) {
-				capacity = limit;
-			}
+		uint32_t next = capacity > UINT32_MAX / 2 ? limit : capacity * 2;
+
+		if (next > limit) {
+			next = limit;
 		}
-		if (capacity < required) {
+		if (next <= capacity) {
 			return zend_mir_module_fail(module,
 				ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 				"core table capacity overflow");
 		}
+		capacity = next;
 	}
 	if ((size_t) capacity > SIZE_MAX / item_size) {
 		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
@@ -343,6 +342,14 @@ bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *ta
 	table->items = items;
 	table->capacity = capacity;
 	return true;
+}
+
+bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *table,
+		size_t item_size, size_t item_alignment, uint32_t limit)
+{
+	return zend_mir_module_reserve_table(module, table, item_size,
+		item_alignment, limit,
+		table != NULL && table->count != UINT32_MAX ? table->count + 1 : 0);
 }
 
 bool zend_mir_module_find_value(const zend_mir_module *module, zend_mir_value_id id,
