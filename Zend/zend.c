@@ -1673,22 +1673,36 @@ ZEND_API ZEND_COLD void zend_error_zstr_at(
 }
 /* }}} */
 
+#ifdef HAVE_NATIVE_ENGINE
+/* A bailout out of a fatal error releases its message before the jump
+ * (zend_native_bailout_unwind()): native_mir_test continues the request. */
+typedef struct _zend_error_message_record {
+	zend_native_bailout_record record;
+	zend_string *message;
+} zend_error_message_record;
+
+static void zend_error_message_unwind(zend_native_bailout_record *record)
+{
+	zend_string_release(((zend_error_message_record *) record)->message);
+}
+#endif
+
 static ZEND_COLD void zend_error_va_list(
 		int orig_type, zend_string *error_filename, uint32_t error_lineno,
 		const char *format, va_list args)
 {
 	zend_string *message = zend_vstrpprintf(0, format, args);
-	bool bailed_out = false;
+#ifdef HAVE_NATIVE_ENGINE
+	zend_error_message_record record;
 
-	zend_try {
-		zend_error_zstr_at(orig_type, error_filename, error_lineno, message);
-	} zend_catch {
-		bailed_out = true;
-	} zend_end_try();
+	record.message = message;
+	ZEND_NATIVE_BAILOUT_RECORD_LINK(&record.record, zend_error_message_unwind);
+#endif
+	zend_error_zstr_at(orig_type, error_filename, error_lineno, message);
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&record.record);
+#endif
 	zend_string_release(message);
-	if (UNEXPECTED(bailed_out)) {
-		zend_bailout();
-	}
 }
 
 static ZEND_COLD void get_filename_lineno(int type, zend_string **filename, uint32_t *lineno) {

@@ -46,6 +46,9 @@
 #include "zend_strtod.h"
 #include "zend_exceptions.h"
 #include "zend_virtual_cwd.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Native/Runtime/Common/zend_native_calls.h"
+#endif
 
 #define YYCTYPE   unsigned char
 #define YYFILL(n) { if ((YYCURSOR + n) >= (YYLIMIT + ZEND_MMAP_AHEAD)) { return 0; } }
@@ -593,158 +596,194 @@ ZEND_API zend_result open_file_for_scanning(zend_file_handle *file_handle)
 	return SUCCESS;
 }
 
+/*
+ * The compile state a bailout out of a compilation releases and restores in
+ * native builds, where native_mir_test continues the request after a fatal
+ * error: each compile step links a bailout record that unwinds before the
+ * jump (zend_native_bailout_unwind()). _zend_bailout() already resets
+ * CG(in_compilation) and CG(active_class_entry). Stock builds keep the
+ * upstream behaviour: the bailout ends the request.
+ */
+typedef struct _zend_compile_ast_state {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_bailout_record record;
+#endif
+	zend_op_array *op_array;
+	zend_op_array *original_active_op_array;
+	zend_file_context original_file_context;
+	zend_oparray_context original_oparray_context;
+	bool file_context_started;
+	bool oparray_context_started;
+} zend_compile_ast_state;
+
+#ifdef HAVE_NATIVE_ENGINE
+static void zend_compile_ast_unwind(zend_native_bailout_record *record)
+{
+	zend_compile_ast_state *state = (zend_compile_ast_state *) record;
+
+	if (state->oparray_context_started) {
+		zend_oparray_context_end(&state->original_oparray_context);
+	}
+	if (state->file_context_started) {
+		zend_file_context_end(&state->original_file_context);
+	}
+	CG(active_op_array) = state->original_active_op_array;
+	destroy_op_array(state->op_array);
+	efree_size(state->op_array, sizeof(*state->op_array));
+}
+#endif
+
 static zend_op_array *zend_compile_ast_internal(int type)
 {
 	ZEND_ASSERT(CG(in_compilation));
 	ZEND_ASSERT(CG(ast));
 
 	uint32_t last_lineno = CG(zend_lineno);
-	zend_file_context original_file_context;
-	zend_oparray_context original_oparray_context;
-	zend_op_array *original_active_op_array = CG(active_op_array);
-	zend_class_entry *original_active_class_entry = CG(active_class_entry);
-	struct {
-		bool file_context_started;
-		bool oparray_context_started;
-		bool bailed_out;
-	} *state = ecalloc(1, sizeof(*state));
-
+	zend_compile_ast_state state;
 	zend_op_array *op_array = emalloc(sizeof(*op_array));
+
+	state.op_array = op_array;
+	state.original_active_op_array = CG(active_op_array);
+	state.file_context_started = false;
+	state.oparray_context_started = false;
 	init_op_array(op_array, type, INITIAL_OP_ARRAY_SIZE);
 	CG(active_op_array) = op_array;
 
 	/* Use heap to not waste arena memory */
 	op_array->fn_flags |= ZEND_ACC_HEAP_RT_CACHE;
 
-	zend_try {
-		if (zend_ast_process) {
-			zend_ast_process(CG(ast));
-		}
-
-		zend_file_context_begin(&original_file_context);
-		state->file_context_started = true;
-		zend_oparray_context_begin(&original_oparray_context, op_array);
-		state->oparray_context_started = true;
-		zend_compile_top_stmt(CG(ast));
-		CG(zend_lineno) = last_lineno;
-		zend_emit_final_return(type == ZEND_USER_FUNCTION);
-		op_array->line_start = 1;
-		op_array->line_end = last_lineno;
-		pass_two(op_array);
-	} zend_catch {
-		state->bailed_out = true;
-	} zend_end_try();
-
-	if (state->oparray_context_started) {
-		zend_oparray_context_end(&original_oparray_context);
-	}
-	if (state->file_context_started) {
-		zend_file_context_end(&original_file_context);
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_LINK(&state.record, zend_compile_ast_unwind);
+#endif
+	if (zend_ast_process) {
+		zend_ast_process(CG(ast));
 	}
 
-	CG(active_op_array) = original_active_op_array;
-	CG(active_class_entry) = original_active_class_entry;
+	zend_file_context_begin(&state.original_file_context);
+	state.file_context_started = true;
+	zend_oparray_context_begin(&state.original_oparray_context, op_array);
+	state.oparray_context_started = true;
+	zend_compile_top_stmt(CG(ast));
+	CG(zend_lineno) = last_lineno;
+	zend_emit_final_return(type == ZEND_USER_FUNCTION);
+	op_array->line_start = 1;
+	op_array->line_end = last_lineno;
+	pass_two(op_array);
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&state.record);
+#endif
+	zend_oparray_context_end(&state.original_oparray_context);
+	zend_file_context_end(&state.original_file_context);
 
-	if (state->bailed_out) {
-		destroy_op_array(op_array);
-		efree_size(op_array, sizeof(*op_array));
-		efree(state);
-		zend_bailout();
-	}
-	efree(state);
+	CG(active_op_array) = state.original_active_op_array;
 
 	return op_array;
 }
 
+#ifdef HAVE_NATIVE_ENGINE
+static void zend_compile_unwind(zend_native_bailout_record *record)
+{
+	zend_ast_destroy(CG(ast));
+	zend_arena_destroy(CG(ast_arena));
+}
+#endif
+
 static zend_op_array *zend_compile(zend_function_type type)
 {
-	struct {
-		zend_op_array *op_array;
-		bool bailed_out;
-	} *state = ecalloc(1, sizeof(*state));
+	zend_op_array *op_array = NULL;
 	bool original_in_compilation = CG(in_compilation);
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_bailout_record record;
+#endif
 
 	CG(in_compilation) = 1;
 	CG(ast) = NULL;
 	CG(ast_arena) = zend_arena_create(1024 * 32);
 
-	zend_try {
-		if (!zendparse()) {
-			state->op_array = zend_compile_ast_internal(type);
-		}
-	} zend_catch {
-		state->bailed_out = true;
-	} zend_end_try();
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_LINK(&record, zend_compile_unwind);
+#endif
+	if (!zendparse()) {
+		op_array = zend_compile_ast_internal(type);
+	}
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&record);
+#endif
 
 	zend_ast_destroy(CG(ast));
 	zend_arena_destroy(CG(ast_arena));
 
 	CG(in_compilation) = original_in_compilation;
 
-	if (state->bailed_out) {
-		efree(state);
-		zend_bailout();
-	}
-	zend_op_array *op_array = state->op_array;
-	efree(state);
 	return op_array;
 }
 
-ZEND_API zend_op_array *compile_file(zend_file_handle *file_handle, int type)
-{
+typedef struct _zend_compile_file_state {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_bailout_record record;
+#endif
 	zend_lex_state original_lex_state;
-	struct {
-		zend_op_array *op_array;
-		bool recording_errors;
-		bool bailed_out;
-	} *state = ecalloc(1, sizeof(*state));
-	zend_save_lexical_state(&original_lex_state);
+	zend_op_array *op_array;
+	bool recording_errors;
+} zend_compile_file_state;
 
-	zend_try {
-		if (open_file_for_scanning(file_handle)==FAILURE) {
-			if (!EG(exception)) {
-				if (type==ZEND_REQUIRE) {
-					zend_message_dispatcher(ZMSG_FAILED_REQUIRE_FOPEN, ZSTR_VAL(file_handle->filename));
-				} else {
-					zend_message_dispatcher(ZMSG_FAILED_INCLUDE_FOPEN, ZSTR_VAL(file_handle->filename));
-				}
-			}
-		} else {
-			bool orig_record_errors = EG(record_errors);
-			if (!orig_record_errors) {
-				zend_begin_record_errors();
-				state->recording_errors = true;
-			}
-
-			state->op_array = zend_compile(ZEND_USER_FUNCTION);
-
-			if (!orig_record_errors) {
-				zend_emit_recorded_errors();
-				zend_free_recorded_errors();
-				state->recording_errors = false;
-			}
-		}
-	} zend_catch {
-		state->bailed_out = true;
-	} zend_end_try();
+#ifdef HAVE_NATIVE_ENGINE
+static void zend_compile_file_unwind(zend_native_bailout_record *record)
+{
+	zend_compile_file_state *state = (zend_compile_file_state *) record;
 
 	if (state->recording_errors) {
 		EG(record_errors) = false;
 		zend_free_recorded_errors();
 	}
-
-	zend_restore_lexical_state(&original_lex_state);
-	if (state->bailed_out) {
-		if (state->op_array != NULL) {
-			destroy_op_array(state->op_array);
-			efree_size(state->op_array, sizeof(*state->op_array));
-		}
-		efree(state);
-		zend_bailout();
+	zend_restore_lexical_state(&state->original_lex_state);
+	if (state->op_array != NULL) {
+		destroy_op_array(state->op_array);
+		efree_size(state->op_array, sizeof(*state->op_array));
 	}
-	zend_op_array *op_array = state->op_array;
-	efree(state);
-	return op_array;
+}
+#endif
+
+ZEND_API zend_op_array *compile_file(zend_file_handle *file_handle, int type)
+{
+	zend_compile_file_state state;
+
+	state.op_array = NULL;
+	state.recording_errors = false;
+	zend_save_lexical_state(&state.original_lex_state);
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_LINK(&state.record, zend_compile_file_unwind);
+#endif
+
+	if (open_file_for_scanning(file_handle)==FAILURE) {
+		if (!EG(exception)) {
+			if (type==ZEND_REQUIRE) {
+				zend_message_dispatcher(ZMSG_FAILED_REQUIRE_FOPEN, ZSTR_VAL(file_handle->filename));
+			} else {
+				zend_message_dispatcher(ZMSG_FAILED_INCLUDE_FOPEN, ZSTR_VAL(file_handle->filename));
+			}
+		}
+	} else {
+		bool orig_record_errors = EG(record_errors);
+		if (!orig_record_errors) {
+			zend_begin_record_errors();
+			state.recording_errors = true;
+		}
+
+		state.op_array = zend_compile(ZEND_USER_FUNCTION);
+
+		if (!orig_record_errors) {
+			zend_emit_recorded_errors();
+			zend_free_recorded_errors();
+			state.recording_errors = false;
+		}
+	}
+
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&state.record);
+#endif
+	zend_restore_lexical_state(&state.original_lex_state);
+	return state.op_array;
 }
 
 ZEND_API zend_op_array *zend_compile_ast(
@@ -890,60 +929,68 @@ ZEND_API size_t zend_get_scanned_file_offset(void)
 	return offset;
 }
 
+typedef struct _zend_compile_string_state {
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_bailout_record record;
+#endif
+	zend_lex_state original_lex_state;
+	zval source;
+	zend_string *filename;
+} zend_compile_string_state;
+
+#ifdef HAVE_NATIVE_ENGINE
+static void zend_compile_string_unwind(zend_native_bailout_record *record)
+{
+	zend_compile_string_state *state = (zend_compile_string_state *) record;
+
+	zend_restore_lexical_state(&state->original_lex_state);
+	zval_ptr_dtor(&state->source);
+	if (state->filename != NULL) {
+		zend_string_release(state->filename);
+	}
+}
+#endif
+
 zend_op_array *compile_string(zend_string *source_string, const char *filename, zend_compile_position position)
 {
-	zend_lex_state original_lex_state;
-	struct {
-		zend_op_array *op_array;
-		zend_string *filename;
-		bool bailed_out;
-	} *state;
-	zval tmp;
+	zend_compile_string_state state;
+	zend_op_array *op_array = NULL;
 
 	if (ZSTR_LEN(source_string) == 0) {
 		return NULL;
 	}
 
-	ZVAL_STR_COPY(&tmp, source_string);
-	state = ecalloc(1, sizeof(*state));
+	ZVAL_STR_COPY(&state.source, source_string);
 
-	zend_save_lexical_state(&original_lex_state);
+	zend_save_lexical_state(&state.original_lex_state);
+	state.filename = zend_string_init(filename, strlen(filename), 0);
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_LINK(&state.record, zend_compile_string_unwind);
+#endif
+	zend_prepare_string_for_scanning(&state.source, state.filename);
+	zend_string_release(state.filename);
+	state.filename = NULL;
 
-	zend_try {
-		state->filename = zend_string_init(filename, strlen(filename), 0);
-		zend_prepare_string_for_scanning(&tmp, state->filename);
-		zend_string_release(state->filename);
-		state->filename = NULL;
-
-		switch (position) {
-			case ZEND_COMPILE_POSITION_AT_SHEBANG:
-				BEGIN(SHEBANG);
-				break;
-			case ZEND_COMPILE_POSITION_AT_OPEN_TAG:
-				BEGIN(INITIAL);
-				break;
-			case ZEND_COMPILE_POSITION_AFTER_OPEN_TAG:
-				BEGIN(ST_IN_SCRIPTING);
-				break;
-		}
-
-		state->op_array = zend_compile(ZEND_EVAL_CODE);
-	} zend_catch {
-		state->bailed_out = true;
-	} zend_end_try();
-
-	zend_restore_lexical_state(&original_lex_state);
-	zval_ptr_dtor(&tmp);
-	if (state->filename != NULL) {
-		zend_string_release(state->filename);
+	switch (position) {
+		case ZEND_COMPILE_POSITION_AT_SHEBANG:
+			BEGIN(SHEBANG);
+			break;
+		case ZEND_COMPILE_POSITION_AT_OPEN_TAG:
+			BEGIN(INITIAL);
+			break;
+		case ZEND_COMPILE_POSITION_AFTER_OPEN_TAG:
+			BEGIN(ST_IN_SCRIPTING);
+			break;
 	}
 
-	if (state->bailed_out) {
-		efree(state);
-		zend_bailout();
-	}
-	zend_op_array *op_array = state->op_array;
-	efree(state);
+	op_array = zend_compile(ZEND_EVAL_CODE);
+
+#ifdef HAVE_NATIVE_ENGINE
+	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&state.record);
+#endif
+	zend_restore_lexical_state(&state.original_lex_state);
+	zval_ptr_dtor(&state.source);
+
 	return op_array;
 }
 
