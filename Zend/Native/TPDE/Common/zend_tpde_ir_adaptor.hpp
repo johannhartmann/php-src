@@ -11,12 +11,14 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace zend::native::tpde {
@@ -381,6 +383,11 @@ private:
 	/* Per deoptimization resume ID: its landing exists in this function,
 	 * and the frame-state map of that landing. */
 	std::vector<uint8_t> deopt_resume_landed_;
+	/* Per MIR instruction: the first resume ID with a landing whose
+	 * operation starts there, UINT32_MAX if none. */
+	std::vector<uint32_t> deopt_resume_by_instruction_;
+	/* Per TPDE block: it holds a guard's or boxed branch's cold node. */
+	std::vector<uint8_t> block_cold_;
 	std::vector<Slice> deopt_landing_slices_;
 	std::vector<IRValueRef> deopt_landing_values_;
 	zend_tpde_instruction synthetic_instruction_{};
@@ -1281,39 +1288,71 @@ private:
 		 * live-in set. */
 		deopt_resume_landed_.assign(plan_->deopt_resume_count, 0);
 		deopt_landing_slices_.assign(plan_->deopt_resume_count, {});
+		/* Per resumed instruction: the first block holding its operation's
+		 * cold node, and all of its cold nodes in node order. */
+		std::unordered_map<uint32_t, uint32_t> cold_blocks;
+		std::unordered_map<uint32_t, std::vector<uint32_t>> cold_nodes;
+		for (uint32_t resume = 0; resume < plan_->deopt_resume_count;
+				++resume) {
+			cold_blocks.try_emplace(
+				plan_->deopt_resume_instructions[resume], UINT32_MAX);
+			cold_nodes.try_emplace(plan_->deopt_resume_instructions[resume]);
+		}
+		for (uint32_t block = 0; block < block_count; ++block) {
+			for (const uint32_t node_index : block_nodes[block]) {
+				const InstNode &current = nodes_[node_index];
+				if (current.kind != InstKind::GuardedCold
+						|| current.synthetic) {
+					continue;
+				}
+				const auto found =
+					cold_blocks.find(current.mir_instruction_index);
+				if (found != cold_blocks.end()
+						&& found->second == UINT32_MAX) {
+					found->second = block;
+				}
+			}
+		}
+		for (uint32_t node_index = 0; node_index < nodes_.size();
+				++node_index) {
+			const InstNode &current = nodes_[node_index];
+			if (current.kind != InstKind::GuardedCold || current.synthetic) {
+				continue;
+			}
+			const auto found = cold_nodes.find(current.mir_instruction_index);
+			if (found != cold_nodes.end()) {
+				found->second.push_back(node_index);
+			}
+		}
 		for (uint32_t resume = 0; resume < plan_->deopt_resume_count;
 				++resume) {
 			const uint32_t instruction = plan_->deopt_resume_instructions[resume];
-			uint32_t cold_block = UINT32_MAX;
-			for (uint32_t block = 0; block < block_count
-					&& cold_block == UINT32_MAX; ++block) {
-				for (const uint32_t node_index : block_nodes[block]) {
-					const InstNode &current = nodes_[node_index];
-					if (current.kind == InstKind::GuardedCold
-							&& !current.synthetic
-							&& current.mir_instruction_index == instruction) {
-						cold_block = block;
-						break;
-					}
-				}
-			}
+			const uint32_t cold_block = cold_blocks[instruction];
 			if (cold_block == UINT32_MAX || block_nodes[cold_block].empty()) {
 				continue;
 			}
 			const uint32_t offset =
 				static_cast<uint32_t>(deopt_landing_values_.size());
 			bool complete = true;
-			for (uint32_t index = 0; index < value_count && complete;
-					++index) {
-				if (!test(live_in, cold_block, index)
-						|| !available_into(cold_block, index)) {
-					continue;
+			/* The live-in values in ascending order. */
+			for (uint32_t word = 0; word < words && complete; ++word) {
+				for (uint64_t bits =
+							live_in[uint64_t{cold_block} * words + word];
+						bits != 0; bits &= bits - 1) {
+					const uint32_t index = word * 64
+						+ static_cast<uint32_t>(std::countr_zero(bits));
+					if (index >= value_count) {
+						break;
+					}
+					if (!available_into(cold_block, index)) {
+						continue;
+					}
+					if (!reloadable(index)) {
+						complete = false;
+						break;
+					}
+					deopt_landing_values_.push_back(IRValueRef{index});
 				}
-				if (!reloadable(index)) {
-					complete = false;
-					break;
-				}
-				deopt_landing_values_.push_back(IRValueRef{index});
 			}
 			if (!complete) {
 				deopt_landing_values_.erase(
@@ -1325,7 +1364,7 @@ private:
 				static_cast<uint32_t>(deopt_landing_values_.size()) - offset};
 			deopt_resume_landed_[resume] = 1;
 			nodes_[block_nodes[cold_block].front()].deopt_landing = resume;
-			add_deopt_stores(instruction,
+			add_deopt_stores(cold_nodes[instruction],
 				std::span<const IRValueRef>{deopt_landing_values_}.subspan(
 					offset, deopt_landing_slices_[resume].count));
 		}
@@ -1367,9 +1406,10 @@ private:
 	 * which runs the transfer, first stores every scalar of the landing's
 	 * map: a slot whose value is a scalar holds no counted value, so the
 	 * store is exact. Pointer values stay with their slots, which a
-	 * separating helper may have replaced.
+	 * separating helper may have replaced. cold_nodes are the operation's
+	 * cold nodes in node order.
 	 */
-	void add_deopt_stores(uint32_t instruction_index,
+	void add_deopt_stores(const std::vector<uint32_t> &cold_nodes,
 			std::span<const IRValueRef> landing_values) {
 		std::vector<IRValueRef> stores;
 		for (const IRValueRef value : landing_values) {
@@ -1380,12 +1420,8 @@ private:
 				stores.push_back(value);
 			}
 		}
-		for (InstNode &current : nodes_) {
-			if (current.mir_instruction_index == instruction_index
-					&& !current.synthetic
-					&& current.kind == InstKind::GuardedCold) {
-				attach_deopt_stores(current, stores);
-			}
+		for (const uint32_t node_index : cold_nodes) {
+			attach_deopt_stores(nodes_[node_index], stores);
 		}
 	}
 
@@ -5869,10 +5905,25 @@ public:
 				break;
 			}
 		};
+		/* The pending inputs by block, in insertion order: all of them are
+		 * recorded before the instruction stream is built. */
+		std::vector<uint32_t> pending_by_block(pending_phi_inputs.size());
+		for (uint32_t index = 0; index < pending_by_block.size(); ++index) {
+			pending_by_block[index] = index;
+		}
+		std::ranges::stable_sort(pending_by_block, {},
+			[&](uint32_t index) { return pending_phi_inputs[index].block; });
+		auto block_pending = [&](uint32_t block) {
+			return std::ranges::equal_range(pending_by_block, block, {},
+				[&](uint32_t index) {
+					return pending_phi_inputs[index].block;
+				});
+		};
 		auto emit_pending_phi_inputs = [&](uint32_t block,
 				uint32_t terminator_instruction) {
-			for (PendingPhiInput &pending : pending_phi_inputs) {
-				if (pending.emitted || pending.block != block) {
+			for (const uint32_t pending_index : block_pending(block)) {
+				PendingPhiInput &pending = pending_phi_inputs[pending_index];
+				if (pending.emitted) {
 					continue;
 				}
 				const uint32_t operand_offset =
@@ -5894,9 +5945,9 @@ public:
 			}
 		};
 		auto has_pending_phi_inputs = [&](uint32_t block) {
-			return std::ranges::any_of(pending_phi_inputs,
-				[&](const PendingPhiInput &pending) {
-					return !pending.emitted && pending.block == block;
+			return std::ranges::any_of(block_pending(block),
+				[&](uint32_t pending_index) {
+					return !pending_phi_inputs[pending_index].emitted;
 				});
 		};
 		std::vector<uint8_t> elided_silence_instructions(
@@ -10324,6 +10375,21 @@ public:
 		}
 		freeze_deopt_landing_values(
 			block_instructions, block_phis, tpde_block_count);
+		for (uint32_t resume = 0; resume < deopt_resume_landed_.size();
+				++resume) {
+			if (deopt_resume_landed_[resume] == 0) {
+				continue;
+			}
+			const uint32_t instruction =
+				plan_->deopt_resume_instructions[resume];
+			if (instruction >= deopt_resume_by_instruction_.size()) {
+				deopt_resume_by_instruction_.resize(
+					static_cast<size_t>(instruction) + 1, UINT32_MAX);
+			}
+			if (deopt_resume_by_instruction_[instruction] == UINT32_MAX) {
+				deopt_resume_by_instruction_[instruction] = resume;
+			}
+		}
 		for (const InstNode &load : nodes_) {
 			if (load.kind != InstKind::ZvalPayloadLoad || !load.has_result
 					|| !zend_mir_id_is_valid(load.storage_id)) {
@@ -10546,6 +10612,17 @@ public:
 		}
 		flatten_block_items(tpde_block_count, block_instructions,
 			instruction_slices_, instructions_);
+		block_cold_.assign(tpde_block_count, 0);
+		for (uint32_t block = 0; block < tpde_block_count; ++block) {
+			for (IRInstRef inst : block_insts(IRBlockRef{block})) {
+				const InstKind kind = node(inst).kind;
+				if (kind == InstKind::GuardedCold
+						|| kind == InstKind::BoxedCondCold) {
+					block_cold_[block] = 1;
+					break;
+				}
+			}
+		}
 		flatten_block_items(tpde_block_count, block_phis,
 			phi_slices_, phis_);
 		block_instructions.clear();
@@ -10693,14 +10770,8 @@ public:
 	/* The deoptimization resume ID whose operation starts at MIR
 	 * instruction `index` and has a landing, or UINT32_MAX. */
 	uint32_t deopt_resume_index(uint32_t index) const {
-		for (uint32_t resume = 0; resume < deopt_resume_landed_.size();
-				++resume) {
-			if (deopt_resume_landed_[resume] != 0
-					&& plan_->deopt_resume_instructions[resume] == index) {
-				return resume;
-			}
-		}
-		return UINT32_MAX;
+		return index < deopt_resume_by_instruction_.size()
+			? deopt_resume_by_instruction_[index] : UINT32_MAX;
 	}
 	bool deopt_resume_landed(uint32_t resume) const {
 		return resume < deopt_resume_landed_.size()
@@ -11201,14 +11272,7 @@ public:
 			(void) block;
 			return false;
 		}
-		for (IRInstRef inst : block_insts(block)) {
-			const InstKind kind = node(inst).kind;
-			if (kind == InstKind::GuardedCold
-					|| kind == InstKind::BoxedCondCold) {
-				return true;
-			}
-		}
-		return false;
+		return block_cold_[static_cast<uint32_t>(block)] != 0;
 	}
 	std::span<const IRValueRef> block_phis(IRBlockRef block) const {
 		const Slice &slice = phi_slices_[static_cast<uint32_t>(block)];
