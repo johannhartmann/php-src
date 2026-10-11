@@ -815,7 +815,10 @@ static bool zend_mir_operation_semantics(
 	return true;
 }
 
-/* The effect summary of an operation depends only on its opcode. */
+/*
+ * The effect summary of an operation depends only on its opcode and the
+ * static semantic catalog, so each thread computes it once per opcode.
+ */
 typedef struct _zend_mir_operation_semantics_entry {
 	zend_mir_effect_mask effects;
 	zend_mir_memory_domain_mask reads;
@@ -831,11 +834,15 @@ typedef struct _zend_mir_operation_semantics_memo {
 	zend_mir_operation_semantics_entry entries[ZEND_MIR_OPCODE_COUNT];
 } zend_mir_operation_semantics_memo;
 
+ZEND_TLS zend_mir_operation_semantics_memo
+	zend_mir_operation_semantics_cache;
+
 static bool zend_mir_memoized_operation_semantics(
-	zend_mir_operation_semantics_memo *memo, zend_mir_opcode opcode,
-	zend_mir_executable_value_ref *operation,
+	zend_mir_opcode opcode, zend_mir_executable_value_ref *operation,
 	zend_mir_safepoint_class *frame_class)
 {
+	zend_mir_operation_semantics_memo *memo =
+		&zend_mir_operation_semantics_cache;
 	zend_mir_operation_semantics_entry *entry;
 
 	if ((uint32_t) opcode >= ZEND_MIR_OPCODE_COUNT) {
@@ -1633,10 +1640,8 @@ bool zend_mir_emit_executable_values(
 	uint32_t storage_count;
 	uint32_t value_count;
 	uint32_t index;
-	zend_mir_operation_semantics_memo semantics_memo;
 	bool success = false;
 
-	memset(semantics_memo.state, 0, sizeof(semantics_memo.state));
 	if (op_array == NULL || lowering_context == NULL || module == NULL
 			|| control_flow_map == NULL || frame_context == NULL
 			|| op_array->last > ZEND_MIR_LIMIT
@@ -1983,7 +1988,7 @@ bool zend_mir_emit_executable_values(
 		operation->block_id = mir_block_by_source[source_opcode.block_id];
 		if (!zend_mir_id_is_valid(operation->block_id)
 				|| !zend_mir_memoized_operation_semantics(
-					&semantics_memo, opcode, operation, &frame_class)) {
+					opcode, operation, &frame_class)) {
 			goto done;
 		}
 		if ((opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
