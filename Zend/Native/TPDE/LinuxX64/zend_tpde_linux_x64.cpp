@@ -813,7 +813,37 @@ class ZendCompilerX64 final
 	 * Sends of register values and named or by-reference-checked
 	 * arguments keep the universal protocol.
 	 */
+	/*
+	 * Every phase node of a call asks for its fast form, and both forms
+	 * walk all arguments: the answers are kept per call instruction (a
+	 * plan entry) for the function being compiled.
+	 */
+	mutable std::unordered_map<const zend_tpde_instruction *, uint8_t>
+		fast_call_forms_;
+	static constexpr uint8_t FAST_FORM_STATIC_KNOWN = 1;
+	static constexpr uint8_t FAST_FORM_STATIC = 2;
+	static constexpr uint8_t FAST_FORM_DYNAMIC_KNOWN = 4;
+	static constexpr uint8_t FAST_FORM_DYNAMIC = 8;
 	bool source_call_fast_dynamic(const zend_tpde_instruction &call) const {
+		uint8_t &forms = fast_call_forms_[&call];
+		if ((forms & FAST_FORM_DYNAMIC_KNOWN) == 0) {
+			forms |= FAST_FORM_DYNAMIC_KNOWN
+				| (compute_source_call_fast_dynamic(call)
+					? FAST_FORM_DYNAMIC : 0);
+		}
+		return (forms & FAST_FORM_DYNAMIC) != 0;
+	}
+	bool source_call_fast_static(const zend_tpde_instruction &call) const {
+		uint8_t &forms = fast_call_forms_[&call];
+		if ((forms & FAST_FORM_STATIC_KNOWN) == 0) {
+			forms |= FAST_FORM_STATIC_KNOWN
+				| (compute_source_call_fast_static(call)
+					? FAST_FORM_STATIC : 0);
+		}
+		return (forms & FAST_FORM_STATIC) != 0;
+	}
+	bool compute_source_call_fast_dynamic(
+			const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
 		const zend_tpde_plan *plan = adaptor->plan();
 		/* $object->$method(...): a method named by a CV takes the
@@ -935,7 +965,8 @@ class ZendCompilerX64 final
 		return source_call_fast_static(call) || source_call_fast_dynamic(call);
 	}
 
-	bool source_call_fast_static(const zend_tpde_instruction &call) const {
+	bool compute_source_call_fast_static(
+			const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
 		const zend_tpde_plan *plan = adaptor->plan();
 		auto frame_slot = [](const zend_mir_source_operand_ref &operand) {
@@ -1378,6 +1409,8 @@ public:
 	 * the isset found is the element the read finds. Returns the IRInstRef
 	 * of that read, or an invalid ref.
 	 */
+	std::unordered_map<uint32_t, uint32_t> block_entries_;
+	bool block_entries_counted_ = false;
 	IRInstRef lookup_reuse_consumer(IRInstRef producer_inst) {
 		const Adaptor::InstNode &producer = adaptor->node(producer_inst);
 		const zend_tpde_instruction &producer_mir =
@@ -1438,12 +1471,19 @@ public:
 		if (read_block == branch_succs[1]) {
 			return IRInstRef{UINT32_MAX};
 		}
-		uint32_t entries = 0;
-		for (IRBlockRef block : adaptor->cur_blocks()) {
-			for (IRBlockRef succ : adaptor->block_succs(block)) {
-				entries += succ == read_block;
+		/* The edges into each block, counted once per function. */
+		if (!block_entries_counted_) {
+			for (IRBlockRef block : adaptor->cur_blocks()) {
+				for (IRBlockRef succ : adaptor->block_succs(block)) {
+					++block_entries_[static_cast<uint32_t>(succ)];
+				}
 			}
+			block_entries_counted_ = true;
 		}
+		const auto counted = block_entries_.find(
+			static_cast<uint32_t>(read_block));
+		const uint32_t entries =
+			counted != block_entries_.end() ? counted->second : 0;
 		const auto read_insts = adaptor->block_insts(read_block);
 		if (entries != 1 || read_insts.empty()) {
 			return IRInstRef{UINT32_MAX};
@@ -3770,6 +3810,9 @@ public:
 		user_opcode_labels_.clear();
 		user_opcode_dispatch_labels_.clear();
 		fast_call_slots_.clear();
+		fast_call_forms_.clear();
+		block_entries_.clear();
+		block_entries_counted_ = false;
 		fast_entry_slots_.clear();
 		fast_do_entry_slots_.clear();
 		user_opcode_result_reload_labels_.clear();
@@ -6919,8 +6962,6 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (phase == nullptr) {
 			return false;
 		}
-		const bool send_phase =
-			node.kind == Adaptor::InstKind::UserCallSend;
 		auto frame_liveness = val_ref(node.operands[0]);
 		auto context_liveness = val_ref(node.operands[1]);
 		/*
@@ -8258,12 +8299,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| target_offset > INT32_MAX - sizeof(zval)) {
 				return false;
 			}
-			const zend_tpde_source_call_phase_entry *send_phase =
-				zend_tpde_source_call_phase_at(
-					adaptor->plan(), node.source_position);
-			const bool direct = send_phase != nullptr
-				&& (send_phase->operand_flags
-					& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0;
+			const bool direct = (phase->operand_flags
+				& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0;
 			if (direct && node.operands.size() != 3) {
 				return false;
 			}
@@ -9503,7 +9540,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			return EncodeBase::encode_zend_native_load_u64(
 				address.part(0), result.part(0));
 		}
-		if (frame_slot && frame_offset > INT32_MAX - sizeof(zval)) {
+		/* frame_offset is 0 for an address operand. */
+		if (frame_offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
 		if (frame_slot
@@ -9546,9 +9584,6 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			return true;
 		}
-		if (frame_offset > INT32_MAX - sizeof(zval)) {
-			return false;
-		}
 		auto emit = [&](AsmReg address, int32_t offset) {
 			if (result_kind
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
@@ -9580,12 +9615,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto result_reg = result.alloc_reg();
 			switch (node.exact_type) {
 				case ZEND_MIR_SCALAR_TYPE_I1:
-					ASM(MOV32rm, result_reg,
+					/* An exact boolean is IS_FALSE or IS_TRUE, which are
+					 * adjacent. */
+					static_assert(IS_TRUE == IS_FALSE + 1);
+					ASM(MOVZXr32m8, result_reg,
 						FE_MEM(address, 0, FE_NOREG,
 							offset + static_cast<int32_t>(
-								offsetof(zval, u1.type_info))));
-					ASM(CMP32ri, result_reg, IS_TRUE);
-					generate_raw_set(Jump::je, result_reg);
+								offsetof(zval, u1.v.type))));
+					ASM(SUB32ri, result_reg, IS_FALSE);
 					break;
 				case ZEND_MIR_SCALAR_TYPE_I64:
 					ASM(MOV64rm, result_reg,
@@ -9636,8 +9673,7 @@ bool ZendCompilerX64::compile_inst_impl(
 	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 		if (mir.zval_store_lazy_scalar
 				&& node.kind == Adaptor::InstKind::MIR) {
-			if (node.kind != Adaptor::InstKind::MIR
-					|| node.operands.size() != 1
+			if (node.operands.size() != 1
 					|| node.operands[0]
 						!= IRValueRef{Adaptor::FRAME_VALUE}) {
 				return false;
@@ -10267,10 +10303,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};
 		zend_tpde_frameless_direct frameless_direct{};
-		const bool frameless_inline =
+		const bool frameless_direct_form =
 			helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
+			&& zend_tpde_frameless_direct_at(mir, &frameless_direct);
+		const bool frameless_inline = frameless_direct_form
 			&& frame_argument == nullptr
-			&& zend_tpde_frameless_direct_at(mir, &frameless_direct)
 			&& frameless_inline_allowed(operation, frameless_direct);
 		std::optional<ScratchReg> frameless_status;
 		zend_tpde_concat_assign_direct concat_assign_direct{};
@@ -10313,11 +10350,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
 			&& zend_tpde_dim_direct_at(mir, &dim_direct);
 		/* So does a two- or three-argument frameless call. */
-		const bool frameless_address =
-			helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
+		const bool frameless_address = frameless_direct_form
 			&& (source_opcode == ZEND_FRAMELESS_ICALL_2
-				|| source_opcode == ZEND_FRAMELESS_ICALL_3)
-			&& zend_tpde_frameless_direct_at(mir, &frameless_direct);
+				|| source_opcode == ZEND_FRAMELESS_ICALL_3);
 		/* INIT_ARRAY and ADD_ARRAY_ELEMENT of literal, CV and temporary
 		 * operands take addresses too. */
 		struct ValueAddress {
@@ -10622,8 +10657,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			add_const_arg(builder, operation.source_position_id, 4);
 			builder.call(runtime_symbol(
 				ZEND_NATIVE_HELPER_CONST_INCLUDE_ONCE));
-		} else if (helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
-				&& zend_tpde_frameless_direct_at(mir, &frameless_direct)) {
+		} else if (frameless_direct_form) {
 			/* Only ICALL_0 and ICALL_1 get here; ICALL_2 and ICALL_3 take
 			 * the address form above. */
 			add_const_arg(builder, frameless_direct.descriptor, 8);
