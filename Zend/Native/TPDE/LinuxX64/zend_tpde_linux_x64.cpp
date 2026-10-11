@@ -2511,6 +2511,30 @@ public:
 			text_writer.offset() - 4, -4);
 	}
 	/* target = the literal table of the function frame executes. */
+	/*
+	 * EX(This).u1.type_info and u2.num_args of a frame being set up. A frame
+	 * without arguments takes both in one store: num_args follows type_info,
+	 * and the call flags leave the sign bit of the immediate clear.
+	 */
+	void store_call_info(AsmReg frame_reg, uint32_t type_info,
+			uint32_t num_args) {
+		static_assert(offsetof(zval, u2.num_args)
+			== offsetof(zval, u1.type_info) + sizeof(uint32_t));
+		const int32_t offset = static_cast<int32_t>(
+			offsetof(zend_execute_data, This) + offsetof(zval, u1.type_info));
+		if (num_args == 0 && type_info <= INT32_MAX) {
+			ASM(MOV64mi, FE_MEM(frame_reg, 0, FE_NOREG, offset),
+				static_cast<int32_t>(type_info));
+			return;
+		}
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, offset),
+			static_cast<int32_t>(type_info));
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				offset + static_cast<int32_t>(sizeof(uint32_t))),
+			static_cast<int32_t>(num_args));
+	}
+
 	template <typename Reg, typename Frame>
 	void emit_literal_base(Reg target, Frame frame) {
 		ASM(MOV64rm, target, FE_MEM(frame, 0, FE_NOREG,
@@ -21735,11 +21759,7 @@ bool ZendCompilerX64::compile_inst_impl(
 									offsetof(zend_execute_data, This))),
 							0);
 					}
-					ASM(MOV32mi,
-						FE_MEM(callee_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_execute_data, This)
-								+ offsetof(zval, u1.type_info))),
+					store_call_info(callee_reg,
 						ZEND_CALL_NESTED_FUNCTION
 							| ((call.direct_call->receiver_kind
 										== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS
@@ -21750,14 +21770,8 @@ bool ZendCompilerX64::compile_inst_impl(
 									== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT
 								? ZEND_CALL_RELEASE_THIS : 0)
 							| (release_extra_arguments
-								? ZEND_CALL_FREE_EXTRA_ARGS : 0));
-					ASM(MOV32mi,
-						FE_MEM(callee_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_execute_data, This)
-								+ offsetof(zval, u2.num_args))),
-						static_cast<int32_t>(
-							call.direct_call->frame_argument_count));
+								? ZEND_CALL_FREE_EXTRA_ARGS : 0),
+						call.direct_call->frame_argument_count);
 
 					/* Publish the caller source position used by stack traces. */
 					emit_publish_opline(frame_reg, second_reg,
@@ -23338,15 +23352,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64mi, FE_MEM(top_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zend_execute_data, This))),
 						0);
-					ASM(MOV32mi, FE_MEM(top_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_execute_data, This)
-							+ offsetof(zval, u1.type_info))),
-						ZEND_CALL_NESTED_FUNCTION);
-					ASM(MOV32mi, FE_MEM(top_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_execute_data, This)
-							+ offsetof(zval, u2.num_args))),
-						static_cast<int32_t>(
-							internal_descriptor->initial_argument_count));
+					store_call_info(top_reg, ZEND_CALL_NESTED_FUNCTION,
+						internal_descriptor->initial_argument_count);
 					for (uint32_t index = 0;
 							index < internal_descriptor->initial_argument_count;
 							++index) {
