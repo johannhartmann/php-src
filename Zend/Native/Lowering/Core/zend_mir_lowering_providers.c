@@ -4418,11 +4418,16 @@ static bool zend_mir_prepare_slots(
 static zend_mir_value_id zend_mir_typed_conversion_value(
 	const void *context, uint32_t opline_index, uint32_t operand_index);
 
+/* The completed registry of the first compile on this thread. */
+ZEND_TLS zend_mir_lowering_registry zend_mir_provider_registry;
+ZEND_TLS bool zend_mir_provider_registry_ready;
+
 static bool zend_mir_prepare_providers(
 	zend_mir_integration *integration)
 {
 	zend_mir_lowering_diagnostic_code diagnostic;
-	zend_mir_lowering_provider provider;
+	zend_mir_lowering_provider providers[ZEND_MIR_NUMERIC_PROVIDER_COUNT + 2];
+	uint32_t provider_count;
 	uint32_t index;
 
 	/*
@@ -4482,8 +4487,30 @@ static bool zend_mir_prepare_providers(
 		ZEND_MIR_STRAIGHT_LINE_PROOF_SOURCE_CFG;
 	if (!zend_mir_lifetime_provider_init(
 			&integration->lifetime_context,
-			&integration->lifetime_provider)
-			|| !zend_mir_lowering_registry_init(
+			&integration->lifetime_provider)) {
+		return false;
+	}
+	provider_count = zend_mir_numeric_provider_count(
+		&integration->numeric_providers);
+	if (provider_count > ZEND_MIR_NUMERIC_PROVIDER_COUNT) {
+		return false;
+	}
+	for (index = 0; index < provider_count; index++) {
+		if (!zend_mir_numeric_provider_at(
+				&integration->numeric_providers, index, &providers[index])) {
+			return false;
+		}
+	}
+	providers[provider_count++] = integration->logic_provider;
+	providers[provider_count++] = integration->lifetime_provider;
+	/* Every compile registers the same providers, so the dispatch table is
+	 * built and validated once per thread and later compiles only bind
+	 * their own provider contexts. */
+	if (zend_mir_provider_registry_ready) {
+		return zend_mir_lowering_registry_rebind(&integration->registry,
+			&zend_mir_provider_registry, providers, provider_count);
+	}
+	if (!zend_mir_lowering_registry_init(
 				&integration->registry, zend_mir_lowering_scalar_profile(),
 				&diagnostic)
 			|| !zend_mir_lowering_register_nop(
@@ -4491,24 +4518,19 @@ static bool zend_mir_prepare_providers(
 				&diagnostic)) {
 		return false;
 	}
-	for (index = 0;
-			index < zend_mir_numeric_provider_count(
-				&integration->numeric_providers);
-			index++) {
-		if (!zend_mir_numeric_provider_at(
-				&integration->numeric_providers, index, &provider)
-				|| !zend_mir_lowering_registry_register(
-					&integration->registry, &provider, &diagnostic)) {
+	for (index = 0; index < provider_count; index++) {
+		if (!zend_mir_lowering_registry_register(
+				&integration->registry, &providers[index], &diagnostic)) {
 			return false;
 		}
 	}
-	return zend_mir_lowering_registry_register(
-			&integration->registry, &integration->logic_provider, &diagnostic)
-		&& zend_mir_lowering_registry_register(
-			&integration->registry, &integration->lifetime_provider,
-			&diagnostic)
-		&& zend_mir_lowering_registry_validate(
-			&integration->registry, &diagnostic);
+	if (!zend_mir_lowering_registry_validate(
+			&integration->registry, &diagnostic)) {
+		return false;
+	}
+	zend_mir_provider_registry = integration->registry;
+	zend_mir_provider_registry_ready = true;
+	return true;
 }
 
 static bool zend_mir_forward_add_function(

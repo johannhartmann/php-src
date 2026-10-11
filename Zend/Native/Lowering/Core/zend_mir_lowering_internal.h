@@ -139,6 +139,17 @@ const zend_mir_lowering_provider *zend_mir_lowering_registry_find(
 	const zend_mir_lowering_registry *registry, uint32_t zend_opcode_number);
 bool zend_mir_lowering_register_nop(zend_mir_lowering_registry *registry,
 	uint32_t semantic_family_id, zend_mir_lowering_diagnostic_code *diagnostic_out);
+/*
+ * Copies the completed registry source into target and binds every provider
+ * to the context of the provider in providers with the same provider_id,
+ * which must have the same family and callbacks; the built-in NOP provider
+ * binds to target's own claim. A registry's claims and dispatch order depend
+ * only on the providers' ids and callbacks, so a registry built once serves
+ * every later compile with the same providers.
+ */
+bool zend_mir_lowering_registry_rebind(zend_mir_lowering_registry *target,
+	const zend_mir_lowering_registry *source,
+	const zend_mir_lowering_provider *providers, uint32_t provider_count);
 
 bool zend_mir_lowering_context_init(zend_mir_lowering_context *context,
 	const zend_mir_lowering_source_view *source,

@@ -580,3 +580,65 @@ bool zend_mir_lowering_register_nop(zend_mir_lowering_registry *registry,
 	}
 	return registered;
 }
+
+bool zend_mir_lowering_registry_rebind(zend_mir_lowering_registry *target,
+	const zend_mir_lowering_registry *source,
+	const zend_mir_lowering_provider *providers, uint32_t provider_count)
+{
+	uint32_t index;
+
+	if (target == NULL || source == NULL || !source->complete
+			|| (provider_count != 0 && providers == NULL)) {
+		return false;
+	}
+	*target = *source;
+	for (index = 0; index < target->provider_count; index++) {
+		zend_mir_lowering_provider *slot = &target->providers[index];
+		uint32_t candidate;
+
+		if (slot->lower == zend_mir_lowering_nop) {
+			slot->context = &target->builtin_nop_claim;
+			continue;
+		}
+		for (candidate = 0; candidate < provider_count; candidate++) {
+			if (providers[candidate].provider_id == slot->provider_id) {
+				break;
+			}
+		}
+		if (candidate == provider_count
+				|| providers[candidate].semantic_family_id
+					!= slot->semantic_family_id
+				|| providers[candidate].claim_count != slot->claim_count
+				|| providers[candidate].claim_at != slot->claim_at
+				|| providers[candidate].lower != slot->lower) {
+			return false;
+		}
+		slot->context = providers[candidate].context;
+#if !defined(NDEBUG)
+		{
+			const uint32_t claim_count = slot->claim_count(slot->context);
+			uint32_t claim_index;
+			uint32_t dispatched = 0;
+
+			for (claim_index = 0; claim_index < target->dispatch_count;
+					claim_index++) {
+				dispatched +=
+					target->dispatch[claim_index].provider_index == index;
+			}
+			if (claim_count != dispatched) {
+				return false;
+			}
+			for (claim_index = 0; claim_index < claim_count; claim_index++) {
+				zend_mir_lowering_claim claim;
+
+				if (!slot->claim_at(slot->context, claim_index, &claim)
+						|| zend_mir_lowering_registry_find(
+							target, claim.zend_opcode_number) != slot) {
+					return false;
+				}
+			}
+		}
+#endif
+	}
+	return true;
+}
