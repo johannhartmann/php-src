@@ -9588,6 +9588,9 @@ public:
 						materialization_count};
 					guard.control_block = block;
 					guard.continuation_block = guarded_hot_block;
+					/* The guard reads all of its operands; liveness operands a
+					 * generator resume block appends follow them. */
+					guard.semantic_operand_count = guard.operand_count;
 					add_node(block_instructions, block, std::move(guard));
 
 					fast_operand_offset =

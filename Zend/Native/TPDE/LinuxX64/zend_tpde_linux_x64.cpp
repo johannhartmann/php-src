@@ -5782,8 +5782,7 @@ bool ZendCompilerX64::compile_inst_impl(
 	if (node.kind == Adaptor::InstKind::TypedCallGuard) {
 		/* Statepoint materializations precede the guarded values; they
 		 * are liveness operands only. */
-		const std::span<const IRValueRef> guard_operands =
-			node.liveness_operands;
+		const std::span<const IRValueRef> guard_operands = node.operands;
 		ZEND_ASSERT(node.argument_index != UINT32_MAX
 			&& node.continuation_block != UINT32_MAX);
 		const IRBlockRef cold{node.argument_index};
