@@ -7887,21 +7887,94 @@ bool initialize_plan(
 	 * calls, 0 when it may not, -1 before the group is examined.
 	 */
 	std::vector<int8_t> nested_direct_groups;
-	auto nested_call_group_direct = [&](
-			const zend_mir_call_site_ref &site) {
-		const uint32_t site_count = calls->call_site_count(calls->context);
-		std::vector<zend_mir_call_site_ref> sites(site_count);
-		uint32_t site_index = UINT32_MAX;
-		for (uint32_t index = 0; index < site_count; ++index) {
-			if (!calls->call_site_at(calls->context, index, &sites[index])) {
-				return false;
+	/*
+	 * The call sites as plan->call_sites holds them, read once from the view
+	 * in this order. Unless two sites share an ID, a site's own index is
+	 * the one of its ID, and whether another site nests in it or it in
+	 * another follows from the sites ordered by INIT.
+	 */
+	const zend_mir_call_site_ref *const sites = plan->call_sites;
+	const uint32_t site_count = plan->call_site_count;
+	int8_t unique_site_ids = -1;
+	std::vector<uint8_t> nested_participants;
+	auto site_ids_unique = [&]() {
+		if (unique_site_ids < 0) {
+			std::vector<zend_mir_call_site_id> ids(site_count);
+			for (uint32_t index = 0; index < site_count; ++index) {
+				ids[index] = sites[index].id;
 			}
-			if (sites[index].id == site.id) {
-				site_index = index;
+			std::ranges::sort(ids);
+			unique_site_ids =
+				std::adjacent_find(ids.begin(), ids.end()) == ids.end() ? 1 : 0;
+		}
+		return unique_site_ids == 1;
+	};
+	auto participates_in_nested_call = [&](uint32_t site_index) {
+		if (!site_ids_unique()) {
+			return call_site_participates_in_nested_call(
+				calls, sites[site_index]);
+		}
+		if (nested_participants.empty()) {
+			nested_participants.assign(site_count, 0);
+			std::vector<uint32_t> order(site_count);
+			for (uint32_t index = 0; index < site_count; ++index) {
+				order[index] = index;
+			}
+			std::ranges::sort(order, [&](uint32_t left, uint32_t right) {
+				return sites[left].source_init_opline_index
+					< sites[right].source_init_opline_index;
+			});
+			/* A site in another: one with a smaller INIT ends after it. */
+			int64_t latest_do = -1;
+			for (uint32_t begin = 0; begin < site_count;) {
+				uint32_t end = begin;
+				while (end < site_count
+						&& sites[order[end]].source_init_opline_index
+							== sites[order[begin]].source_init_opline_index) {
+					++end;
+				}
+				for (uint32_t at = begin; at < end; ++at) {
+					if (latest_do > sites[order[at]].source_do_opline_index) {
+						nested_participants[order[at]] = 1;
+					}
+				}
+				for (uint32_t at = begin; at < end; ++at) {
+					latest_do = std::max<int64_t>(latest_do,
+						sites[order[at]].source_do_opline_index);
+				}
+				begin = end;
+			}
+			/* Another in a site: one with a larger INIT ends before it. */
+			int64_t earliest_do = INT64_MAX;
+			for (uint32_t end = site_count; end > 0;) {
+				uint32_t begin = end;
+				while (begin > 0
+						&& sites[order[begin - 1]].source_init_opline_index
+							== sites[order[end - 1]].source_init_opline_index) {
+					--begin;
+				}
+				for (uint32_t at = begin; at < end; ++at) {
+					if (earliest_do < sites[order[at]].source_do_opline_index) {
+						nested_participants[order[at]] = 1;
+					}
+				}
+				for (uint32_t at = begin; at < end; ++at) {
+					earliest_do = std::min<int64_t>(earliest_do,
+						sites[order[at]].source_do_opline_index);
+				}
+				end = begin;
 			}
 		}
-		if (site_index == UINT32_MAX) {
-			return false;
+		return nested_participants[site_index] != 0;
+	};
+	auto nested_call_group_direct = [&](uint32_t site_index) {
+		if (!site_ids_unique()) {
+			/* The last site of the ID, as a search by ID finds it. */
+			for (uint32_t index = 0; index < site_count; ++index) {
+				if (sites[index].id == sites[site_index].id) {
+					site_index = index;
+				}
+			}
 		}
 		if (nested_direct_groups.empty()) {
 			nested_direct_groups.assign(site_count, -1);
@@ -7968,11 +8041,9 @@ bool initialize_plan(
 						!= ZEND_DO_FCALL)) {
 			return false;
 		}
-		const uint32_t site_count = calls->call_site_count(calls->context);
 		for (uint32_t index = 0; index < site_count; ++index) {
-			zend_mir_call_site_ref producer_site{};
-			if (!calls->call_site_at(calls->context, index, &producer_site)
-					|| producer_site.source_do_opline_index != producer) {
+			const zend_mir_call_site_ref &producer_site = sites[index];
+			if (producer_site.source_do_opline_index != producer) {
 				continue;
 			}
 			const int32_t binding_index = id_index_find(
@@ -9028,10 +9099,11 @@ bool initialize_plan(
 			const bool internal_under_arity_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 				&& site.arguments.count < target.required_num_args;
-			bool nested_source_call =
-				call_site_participates_in_nested_call(calls, site);
+			bool nested_source_call = participates_in_nested_call(
+				static_cast<uint32_t>(site_index));
 			if (nested_source_call && zend_tpde_linux_inline_forms) {
-				nested_source_call = !nested_call_group_direct(site);
+				nested_source_call = !nested_call_group_direct(
+					static_cast<uint32_t>(site_index));
 			}
 			const bool fragment_call =
 				internal_constructor_call
@@ -13491,8 +13563,8 @@ static void freeze_component_numeric_operands(
  * The deoptimization exits of the specialized members (ADR 0025 section 4).
  * A guarded operation exits where its generic copy has a landing (both
  * members lower the same MIR; the copy's adaptor decides which resume IDs
- * land). An exit's cold block leaves the function, so the specialized
- * member's CFG is frozen again without its continuation edges.
+ * land). The machine CFG keeps an exit's cold-to-continuation edge, so the
+ * specialized member's frozen CFG stays as it is.
  */
 static bool freeze_deopt_exits(
 		zend_tpde_plan *plans,
@@ -13545,11 +13617,6 @@ static bool freeze_deopt_exits(
 		}
 		require_runtime_helper(&specialized,
 			ZEND_NATIVE_HELPER_DEOPT_TRANSFER);
-		destroy_machine_cfg(&specialized.entry_machine_cfg);
-		if (!freeze_machine_cfg(&specialized, false,
-				&specialized.entry_machine_cfg, diag)) {
-			return false;
-		}
 	}
 	return true;
 }
@@ -13573,6 +13640,10 @@ static bool freeze_component_machine_plan(
 		}
 	}
 	std::vector<uint8_t> candidates(component_count, 1);
+	/* A signature depends only on the candidate set and frozen plan facts:
+	 * the pass that drops no candidate computed the final ones. */
+	std::vector<zend_tpde_local_abi_type> return_types(component_count);
+	std::vector<uint8_t> may_fail(component_count, 0);
 	bool nested_dropped;
 	do {
 	nested_dropped = false;
@@ -13584,30 +13655,25 @@ static bool freeze_component_machine_plan(
 				continue;
 			}
 			zend_tpde_local_abi_type return_type{};
-			bool may_fail;
+			bool member_may_fail = false;
 			if (!freeze_typed_body_signature(
 					&plans[index], component_plans, component_count,
 					candidates.data(),
-					&return_type, &may_fail)) {
+					&return_type, &member_may_fail)) {
 				candidates[index] = 0;
 				changed = true;
 			}
+			return_types[index] = return_type;
+			may_fail[index] = member_may_fail ? 1 : 0;
 		}
 	} while (changed);
 	for (uint32_t index = 0; index < component_count; ++index) {
-		zend_tpde_local_abi_type return_type{};
-		bool may_fail = false;
-		plans[index].typed_body_eligible =
-			candidates[index] != 0
-			&& freeze_typed_body_signature(
-				&plans[index], component_plans, component_count,
-				candidates.data(),
-				&return_type, &may_fail);
+		plans[index].typed_body_eligible = candidates[index] != 0;
 		plans[index].typed_body_may_fail =
-			plans[index].typed_body_eligible && may_fail;
+			plans[index].typed_body_eligible && may_fail[index] != 0;
 		plans[index].typed_body_return_abi =
 			plans[index].typed_body_eligible
-				? return_type : zend_tpde_local_abi_type{};
+				? return_types[index] : zend_tpde_local_abi_type{};
 	}
 	/*
 	 * A typed body has no frame for a phased call, so every direct user call
