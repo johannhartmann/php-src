@@ -73,11 +73,13 @@ ZEND_API zend_result zend_native_executor_prepare_preloaded_script(
 	zend_script *script,
 	zend_native_compile_diagnostic *diagnostic);
 /* OPcache loads a cached script: what its native include reads later is
- * requested from memory while the script's tables are bound. */
-ZEND_API void zend_native_executor_prefetch_include(
+ * requested from memory while the script's tables are bound. The returned
+ * hint goes to register_script_owner() of the same op array. */
+ZEND_API const void *zend_native_executor_prefetch_include(
 	const zend_op_array *op_array);
 ZEND_API zend_result zend_native_executor_register_script_owner(
-	zend_op_array *op_array, const zend_script *script);
+	zend_op_array *op_array, const zend_script *script,
+	const void *include_entry);
 ZEND_API zend_result zend_native_executor_register_preloaded_script(
 	const zend_script *script);
 ZEND_API size_t zend_native_executor_persist_calc(
@@ -88,7 +90,17 @@ ZEND_API void zend_native_executor_discard_bundle(
 	zend_op_array *op_array);
 ZEND_API void zend_native_executor_set_bundle_persistent(
 	zend_op_array *op_array, bool persistent);
-ZEND_API int zend_native_executor_op_array_handle(void);
+/* Whether a bundle the file cache loaded is one this build can read. */
+ZEND_API bool zend_native_executor_bundle_valid(const void *bundle);
+
+/* The resource handle of the native slots in zend_op_array.reserved and
+ * zend_fiber_context.reserved; nonnegative once the executor started. */
+ZEND_API extern int zend_native_executor_bundle_rid;
+
+static zend_always_inline int zend_native_executor_op_array_handle(void)
+{
+	return zend_native_executor_bundle_rid;
+}
 
 #ifdef __cplusplus
 }

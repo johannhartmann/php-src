@@ -213,7 +213,7 @@ static bool zend_native_executor_preloaded_owners_active;
 #ifdef ZTS
 static MUTEX_T zend_native_executor_generation_mutex;
 #endif
-static int zend_native_executor_bundle_rid = -1;
+ZEND_API int zend_native_executor_bundle_rid = -1;
 static int zend_native_executor_entry_handle = -1;
 
 static zend_native_executor_generation *
@@ -519,8 +519,21 @@ typedef struct _zend_native_opcache_bundle {
 	unsigned char bytes[1];
 } zend_native_opcache_bundle;
 
-static zend_native_opcache_bundle *zend_native_executor_bundle(
-	const zend_op_array *op_array)
+bool zend_native_executor_bundle_valid(const void *data)
+{
+	const zend_native_opcache_bundle *bundle = data;
+
+	return bundle != NULL
+		&& bundle->magic == ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC
+		&& bundle->format == ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT
+		&& (bundle->flags & ~ZEND_NATIVE_OPCACHE_BUNDLE_KNOWN_FLAGS) == 0
+		&& bundle->size != 0;
+}
+
+/* The slot holds only bundles built here, copied by persist() or checked
+ * by the file cache when it loaded them. */
+static zend_always_inline zend_native_opcache_bundle *
+zend_native_executor_bundle(const zend_op_array *op_array)
 {
 	zend_native_opcache_bundle *bundle;
 
@@ -528,13 +541,8 @@ static zend_native_opcache_bundle *zend_native_executor_bundle(
 		return NULL;
 	}
 	bundle = op_array->reserved[zend_native_executor_bundle_rid];
-	return bundle != NULL
-			&& bundle->magic == ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC
-			&& bundle->format == ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT
-			&& (bundle->flags
-				& ~ZEND_NATIVE_OPCACHE_BUNDLE_KNOWN_FLAGS) == 0
-			&& bundle->size != 0
-		? bundle : NULL;
+	ZEND_ASSERT(bundle == NULL || zend_native_executor_bundle_valid(bundle));
+	return bundle;
 }
 
 bool zend_native_executor_op_array_is_cache_owned(
@@ -1411,24 +1419,6 @@ static bool zend_native_executor_request_has_lease(
 #endif
 }
 
-static zend_native_executor_generation *
-zend_native_executor_find_leased_function(zend_function *function)
-{
-	zend_native_executor_generation *generation;
-
-	if (function == NULL || function->op_array.opcodes == NULL
-			|| !zend_native_executor_request_state.lookup_indexes_active) {
-		return NULL;
-	}
-	zend_native_executor_generation_lock();
-	generation = zend_native_executor_generation_by_opcodes_locked(
-		zend_native_executor_request_state.observed_epoch,
-		function->op_array.opcodes);
-	zend_native_executor_generation_unlock();
-	return zend_native_executor_request_has_lease(generation)
-		? generation : NULL;
-}
-
 static bool zend_native_executor_acquire_generation_locked(
 	zend_native_executor_generation *generation)
 {
@@ -1739,14 +1729,14 @@ static void zend_native_executor_deactivate_compiler(void)
 	zend_native_executor_request_state.active_compiler = NULL;
 }
 
+/* owner is root's script owner (zend_native_executor_script_owner()). */
 static zend_native_executor_generation *
-zend_native_executor_create_generation(zend_op_array *root)
+zend_native_executor_create_owned_generation(
+	zend_op_array *root, const zend_script *owner)
 {
 	zend_native_executor_generation *generation;
 	zend_native_compiler_config config;
 	zend_native_compile_diagnostic diagnostic;
-	const zend_script *owner =
-		zend_native_executor_script_owner(root);
 	zend_native_opcache_bundle *bundle = owner != NULL
 		? zend_native_executor_bundle(&owner->main_op_array)
 		: zend_native_executor_bundle(root);
@@ -1892,25 +1882,24 @@ zend_native_executor_find_persistent_function(zend_function *function)
 	return generation;
 }
 
+/* owner is root's script owner (zend_native_executor_script_owner()). */
 static zend_native_executor_generation *
-zend_native_executor_create_or_acquire_generation(zend_op_array *root)
+zend_native_executor_create_or_acquire_owned_generation(
+	zend_op_array *root, const zend_script *owner)
 {
-	zend_native_opcache_bundle *bundle =
-		zend_native_executor_bundle(root);
-	const zend_script *owner =
-		zend_native_executor_script_owner(root);
-	bool persistent =
-		owner != NULL
-		|| (bundle != NULL
-			&& bundle->storage
-				== ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT);
 	zend_native_executor_generation *generation;
 	bool acquired = false;
 
-	if (!persistent) {
-		return zend_native_executor_create_generation(root);
-	}
 	if (owner == NULL) {
+		zend_native_opcache_bundle *bundle =
+			zend_native_executor_bundle(root);
+
+		if (bundle == NULL
+				|| bundle->storage
+					!= ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT) {
+			return zend_native_executor_create_owned_generation(
+				root, NULL);
+		}
 		zend_throw_error(NULL,
 			"Persistent native script owner is unavailable");
 		return NULL;
@@ -1927,7 +1916,8 @@ zend_native_executor_create_or_acquire_generation(zend_op_array *root)
 			(const char *) &key, sizeof(key));
 	}
 	if (generation == NULL) {
-		generation = zend_native_executor_create_generation(root);
+		generation = zend_native_executor_create_owned_generation(
+			root, owner);
 		if (generation != NULL) {
 			if (!zend_native_executor_register_generation_locked(
 					generation)) {
@@ -1960,6 +1950,13 @@ zend_native_executor_create_or_acquire_generation(zend_op_array *root)
 		return NULL;
 	}
 	return generation;
+}
+
+static zend_native_executor_generation *
+zend_native_executor_create_or_acquire_generation(zend_op_array *root)
+{
+	return zend_native_executor_create_or_acquire_owned_generation(
+		root, zend_native_executor_script_owner(root));
 }
 
 /*
@@ -2063,10 +2060,7 @@ zend_native_executor_resolve_external_reentry(
 			"Native preload root capture failed");
 		return NULL;
 	}
-	generation = zend_native_executor_find_leased_function(function);
-	if (generation == NULL) {
-		generation = zend_native_executor_find_persistent_function(function);
-	}
+	generation = zend_native_executor_find_persistent_function(function);
 	if (generation == NULL) {
 		/*
 		 * A request generation that already published this function, or
@@ -2181,8 +2175,9 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 	generation = zend_native_executor_find_persistent_function(
 		(zend_function *) op_array);
 	if (generation == NULL) {
-		generation = zend_native_executor_create_or_acquire_generation(
-			op_array);
+		generation =
+			zend_native_executor_create_or_acquire_owned_generation(
+				op_array, owner);
 	}
 	if (generation == NULL || !generation->persistent) {
 		return NULL;
@@ -3062,12 +3057,17 @@ static bool zend_native_executor_compile_closures(
 	return true;
 }
 
-static void zend_native_executor_attach_bundle(
+static zend_result zend_native_executor_attach_bundle(
 	zend_script *script, const unsigned char *bytes, size_t size)
 {
-	zend_native_opcache_bundle *bundle = emalloc(
-		zend_native_executor_bundle_allocation_size(size));
+	size_t allocation_size =
+		zend_native_executor_bundle_allocation_size(size);
+	zend_native_opcache_bundle *bundle;
 
+	if (allocation_size == 0) {
+		return FAILURE;
+	}
+	bundle = emalloc(allocation_size);
 	bundle->magic = ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC;
 	bundle->format = ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT;
 	bundle->storage = ZEND_NATIVE_OPCACHE_BUNDLE_HEAP;
@@ -3077,6 +3077,7 @@ static void zend_native_executor_attach_bundle(
 	memcpy(bundle->bytes, bytes, size);
 	script->main_op_array.reserved[zend_native_executor_bundle_rid] =
 		bundle;
+	return SUCCESS;
 }
 
 static zend_result zend_native_executor_prepare_script_impl(
@@ -3090,7 +3091,7 @@ static zend_result zend_native_executor_prepare_script_impl(
 	zend_native_opcache_bundle *bundle;
 	unsigned char *bytes = NULL;
 	size_t size = 0;
-	size_t allocation_size;
+	zend_result attached;
 	uint32_t selected_count = 0;
 	zend_native_content_key content_key;
 	bool content_keyed;
@@ -3098,8 +3099,8 @@ static zend_result zend_native_executor_prepare_script_impl(
 	if (script == NULL || zend_native_executor_bundle_rid < 0) {
 		return FAILURE;
 	}
-	if (zend_native_executor_bundle(&script->main_op_array) != NULL) {
-		bundle = zend_native_executor_bundle(&script->main_op_array);
+	bundle = zend_native_executor_bundle(&script->main_op_array);
+	if (bundle != NULL) {
 		if (zend_native_executor_bundle_compatible(bundle)
 				|| bundle->storage
 					!= ZEND_NATIVE_OPCACHE_BUNDLE_HEAP) {
@@ -3114,9 +3115,8 @@ static zend_result zend_native_executor_prepare_script_impl(
 			zend_native_content_bundle_find(&content_key);
 
 		if (cached != NULL) {
-			zend_native_executor_attach_bundle(
+			return zend_native_executor_attach_bundle(
 				script, cached->bytes, cached->size);
-			return SUCCESS;
 		}
 	}
 	memset(&config, 0, sizeof(config));
@@ -3169,24 +3169,9 @@ static zend_result zend_native_executor_prepare_script_impl(
 	if (content_keyed) {
 		zend_native_content_bundle_store(&content_key, bytes, size);
 	}
-	allocation_size =
-		zend_native_executor_bundle_allocation_size(size);
-	if (allocation_size == 0) {
-		zend_native_compiler_bundle_destroy(bytes);
-		return FAILURE;
-	}
-	bundle = emalloc(allocation_size);
-	bundle->magic = ZEND_NATIVE_OPCACHE_BUNDLE_MAGIC;
-	bundle->format = ZEND_NATIVE_OPCACHE_BUNDLE_FORMAT;
-	bundle->storage = ZEND_NATIVE_OPCACHE_BUNDLE_HEAP;
-	bundle->flags = zend_native_executor_bundle_flags();
-	bundle->training_session = zend_tpde_layout_training_session();
-	bundle->size = size;
-	memcpy(bundle->bytes, bytes, size);
+	attached = zend_native_executor_attach_bundle(script, bytes, size);
 	zend_native_compiler_bundle_destroy(bytes);
-	script->main_op_array.reserved[zend_native_executor_bundle_rid] =
-		bundle;
-	return SUCCESS;
+	return attached;
 }
 
 zend_result zend_native_executor_prepare_script(
@@ -3304,7 +3289,8 @@ zend_result zend_native_executor_register_preloaded_script(
 	return SUCCESS;
 }
 
-void zend_native_executor_prefetch_include(const zend_op_array *op_array)
+const void *zend_native_executor_prefetch_include(
+	const zend_op_array *op_array)
 {
 	if (zend_native_executor_bundle_rid >= 0) {
 		__builtin_prefetch(
@@ -3312,14 +3298,19 @@ void zend_native_executor_prefetch_include(const zend_op_array *op_array)
 	}
 #ifndef ZTS
 	if (op_array->opcodes != NULL) {
-		__builtin_prefetch(
-			zend_native_executor_include_cache_entry(op_array->opcodes));
+		const zend_native_executor_include_entry *cached =
+			zend_native_executor_include_cache_entry(op_array->opcodes);
+
+		__builtin_prefetch(cached);
+		return cached;
 	}
 #endif
+	return NULL;
 }
 
 zend_result zend_native_executor_register_script_owner(
-	zend_op_array *op_array, const zend_script *script)
+	zend_op_array *op_array, const zend_script *script,
+	const void *include_entry)
 {
 	zend_native_opcache_bundle *bundle =
 		zend_native_executor_bundle(op_array);
@@ -3329,14 +3320,15 @@ zend_result zend_native_executor_register_script_owner(
 #ifndef ZTS
 	/* The include cache entry prefetched when the script was loaded holds
 	 * the cell the include reads next. */
-	if (op_array != NULL && op_array->opcodes != NULL) {
-		const zend_native_executor_include_entry *cached =
-			zend_native_executor_include_cache_entry(op_array->opcodes);
+	if (include_entry != NULL) {
+		const zend_native_executor_include_entry *cached = include_entry;
 
 		if (cached->opcodes == op_array->opcodes) {
 			__builtin_prefetch(cached->entry_cell);
 		}
 	}
+#else
+	(void) include_entry;
 #endif
 	if (bundle == NULL
 			|| bundle->storage
@@ -3481,10 +3473,6 @@ void zend_native_executor_set_bundle_persistent(
 	}
 }
 
-int zend_native_executor_op_array_handle(void)
-{
-	return zend_native_executor_bundle_rid;
-}
 
 static zend_never_inline void zend_native_executor_execute_ex_general(
 	zend_execute_data *execute_data);
@@ -3530,9 +3518,9 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			&& !zend_dtrace_enabled
 #endif
 			&& execute_data->func->type == ZEND_USER_FUNCTION
+			/* Only a generator function runs in a generator frame. */
 			&& (execute_data->func->common.fn_flags
-				& (ZEND_ACC_CALL_VIA_TRAMPOLINE | ZEND_ACC_GENERATOR)) == 0
-			&& (ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) == 0)) {
+				& (ZEND_ACC_CALL_VIA_TRAMPOLINE | ZEND_ACC_GENERATOR)) == 0)) {
 		zend_native_entry_cell *cell;
 		const zend_native_code *code;
 		zend_native_frame_entry_t entry = zend_native_reentry_cached_entry(
@@ -3637,8 +3625,7 @@ static zend_never_inline void zend_native_executor_execute_ex_general(
 	generator_frame =
 		(ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0;
 	entry_cell = NULL;
-	if ((ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0
-			&& execute_data->return_value != NULL) {
+	if (generator_frame && execute_data->return_value != NULL) {
 		zend_generator *generator =
 			(zend_generator *) execute_data->return_value;
 
@@ -3735,20 +3722,15 @@ static zend_never_inline void zend_native_executor_execute_ex_general(
 	}
 	if ((execute_data->func->common.fn_flags
 			& ZEND_ACC_IMMUTABLE) != 0) {
-		generation = zend_native_executor_find_leased_function(
+		generation = zend_native_executor_find_persistent_function(
 			execute_data->func);
 		if (generation == NULL) {
-			generation = zend_native_executor_find_persistent_function(
+			generation = zend_native_executor_find_owner_generation(
 				execute_data->func);
-			if (generation == NULL) {
-				generation = zend_native_executor_find_owner_generation(
-					execute_data->func);
-			}
-			if (generation == NULL) {
-				generation =
-					zend_native_executor_find_function_generation(
-						execute_data->func);
-			}
+		}
+		if (generation == NULL) {
+			generation = zend_native_executor_find_function_generation(
+				execute_data->func);
 		}
 	} else {
 		generation = zend_native_executor_find_root_generation(
@@ -3766,13 +3748,8 @@ static zend_never_inline void zend_native_executor_execute_ex_general(
 						&execute_data->func->op_array) != NULL
 					|| (execute_data->func->common.fn_flags
 						& ZEND_ACC_CLOSURE) != 0)) {
-			generation = zend_native_executor_find_leased_function(
+			generation = zend_native_executor_find_persistent_function(
 				execute_data->func);
-			if (generation == NULL) {
-				generation =
-					zend_native_executor_find_persistent_function(
-						execute_data->func);
-			}
 		}
 	}
 	if (generation == NULL) {

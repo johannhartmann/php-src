@@ -1449,6 +1449,10 @@ static void zend_file_cache_unserialize_op_array(zend_op_array           *op_arr
 		int native_rid = zend_native_executor_op_array_handle();
 		if (native_rid >= 0 && op_array->reserved[native_rid] != NULL) {
 			UNSERIALIZE_PTR(op_array->reserved[native_rid]);
+			if (!zend_native_executor_bundle_valid(
+					op_array->reserved[native_rid])) {
+				op_array->reserved[native_rid] = NULL;
+			}
 		}
 	}
 #endif

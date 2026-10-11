@@ -374,11 +374,14 @@ static void zend_accel_do_delayed_early_binding(
 zend_op_array* zend_accel_load_script(zend_persistent_script *persistent_script, bool from_shared_memory)
 {
 	zend_op_array *op_array;
+#ifdef HAVE_NATIVE_ENGINE
+	const void *native_include_entry;
+#endif
 
 	op_array = (zend_op_array *) emalloc(sizeof(zend_op_array));
 	*op_array = persistent_script->script.main_op_array;
 #ifdef HAVE_NATIVE_ENGINE
-	zend_native_executor_prefetch_include(op_array);
+	native_include_entry = zend_native_executor_prefetch_include(op_array);
 #endif
 
 	if (EXPECTED(from_shared_memory)) {
@@ -422,7 +425,8 @@ zend_op_array* zend_accel_load_script(zend_persistent_script *persistent_script,
 
 #ifdef HAVE_NATIVE_ENGINE
 	if (UNEXPECTED(zend_native_executor_register_script_owner(
-			op_array, &persistent_script->script) == FAILURE)) {
+			op_array, &persistent_script->script,
+			native_include_entry) == FAILURE)) {
 		zend_error_noreturn(E_CORE_ERROR,
 			"Native OPcache owner registration failed");
 	}
