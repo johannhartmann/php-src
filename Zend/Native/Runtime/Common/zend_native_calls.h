@@ -216,6 +216,9 @@ typedef struct _zend_native_internal_call_cell {
 	/* Derived from the bound function, never serialized: bit n is set when
 	 * argument n + 1 is sent neither by nor preferably by reference. */
 	uint32_t by_value_arguments;
+	/* Derived as well: the function is neither deprecated, nodiscard nor
+	 * a trampoline, so its Do needs none of their diagnostics. */
+	bool plain_function;
 } zend_native_internal_call_cell;
 
 /* Recompute the derived fields of a cell after binding its function. */
@@ -318,6 +321,10 @@ typedef struct _zend_native_direct_internal_call_descriptor {
 } zend_native_direct_internal_call_descriptor;
 
 #define ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT UINT32_C(1)
+/* The Do is a call, not a callable conversion, and its result is unused
+ * or a temporary of the op array the descriptor was built from: the source
+ * finish may take the fast invoke. Set when the descriptor is built. */
+#define ZEND_NATIVE_DIRECT_INTERNAL_CALL_FAST_FINISH UINT32_C(2)
 
 /*
  * The static part of a plain direct internal call (see

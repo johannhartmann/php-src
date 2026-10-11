@@ -79,6 +79,9 @@ void zend_native_internal_call_cell_derive(zend_native_internal_call_cell *cell)
 		}
 	}
 	cell->by_value_arguments = mask;
+	cell->plain_function = (cell->function->common.fn_flags
+		& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
+			| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
 }
 
 static zval *zend_native_explicit_operand(
@@ -1661,22 +1664,12 @@ bool zend_native_internal_call_descriptor_plain(
 				!= ZEND_MIR_SOURCE_OPERAND_UNUSED
 			|| function == NULL || function->type != ZEND_INTERNAL_FUNCTION
 			|| function->common.scope != NULL
-			|| (function->common.fn_flags
-				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
-					| ZEND_ACC_CALL_VIA_TRAMPOLINE)) != 0
+			|| !cell->plain_function
 			|| (descriptor->flags
-				& ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT) != 0
-			|| descriptor->initial_argument_count != descriptor->argument_count
-			|| descriptor->do_opcode == ZEND_CALLABLE_CONVERT
-			|| descriptor->do_opcode == ZEND_CALLABLE_CONVERT_PARTIAL
-			|| (descriptor->result_operand.kind
-					!= ZEND_MIR_SOURCE_OPERAND_UNUSED
-				&& ((descriptor->result_operand.kind
-							!= ZEND_MIR_SOURCE_OPERAND_SLOT
-						&& descriptor->result_operand.kind
-							!= ZEND_MIR_SOURCE_OPERAND_SSA)
-					|| descriptor->result_operand.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_TMP))) {
+				& (ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT
+					| ZEND_NATIVE_DIRECT_INTERNAL_CALL_FAST_FINISH))
+				!= ZEND_NATIVE_DIRECT_INTERNAL_CALL_FAST_FINISH
+			|| descriptor->initial_argument_count != descriptor->argument_count) {
 		return false;
 	}
 	for (index = 0; index < descriptor->argument_count; index++) {
@@ -2042,24 +2035,31 @@ zend_native_status zend_native_internal_call_invoke_finish_source(
 		&& (descriptor->result_operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 			|| descriptor->result_operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 			|| descriptor->result_operand.index < caller->func->op_array.T));
+	/* The descriptor's and the cell's facts are fixed when they are built
+	 * or loaded. */
+	ZEND_ASSERT(((descriptor->flags
+				& ZEND_NATIVE_DIRECT_INTERNAL_CALL_FAST_FINISH) != 0)
+			== (descriptor->do_opcode != ZEND_CALLABLE_CONVERT
+				&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT_PARTIAL
+				&& (descriptor->result_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| ((descriptor->result_operand.kind
+								== ZEND_MIR_SOURCE_OPERAND_SLOT
+							|| descriptor->result_operand.kind
+								== ZEND_MIR_SOURCE_OPERAND_SSA)
+						&& descriptor->result_operand.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_TMP)))
+		&& cell->plain_function == ((cell->function->common.fn_flags
+				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
+					| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0));
 	if (EXPECTED(!ZEND_OBSERVER_ENABLED && zend_execute_internal == NULL
 			&& EG(exception) == NULL
+			&& (descriptor->flags
+				& ZEND_NATIVE_DIRECT_INTERNAL_CALL_FAST_FINISH) != 0
+			&& cell->plain_function
 			&& caller->call != NULL
 			&& caller->call->func == cell->function
-			&& (cell->function->common.fn_flags
-				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
-					| ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0
-			&& (ZEND_CALL_INFO(caller->call) & ZEND_CALL_MAY_HAVE_UNDEF) == 0
-			&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT
-			&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT_PARTIAL
-			&& (descriptor->result_operand.kind
-					== ZEND_MIR_SOURCE_OPERAND_UNUSED
-				|| ((descriptor->result_operand.kind
-							== ZEND_MIR_SOURCE_OPERAND_SLOT
-						|| descriptor->result_operand.kind
-							== ZEND_MIR_SOURCE_OPERAND_SSA)
-					&& descriptor->result_operand.slot_kind
-						== ZEND_MIR_SOURCE_SLOT_TMP)))) {
+			&& (ZEND_CALL_INFO(caller->call) & ZEND_CALL_MAY_HAVE_UNDEF) == 0)) {
 		caller->opline = &caller->func->op_array.opcodes[
 			descriptor->do_source_position];
 		return_value = descriptor->result_operand.kind

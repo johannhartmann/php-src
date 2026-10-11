@@ -10018,6 +10018,20 @@ bool initialize_plan(
 					descriptor->do_extended_value = finish->extended_value;
 					descriptor->result_operand = site.result_operand;
 					descriptor->result_type = ZEND_MIR_SCALAR_TYPE_NONE;
+					if (finish->opcode != ZEND_CALLABLE_CONVERT
+							&& finish->opcode
+								!= ZEND_CALLABLE_CONVERT_PARTIAL
+							&& (site.result_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_UNUSED
+								|| ((site.result_operand.kind
+											== ZEND_MIR_SOURCE_OPERAND_SLOT
+										|| site.result_operand.kind
+											== ZEND_MIR_SOURCE_OPERAND_SSA)
+									&& site.result_operand.slot_kind
+										== ZEND_MIR_SOURCE_SLOT_TMP))) {
+						descriptor->flags |=
+							ZEND_NATIVE_DIRECT_INTERNAL_CALL_FAST_FINISH;
+					}
 					zend_function *callee =
 						plan->instructions[i].internal_call_cell != nullptr
 							? plan->instructions[i].internal_call_cell->function
