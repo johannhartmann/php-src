@@ -353,6 +353,29 @@ static void zend_mir_lowering_sort_dispatch(zend_mir_lowering_registry *registry
 	}
 }
 
+/* The dispatch table is sorted by opcode after every registration. */
+static bool zend_mir_lowering_dispatch_claims(
+	const zend_mir_lowering_registry *registry, uint32_t zend_opcode_number)
+{
+	uint32_t low = 0;
+	uint32_t high = registry->dispatch_count;
+
+	while (low < high) {
+		uint32_t middle = low + (high - low) / 2;
+		uint32_t claimed =
+			registry->dispatch[middle].claim.zend_opcode_number;
+
+		if (claimed < zend_opcode_number) {
+			low = middle + 1;
+		} else if (claimed > zend_opcode_number) {
+			high = middle;
+		} else {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool zend_mir_lowering_registry_register(zend_mir_lowering_registry *registry,
 	const zend_mir_lowering_provider *provider,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
@@ -404,13 +427,11 @@ bool zend_mir_lowering_registry_register(zend_mir_lowering_registry *registry,
 				return false;
 			}
 		}
-		for (previous = 0; previous < registry->dispatch_count; previous++) {
-			if (registry->dispatch[previous].claim.zend_opcode_number
-					== claims[index].zend_opcode_number) {
-				zend_mir_lowering_set_code(
-					diagnostic_out, ZEND_MIRL_DUPLICATE_PROVIDER_CLAIM);
-				return false;
-			}
+		if (zend_mir_lowering_dispatch_claims(
+				registry, claims[index].zend_opcode_number)) {
+			zend_mir_lowering_set_code(
+				diagnostic_out, ZEND_MIRL_DUPLICATE_PROVIDER_CLAIM);
+			return false;
 		}
 	}
 

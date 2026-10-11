@@ -22,6 +22,9 @@ typedef struct _zend_mir_plan {
 	zend_mir_block_id *exception_blocks;
 	zend_mir_block_id *source_block_ranks;
 	uint32_t *exception_oplines;
+	/* Original SSA values that an already planned site defines. */
+	uint8_t *prior_results;
+	uint32_t prior_result_capacity;
 	uint32_t site_count;
 	uint32_t target_count;
 	uint32_t argument_count;
@@ -173,6 +176,7 @@ static void zend_mir_plan_release(zend_mir_plan *plan)
 	free(plan->exception_blocks);
 	free(plan->source_block_ranks);
 	free(plan->exception_oplines);
+	free(plan->prior_results);
 	memset(plan, 0, sizeof(*plan));
 }
 
@@ -280,6 +284,10 @@ static bool zend_mir_prior_call_result(
 {
 	uint32_t index;
 
+	if (zend_mir_value_is_original_ssa(value)
+			&& value < plan->prior_result_capacity) {
+		return plan->prior_results[value] != 0;
+	}
 	for (index = 0; index < site_index; index++) {
 		if (plan->results[index] == value) {
 			return true;
@@ -671,7 +679,14 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 	plan->exception_oplines = zend_mir_call_calloc(
 		plan->site_count, sizeof(*plan->exception_oplines),
 		ZEND_MIR_ALLOCATION_PLANNER);
-	if (plan->entries == NULL || plan->sites == NULL || plan->targets == NULL
+	if (context->source != NULL && context->source->ssa_count != NULL) {
+		plan->prior_result_capacity =
+			context->source->ssa_count(context->source->context);
+	}
+	plan->prior_results = zend_mir_call_calloc(
+		plan->prior_result_capacity == 0 ? 1 : plan->prior_result_capacity,
+		sizeof(*plan->prior_results), ZEND_MIR_ALLOCATION_PLANNER);
+	if (plan->prior_results == NULL || plan->entries == NULL || plan->sites == NULL || plan->targets == NULL
 			|| (plan->argument_count != 0
 				&& (plan->arguments == NULL || plan->values == NULL
 					|| plan->ownerships == NULL))
@@ -1017,6 +1032,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 		entry->decision = ZEND_MIR_CALL_PLAN_ACCEPTED;
 		entry->diagnostic_code = ZEND_MIRL_OK;
 		entry->argument_span = site->argument_span;
+		if (zend_mir_value_is_original_ssa(plan->results[index])
+				&& plan->results[index] < plan->prior_result_capacity) {
+			plan->prior_results[plan->results[index]] = 1;
+		}
 	}
 #if !defined(NDEBUG)
 	/* The frontend inventory builds sites, arguments and nesting with a call
