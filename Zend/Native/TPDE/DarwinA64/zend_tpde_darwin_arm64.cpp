@@ -15034,6 +15034,36 @@ bool parse_a64_object(
 
 #endif
 
+/*
+ * The component a defined entry symbol names: zend_native_entry is
+ * component 0, zend_native_component_<index> (canonical decimal, as the
+ * adaptor names them) the others; UINT32_MAX for any other name.
+ */
+static uint32_t component_entry_index(
+	const char *name, size_t length, uint32_t count)
+{
+	static constexpr char entry[] = "zend_native_entry";
+	static constexpr char prefix[] = "zend_native_component_";
+	constexpr size_t prefix_length = sizeof(prefix) - 1;
+	uint64_t index = 0;
+
+	if (length == sizeof(entry) - 1 && std::memcmp(name, entry, length) == 0) {
+		return count != 0 ? 0 : UINT32_MAX;
+	}
+	if (length <= prefix_length || length > prefix_length + 10
+			|| std::memcmp(name, prefix, prefix_length) != 0
+			|| name[prefix_length] == '0') {
+		return UINT32_MAX;
+	}
+	for (size_t at = prefix_length; at < length; ++at) {
+		if (name[at] < '0' || name[at] > '9') {
+			return UINT32_MAX;
+		}
+		index = index * 10 + static_cast<uint64_t>(name[at] - '0');
+	}
+	return index < count ? static_cast<uint32_t>(index) : UINT32_MAX;
+}
+
 } // namespace
 
 zend_result zend_tpde_emit_darwin_arm64(
@@ -15240,26 +15270,21 @@ zend_result zend_tpde_map_darwin_arm64(
 				|| published->sections[symbol.section].mapping == nullptr) {
 			continue;
 		}
-		for (uint32_t index = 0;
-				index < image->component_entry_count; ++index) {
-			const std::string expected = index == 0
-				? "zend_native_entry"
-				: "zend_native_component_" + std::to_string(index);
-			if (symbol.name != expected
-					|| code->component_entries[index] != nullptr) {
-				continue;
-			}
-			code->component_entries[index] =
-				reinterpret_cast<zend_native_frame_entry_t>(
-					static_cast<uint8_t *>(
-						published->sections[symbol.section].mapping)
-					+ symbol.offset);
-			if (index == 0) {
-				entry_section_index = symbol.section;
-			}
-			mapped_entry_count++;
-			break;
+		const uint32_t index = component_entry_index(symbol.name.data(),
+			symbol.name.size(), image->component_entry_count);
+		if (index == UINT32_MAX
+				|| code->component_entries[index] != nullptr) {
+			continue;
 		}
+		code->component_entries[index] =
+			reinterpret_cast<zend_native_frame_entry_t>(
+				static_cast<uint8_t *>(
+					published->sections[symbol.section].mapping)
+				+ symbol.offset);
+		if (index == 0) {
+			entry_section_index = symbol.section;
+		}
+		mapped_entry_count++;
 	}
 	if (mapped_entry_count != image->component_entry_count) {
 		std::free(code->component_entries);
