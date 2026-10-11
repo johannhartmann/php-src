@@ -4416,6 +4416,8 @@ static bool zend_mir_prepare_providers(
 	integration->lifetime_context.lifetime = &integration->lifetime;
 	integration->lifetime_context.entry = &integration->entry;
 	integration->lifetime_context.values_predeclared = true;
+	/* prepare_overlay lists the overlay's SSA uses in opline order. */
+	integration->lifetime_context.ssa_uses_in_opline_order = true;
 	integration->lifetime_context.proofs =
 		ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
@@ -5200,6 +5202,8 @@ static void zend_mir_release(zend_mir_integration *integration)
 	free(integration->overlay_elided_boxed_opcodes);
 	free(integration->overlay_scalarized_opcodes);
 	free(integration->overlay_suppressed_opcodes);
+	zend_mir_straight_line_provider_context_release(
+		&integration->lifetime_context);
 }
 
 static bool zend_mir_post_call_composition(

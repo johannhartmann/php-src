@@ -6,6 +6,7 @@
   +----------------------------------------------------------------------+
 */
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "Zend/Native/MIR/Semantics/zend_mir_ownership.h"
@@ -31,11 +32,104 @@ static bool zend_mir_straight_line_resolve_operand(
 	return false;
 }
 
-static bool zend_mir_straight_line_analyze_uses(
-	const zend_mir_lowering_source_view *source,
+void zend_mir_straight_line_provider_context_release(
+	zend_mir_straight_line_provider_context *provider_context)
+{
+	if (provider_context == NULL) {
+		return;
+	}
+	free(provider_context->ssa_last_use);
+	provider_context->ssa_last_use = NULL;
+	provider_context->ssa_last_use_count = 0;
+}
+
+/* The last opline reading each SSA variable, from opline-ordered uses. */
+static bool zend_mir_straight_line_index_last_uses(
+	zend_mir_straight_line_provider_context *provider_context,
+	uint32_t use_count)
+{
+	const zend_mir_lowering_source_view *source = provider_context->source;
+	const uint32_t ssa_count = source->ssa_count(source->context);
+	uint32_t *last_use;
+	uint32_t index;
+
+	last_use = calloc(ssa_count == 0 ? 1 : ssa_count, sizeof(*last_use));
+	if (last_use == NULL) {
+		return false;
+	}
+	for (index = 0; index < use_count; index++) {
+		zend_mir_source_ssa_use_ref use;
+
+		if (!source->ssa_use_at(source->context, index, &use)
+				|| use.ssa_variable_id >= ssa_count
+				|| use.opline_index == UINT32_MAX) {
+			free(last_use);
+			return false;
+		}
+		last_use[use.ssa_variable_id] = use.opline_index + 1;
+	}
+	provider_context->ssa_last_use = last_use;
+	provider_context->ssa_last_use_count = ssa_count;
+	return true;
+}
+
+/*
+ * The uses of an opline in a source that lists uses in opline order: the
+ * range after the last use of an earlier opline. The variable must be read
+ * exactly once there, as operand 0; *later_out tells whether a later opline
+ * reads it as well.
+ */
+static bool zend_mir_straight_line_analyze_ordered_uses(
+	zend_mir_straight_line_provider_context *provider_context,
 	const zend_mir_source_opcode_ref *source_opcode,
 	uint32_t ssa_variable_id, bool *later_out)
 {
+	const zend_mir_lowering_source_view *source = provider_context->source;
+	const uint32_t count = source->ssa_use_count(source->context);
+	const uint32_t opline_index = source_opcode->opline_index;
+	uint32_t current_uses = 0;
+	uint32_t left = 0;
+	uint32_t right = count;
+
+	while (left < right) {
+		const uint32_t middle = left + (right - left) / 2;
+		zend_mir_source_ssa_use_ref use;
+
+		if (!source->ssa_use_at(source->context, middle, &use)) {
+			return false;
+		}
+		if (use.opline_index < opline_index) {
+			left = middle + 1;
+		} else {
+			right = middle;
+		}
+	}
+	for (; left < count; left++) {
+		zend_mir_source_ssa_use_ref use;
+
+		if (!source->ssa_use_at(source->context, left, &use)) {
+			return false;
+		}
+		if (use.opline_index != opline_index) {
+			break;
+		}
+		if (use.ssa_variable_id == ssa_variable_id
+				&& (use.operand_index != 0 || ++current_uses != 1)) {
+			return false;
+		}
+	}
+	*later_out = ssa_variable_id < provider_context->ssa_last_use_count
+		&& provider_context->ssa_last_use[ssa_variable_id]
+			> opline_index + 1;
+	return current_uses == 1;
+}
+
+static bool zend_mir_straight_line_analyze_uses(
+	zend_mir_straight_line_provider_context *provider_context,
+	const zend_mir_source_opcode_ref *source_opcode,
+	uint32_t ssa_variable_id, bool *later_out)
+{
+	const zend_mir_lowering_source_view *source = provider_context->source;
 	uint32_t count;
 	uint32_t current_uses = 0;
 	uint32_t index;
@@ -46,6 +140,15 @@ static bool zend_mir_straight_line_analyze_uses(
 		return false;
 	}
 	*later_out = false;
+	if (provider_context->ssa_uses_in_opline_order
+			&& source->ssa_count != NULL
+			&& (provider_context->ssa_last_use != NULL
+				|| zend_mir_straight_line_index_last_uses(
+					provider_context,
+					source->ssa_use_count(source->context)))) {
+		return zend_mir_straight_line_analyze_ordered_uses(
+			provider_context, source_opcode, ssa_variable_id, later_out);
+	}
 	count = source->ssa_use_count(source->context);
 	for (index = 0; index < count; index++) {
 		zend_mir_source_ssa_use_ref use;
@@ -211,7 +314,7 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 	}
 	if (source_opcode->op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA) {
 		if (!zend_mir_straight_line_analyze_uses(
-				provider_context->source, source_opcode,
+				provider_context, source_opcode,
 				source_opcode->op1.ssa_variable_id, &later_use)) {
 			return ZEND_MIR_LOWERING_REJECTED;
 		}

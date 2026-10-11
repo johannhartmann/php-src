@@ -117,6 +117,15 @@ typedef struct _zend_mir_straight_line_provider_context {
 	zend_mir_straight_line_proof_mask proofs;
 	zend_mir_straight_line_hazard_mask hazards;
 	bool values_predeclared;
+	/*
+	 * Set when source lists its SSA uses in opline order. Copy lowering then
+	 * finds an opline's uses by binary search and builds, on first need,
+	 * the last opline reading each SSA variable (plus one, 0 for none);
+	 * zend_mir_straight_line_provider_context_release frees it.
+	 */
+	bool ssa_uses_in_opline_order;
+	uint32_t *ssa_last_use;
+	uint32_t ssa_last_use_count;
 } zend_mir_straight_line_provider_context;
 
 #ifdef __cplusplus
@@ -155,6 +164,8 @@ zend_mir_straight_line_slot *zend_mir_straight_line_find_slot(
 	const zend_mir_straight_line_entry *entry,
 	zend_mir_frame_slot_kind kind, uint32_t index);
 
+void zend_mir_straight_line_provider_context_release(
+	zend_mir_straight_line_provider_context *provider_context);
 zend_mir_lowering_status zend_mir_lower_copy_move(
 	zend_mir_lowering_context *context,
 	const zend_mir_source_opcode_ref *source_opcode,
