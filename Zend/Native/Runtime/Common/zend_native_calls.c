@@ -2313,6 +2313,8 @@ uint32_t zend_native_call_fast_leave(
 		callee, status, discard_result);
 }
 
+/* The fast Do, generated or zend_native_call_fast_do(), set the frame's
+ * return value: the result slot or a local zval. */
 static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 	zend_execute_data *callee, uint32_t status, bool discard_result)
 {
@@ -2363,8 +2365,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 			return status;
 		}
 		EG(current_execute_data) = caller;
-		if (discard_result && callee->return_value != NULL
-				&& !Z_ISUNDEF_P(callee->return_value)) {
+		if (discard_result && !Z_ISUNDEF_P(callee->return_value)) {
 			zval_ptr_dtor(callee->return_value);
 			ZVAL_UNDEF(callee->return_value);
 		}
@@ -2386,7 +2387,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 		 * ZEND_HANDLE_EXCEPTION frees the throwing opline's result. */
 		if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 			status = ZEND_NATIVE_EXCEPTION;
-			if (!discard_result && result != NULL) {
+			if (!discard_result) {
 				zval_ptr_dtor_nogc(result);
 				ZVAL_UNDEF(result);
 			}
@@ -2621,8 +2622,9 @@ static zend_function *zend_native_call_object_method(
 	*owned_out = false;
 	name = zend_native_call_read_r_operand(
 		caller, &descriptor->init_op2, true);
-	if (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& descriptor->init_op2.index + 1 < op_array->last_literal) {
+	/* A literal method name's lowercased copy follows it. */
+	if (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		ZEND_ASSERT(descriptor->init_op2.index + 1 < op_array->last_literal);
 		cache_name = &op_array->literals[descriptor->init_op2.index + 1];
 	}
 	if (name == NULL || Z_TYPE_P(name) != IS_STRING) {
@@ -2756,8 +2758,10 @@ static zend_function *zend_native_call_static_method(
 	} else {
 		name = zend_native_call_read_r_operand(
 			caller, &descriptor->init_op2, true);
-		if (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-				&& descriptor->init_op2.index + 1 < op_array->last_literal) {
+		/* A literal method name's lowercased copy follows it. */
+		if (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			ZEND_ASSERT(
+				descriptor->init_op2.index + 1 < op_array->last_literal);
 			cache_name = &op_array->literals[descriptor->init_op2.index + 1];
 		}
 		if (name == NULL || Z_TYPE_P(name) != IS_STRING) {
