@@ -2143,11 +2143,13 @@ public:
 	void emit_decision_exception_check(AsmReg decision_reg,
 			zend_mir_block_id exception_block, Release &&release) {
 		ASM(CMP32ri, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
-		auto valid = text_writer.label_create();
-		generate_raw_jump(Jump::jl, valid);
+		auto exception = text_writer.label_create();
+		generate_raw_jump(Jump::jge, exception);
+		cold_begin();
+		label_place(exception);
 		release();
 		emit_exception_exit(exception_block);
-		label_place(valid);
+		cold_end();
 	}
 
 	/*
@@ -2202,9 +2204,11 @@ public:
 		}
 		const AsmReg decision_reg = decision.cur_reg();
 		ASM(MOV32ri, decision_reg, 0);
-		generate_raw_jump(Jump::jmp, done);
+		cold_begin();
 		label_place(slow);
 		ASM(MOV32ri, decision_reg, 1);
+		generate_raw_jump(Jump::jmp, done);
+		cold_end();
 		label_place(done);
 		frame_scratch.reset();
 		generate_guarded_decision_branch(
@@ -2385,9 +2389,12 @@ public:
 		}
 		const int32_t xmm_base = static_cast<int32_t>(
 			(8 * saved_gp.size() + 15) & ~size_t{15});
+		/* A multiple of 16, which keeps the stack aligned. */
 		const int32_t save_area = xmm_base
-			+ 16 * static_cast<int32_t>(saved_xmm.size()) + 16;
-		ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, -save_area));
+			+ 16 * static_cast<int32_t>(saved_xmm.size());
+		if (save_area != 0) {
+			ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, -save_area));
+		}
 		for (size_t i = 0; i < saved_gp.size(); ++i) {
 			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG,
 				static_cast<int32_t>(8 * i)), saved_gp[i]);
@@ -2411,7 +2418,27 @@ public:
 			ASM(MOV64rm, saved_gp[i], FE_MEM(FE_SP, 0, FE_NOREG,
 				static_cast<int32_t>(8 * i)));
 		}
-		ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, save_area));
+		if (save_area != 0) {
+			ASM(LEA64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, save_area));
+		}
+	}
+
+	/*
+	 * Spills every value held in a caller-saved register, as a call does,
+	 * but for keep's. Before an inline primitive's first branch, the value
+	 * is stored once on both paths instead of being saved and restored
+	 * around the helper and then spilled.
+	 */
+	void evict_caller_saved(AsmReg keep = AsmReg::make_invalid()) {
+		const uint64_t callee_saved =
+			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
+		for (auto reg : tpde::util::BitSetIterator<>{
+				register_file.used & ~callee_saved}) {
+			if (!register_file.is_fixed(AsmReg{reg})
+					&& (!keep.valid() || reg != keep.id())) {
+				evict_reg(AsmReg{reg});
+			}
+		}
 	}
 
 	/*
@@ -2507,6 +2534,7 @@ public:
 		const uint32_t may_be = plan->source_opcodes[position].op1_may_be;
 		auto general = text_writer.label_create();
 		auto joined = text_writer.label_create();
+		evict_caller_saved(frame_reg);
 		ScratchReg status_scratch{this};
 		const AsmReg status_reg = status_scratch.alloc_gp();
 		{
@@ -2682,14 +2710,7 @@ public:
 		label_place(joined);
 		/* As after a call: the status tail's return path then spills
 		 * nothing the continuation would miss. */
-		const uint64_t callee_saved =
-			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
-		for (auto reg : tpde::util::BitSetIterator<>{
-				register_file.used & ~callee_saved}) {
-			if (!register_file.is_fixed(AsmReg{reg})) {
-				evict_reg(AsmReg{reg});
-			}
-		}
+		evict_caller_saved();
 		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 		status.set_value(this, std::move(status_scratch));
 		emit_status_tail(std::move(status), mir.exception_block_id, true);
@@ -2751,6 +2772,7 @@ public:
 		const AsmReg frame_reg = canonical_frame_register();
 		auto general = text_writer.label_create();
 		auto joined = text_writer.label_create();
+		evict_caller_saved(frame_reg);
 		ScratchReg status_scratch{this};
 		const AsmReg status_reg = status_scratch.alloc_gp();
 		for (const Operand &operand : operands) {
@@ -2816,14 +2838,7 @@ public:
 		generate_raw_jump(Jump::jmp, joined);
 		cold_end();
 		label_place(joined);
-		const uint64_t callee_saved =
-			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
-		for (auto reg : tpde::util::BitSetIterator<>{
-				register_file.used & ~callee_saved}) {
-			if (!register_file.is_fixed(AsmReg{reg})) {
-				evict_reg(AsmReg{reg});
-			}
-		}
+		evict_caller_saved();
 		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 		status.set_value(this, std::move(status_scratch));
 		emit_status_tail(std::move(status), mir.exception_block_id, true);
@@ -2850,14 +2865,18 @@ public:
 	/*
 	 * The tail after a helper that returns a status: RETURNED continues
 	 * inline, an exception branches to the exception block when there is
-	 * one, and any other status returns from the function.
+	 * one, and any other status returns from the function. Both leave from
+	 * the cold area.
 	 */
 	void emit_status_tail(ValuePart &&status, zend_mir_block_id exception_block,
 			bool local_return = false) {
 		const auto status_reg = status.cur_reg_or_load(this);
-		auto continued = text_writer.label_create();
-		ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
-		generate_raw_jump(Jump::je, continued);
+		auto failed = text_writer.label_create();
+		static_assert(ZEND_NATIVE_RETURNED == 0);
+		ASM(TEST32rr, status_reg, status_reg);
+		generate_raw_jump(Jump::jne, failed);
+		cold_begin();
+		label_place(failed);
 		if (zend_mir_id_is_valid(exception_block)) {
 			auto propagate = text_writer.label_create();
 			ASM(CMP32ri, status_reg, ZEND_NATIVE_EXCEPTION);
@@ -2872,7 +2891,7 @@ public:
 		} else {
 			return_builder.ret();
 		}
-		label_place(continued);
+		cold_end();
 	}
 
 	/* The register the assigner gives the next 8-byte GP argument, invalid
@@ -7690,14 +7709,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				 * that helper. The caller-saved registers are free first,
 				 * as after its call.
 				 */
-				const uint64_t callee_saved =
-					cur_cc_assigner()->get_ccinfo().callee_saved_regs;
-				for (auto reg : tpde::util::BitSetIterator<>{
-						register_file.used & ~callee_saved}) {
-					if (!register_file.is_fixed(AsmReg{reg})) {
-						evict_reg(AsmReg{reg});
-					}
-				}
+				evict_caller_saved();
 				const AsmReg frame_reg = canonical_frame_register();
 				const AsmReg context_reg = canonical_value_register(
 					IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
@@ -7880,14 +7892,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					&& (send_slot || (send_literal != nullptr
 						&& Z_TYPE_P(send_literal) <= IS_DOUBLE))
 					&& send_offset <= INT32_MAX - sizeof(zval)) {
-				const uint64_t callee_saved =
-					cur_cc_assigner()->get_ccinfo().callee_saved_regs;
-				for (auto reg : tpde::util::BitSetIterator<>{
-						register_file.used & ~callee_saved}) {
-					if (!register_file.is_fixed(AsmReg{reg})) {
-						evict_reg(AsmReg{reg});
-					}
-				}
+				evict_caller_saved();
 				const AsmReg frame_reg = canonical_frame_register();
 				auto helper = text_writer.label_create();
 				ScratchReg callee{this};
@@ -10007,14 +10012,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			pending.reset();
 			/* As after a call: the status tail's return path then spills
 			 * nothing the continuation would miss. */
-			const uint64_t callee_saved =
-				cur_cc_assigner()->get_ccinfo().callee_saved_regs;
-			for (auto reg : tpde::util::BitSetIterator<>{
-					register_file.used & ~callee_saved}) {
-				if (!register_file.is_fixed(AsmReg{reg})) {
-					evict_reg(AsmReg{reg});
-				}
-			}
+			evict_caller_saved();
 			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
 			status.set_value(this, std::move(status_scratch));
 			emit_status_tail(std::move(status), mir.exception_block_id, true);
@@ -23801,17 +23799,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					 * the caller-saved ones free, as after a call, so that
 					 * the status tail's return path spills nothing the
 					 * continuation would then miss. */
-					{
-						const uint64_t callee_saved = cur_cc_assigner()
-							->get_ccinfo().callee_saved_regs;
-						const uint64_t evict = register_file.used
-							& ~callee_saved;
-						for (auto reg : tpde::util::BitSetIterator<>{evict}) {
-							if (!register_file.is_fixed(AsmReg{reg})) {
-								evict_reg(AsmReg{reg});
-							}
-						}
-					}
+					evict_caller_saved();
 					status.set_value(this, std::move(status_scratch));
 				} else {
 					tpde::x64::CCAssignerSysV assigner{false};
