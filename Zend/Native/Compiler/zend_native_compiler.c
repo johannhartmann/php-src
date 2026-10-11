@@ -6594,7 +6594,6 @@ bool zend_native_compiler_retire_dynamic_component(
 	if (compiler == NULL || root == NULL || compiler->persistent) {
 		return false;
 	}
-	zend_native_call_resolution_cache_invalidate();
 	zend_native_compiler_mutation_lock(compiler);
 	if (first_function_index >= compiler->function_count) {
 		zend_native_compiler_mutation_unlock(compiler);
@@ -6642,6 +6641,8 @@ bool zend_native_compiler_retire_dynamic_component(
 			return false;
 		}
 	}
+	/* Call resolutions may name the retired functions. */
+	zend_native_call_resolution_cache_invalidate();
 	for (index = compiler->function_count;
 			index-- > first_function_index;) {
 		zend_native_compiled_function *function = compiler->functions[index];
@@ -6739,10 +6740,10 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 	uint32_t index;
 	zend_native_runtime_source *runtime_source;
 
-	zend_native_call_resolution_cache_invalidate();
 	if (compiler == NULL) {
 		return;
 	}
+	zend_native_call_resolution_cache_invalidate();
 	if (compiler->persistent && compiler->function_count <= 64) {
 		/* A small script retired alone (a cache file rewritten every
 		 * request) keeps the other persistent reentries. */

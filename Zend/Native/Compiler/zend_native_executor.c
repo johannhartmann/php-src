@@ -1640,17 +1640,23 @@ void zend_native_executor_retire_owner_scripts(
 	zend_native_executor_generation_unlock();
 }
 
+static void zend_native_executor_deactivate_compiler(void)
+{
+	if (zend_native_executor_request_state.active_compiler == NULL) {
+		return;
+	}
+	zend_native_compiler_deactivate_session(
+		zend_native_executor_request_state.active_compiler);
+	zend_native_executor_request_state.active_compiler = NULL;
+}
+
 static void zend_native_executor_release_request_leases(void)
 {
 	zend_native_executor_generation **leases =
 		zend_native_executor_request_state.leases;
 	const uint32_t count = zend_native_executor_request_state.lease_count;
 
-	if (zend_native_executor_request_state.active_compiler != NULL) {
-		zend_native_compiler_deactivate_session(
-			zend_native_executor_request_state.active_compiler);
-		zend_native_executor_request_state.active_compiler = NULL;
-	}
+	zend_native_executor_deactivate_compiler();
 	zend_native_executor_request_state.leases = NULL;
 	zend_native_executor_request_state.lease_count = 0;
 	zend_native_executor_request_state.lease_capacity = 0;
@@ -1674,13 +1680,13 @@ static void zend_native_executor_release_request_leases(void)
 			leases[index]->settled = true;
 		}
 	}
-	/* Retired generations are reaped once all leases are dropped. */
+	/* Retired generations are reaped once all leases are dropped: every
+	 * caller releases the request epoch next, which reaps. */
 	zend_native_executor_generation_lock();
 	for (uint32_t index = count; index-- > 0;) {
 		ZEND_ASSERT(leases[index]->active_requests != 0);
 		leases[index]->active_requests--;
 	}
-	zend_native_executor_reap_retired_locked();
 	zend_native_executor_generation_unlock();
 	efree(leases);
 }
@@ -1717,16 +1723,6 @@ static zend_result zend_native_executor_activate_generation(
 	}
 	zend_native_executor_request_state.active_compiler = compiler;
 	return SUCCESS;
-}
-
-static void zend_native_executor_deactivate_compiler(void)
-{
-	if (zend_native_executor_request_state.active_compiler == NULL) {
-		return;
-	}
-	zend_native_compiler_deactivate_session(
-		zend_native_executor_request_state.active_compiler);
-	zend_native_executor_request_state.active_compiler = NULL;
 }
 
 /* owner is root's script owner (zend_native_executor_script_owner()). */
@@ -2398,9 +2394,10 @@ void zend_native_executor_prepare_shutdown(void)
 	while (*link != NULL) {
 		zend_native_executor_generation *generation = *link;
 
-		if (zend_native_executor_request_has_lease(generation)
-				|| !zend_native_compiler_is_quiescent(
-					generation->compiler)) {
+		/* The request list owns its generations; they are never leased
+		 * (zend_native_executor_acquire_generation_locked()). */
+		ZEND_ASSERT(!generation->persistent);
+		if (!zend_native_compiler_is_quiescent(generation->compiler)) {
 			link = &generation->next;
 			continue;
 		}
@@ -3388,27 +3385,24 @@ zend_result zend_native_executor_register_script_owner(
 	if (dispatch != NULL
 			&& zend_native_executor_dispatch_epoch_load(dispatch)
 				== zend_native_executor_request_state.observed_epoch
-			&& dispatch->generation != NULL
-				&& !zend_native_executor_request_has_lease(
-				dispatch->generation)) {
-		zend_native_executor_generation_lock();
-		if (!zend_native_executor_use_generation_locked(
-				dispatch->generation)) {
-			zend_native_executor_generation_unlock();
-			return FAILURE;
+			&& dispatch->generation != NULL) {
+		zend_native_executor_generation *generation = dispatch->generation;
+
+		/* Activation leases the generation itself. */
+		if (zend_native_executor_request_state.active_compiler
+				!= generation->compiler) {
+			return zend_native_executor_activate_generation(generation);
 		}
-		zend_native_executor_generation_unlock();
-	}
-	if (dispatch != NULL
-			&& zend_native_executor_dispatch_epoch_load(dispatch)
-				== zend_native_executor_request_state.observed_epoch
-			&& dispatch->generation != NULL
-			&& zend_native_executor_request_state.execution_depth == 0
-			&& zend_native_executor_request_state.active_compiler
-				!= dispatch->generation->compiler
-			&& zend_native_executor_activate_generation(
-				dispatch->generation) == FAILURE) {
-		return FAILURE;
+		if (!zend_native_executor_request_has_lease(generation)) {
+			bool used;
+
+			zend_native_executor_generation_lock();
+			used = zend_native_executor_use_generation_locked(generation);
+			zend_native_executor_generation_unlock();
+			if (!used) {
+				return FAILURE;
+			}
+		}
 	}
 	return SUCCESS;
 }
