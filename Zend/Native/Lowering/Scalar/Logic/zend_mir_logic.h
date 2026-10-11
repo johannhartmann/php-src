@@ -84,10 +84,31 @@ typedef struct _zend_mir_logic_opcode_proof {
 typedef struct _zend_mir_logic_context {
 	const zend_mir_logic_value_binding *bindings;
 	uint32_t binding_count;
+	/*
+	 * Optional open-addressing index of the bindings, which are unique by
+	 * source operand: a power-of-two table of binding index + 1, probed from
+	 * zend_mir_logic_operand_hash(). Without it lookups scan the bindings.
+	 */
+	const uint32_t *binding_index;
+	uint32_t binding_index_capacity;
 	const zend_mir_logic_opcode_proof *opcode_proofs;
 	uint32_t opcode_proof_count;
 	bool values_predeclared;
 } zend_mir_logic_context;
+
+static inline uint32_t zend_mir_logic_operand_hash(
+	const zend_mir_source_operand_ref *operand)
+{
+	uint64_t key = ((uint64_t) operand->kind << 56)
+		^ ((uint64_t) operand->slot_kind << 48)
+		^ ((uint64_t) operand->index << 20)
+		^ (uint64_t) operand->ssa_variable_id;
+
+	key ^= key >> 33;
+	key *= UINT64_C(0xff51afd7ed558ccd);
+	key ^= key >> 33;
+	return (uint32_t) key;
+}
 
 void zend_mir_logic_provider_init(
 	zend_mir_lowering_provider *provider,

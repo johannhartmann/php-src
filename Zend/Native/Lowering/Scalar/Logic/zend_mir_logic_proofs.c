@@ -49,6 +49,55 @@ static bool zend_mir_logic_fact_valid(
 	return true;
 }
 
+/*
+ * Finds the binding of a source operand. Bindings are unique by operand when
+ * the context carries an index; a scan also rejects contradictory duplicates.
+ */
+static const zend_mir_logic_value_binding *zend_mir_logic_find_binding(
+	const zend_mir_logic_context *context,
+	const zend_mir_source_operand_ref *source,
+	zend_mir_lowering_diagnostic_code *diagnostic_out)
+{
+	const zend_mir_logic_value_binding *match = NULL;
+	uint32_t index;
+
+	if (context->binding_index != NULL) {
+		const uint32_t mask = context->binding_index_capacity - 1;
+		uint32_t slot = zend_mir_logic_operand_hash(source) & mask;
+
+		for (index = 0; index < context->binding_index_capacity; index++) {
+			const uint32_t entry = context->binding_index[slot];
+
+			if (entry == 0 || entry > context->binding_count) {
+				break;
+			}
+			if (zend_mir_logic_operand_equal(
+					&context->bindings[entry - 1].source, source)) {
+				return &context->bindings[entry - 1];
+			}
+			slot = (slot + 1) & mask;
+		}
+		*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
+		return NULL;
+	}
+	for (index = 0; index < context->binding_count; index++) {
+		const zend_mir_logic_value_binding *candidate = &context->bindings[index];
+
+		if (!zend_mir_logic_operand_equal(&candidate->source, source)) {
+			continue;
+		}
+		if (match != NULL) {
+			*diagnostic_out = ZEND_MIRL_CONTRADICTORY_FACT;
+			return NULL;
+		}
+		match = candidate;
+	}
+	if (match == NULL) {
+		*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
+	}
+	return match;
+}
+
 zend_mir_lowering_status zend_mir_logic_fail(
 	zend_mir_lowering_context *context,
 	zend_mir_lowering_status status,
@@ -67,8 +116,7 @@ bool zend_mir_logic_input_at(
 	zend_mir_logic_input *out,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
-	uint32_t index;
-	const zend_mir_logic_value_binding *match = NULL;
+	const zend_mir_logic_value_binding *match;
 
 	if (diagnostic_out != NULL) {
 		*diagnostic_out = ZEND_MIRL_INVALID_SOURCE;
@@ -80,20 +128,8 @@ bool zend_mir_logic_input_at(
 			|| source->kind > ZEND_MIR_SOURCE_OPERAND_SSA) {
 		return false;
 	}
-	for (index = 0; index < context->binding_count; index++) {
-		const zend_mir_logic_value_binding *candidate = &context->bindings[index];
-
-		if (!zend_mir_logic_operand_equal(&candidate->source, source)) {
-			continue;
-		}
-		if (match != NULL) {
-			*diagnostic_out = ZEND_MIRL_CONTRADICTORY_FACT;
-			return false;
-		}
-		match = candidate;
-	}
+	match = zend_mir_logic_find_binding(context, source, diagnostic_out);
 	if (match == NULL) {
-		*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
 		return false;
 	}
 	if (!zend_mir_logic_fact_valid(match)) {
@@ -112,23 +148,10 @@ static bool zend_mir_logic_result_id_at(
 	zend_mir_value_id *out,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
-	uint32_t index;
-	const zend_mir_logic_value_binding *match = NULL;
+	const zend_mir_logic_value_binding *match =
+		zend_mir_logic_find_binding(context, source, diagnostic_out);
 
-	for (index = 0; index < context->binding_count; index++) {
-		const zend_mir_logic_value_binding *candidate = &context->bindings[index];
-
-		if (!zend_mir_logic_operand_equal(&candidate->source, source)) {
-			continue;
-		}
-		if (match != NULL) {
-			*diagnostic_out = ZEND_MIRL_CONTRADICTORY_FACT;
-			return false;
-		}
-		match = candidate;
-	}
 	if (match == NULL) {
-		*diagnostic_out = ZEND_MIRL_MISSING_PROOF;
 		return false;
 	}
 	if (!zend_mir_id_is_valid(match->value_id)) {
@@ -148,7 +171,16 @@ static bool zend_mir_logic_opcode_proof_at(
 	uint32_t index;
 	const zend_mir_logic_opcode_proof *match = NULL;
 
-	for (index = 0; index < context->opcode_proof_count; index++) {
+	/* The lowering stores one proof per opline at its opline index. */
+	if (opline_index < context->opcode_proof_count
+			&& context->opcode_proofs[opline_index].opline_index
+				== opline_index) {
+		match = &context->opcode_proofs[opline_index];
+		index = context->opcode_proof_count;
+	} else {
+		index = 0;
+	}
+	for (; index < context->opcode_proof_count; index++) {
 		const zend_mir_logic_opcode_proof *candidate =
 			&context->opcode_proofs[index];
 

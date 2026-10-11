@@ -94,6 +94,8 @@ struct _zend_mir_integration {
 	uint32_t fact_index_capacity;
 	zend_mir_logic_value_binding *logic_bindings;
 	uint32_t logic_binding_count;
+	uint32_t *logic_binding_index;
+	uint32_t logic_binding_index_capacity;
 	zend_mir_logic_opcode_proof *logic_proofs;
 	uint32_t logic_proof_count;
 	zend_mir_straight_line_value *lifetime_values;
@@ -3972,16 +3974,21 @@ static bool zend_mir_add_logic_binding(
 	zend_mir_logic_value_binding *binding;
 	zend_mir_value_id value_id;
 	const zend_mir_value_fact_ref *fact;
-	uint32_t index;
+	const uint32_t mask = integration->logic_binding_index_capacity - 1;
+	uint32_t slot;
 
 	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		return true;
 	}
-	for (index = 0; index < integration->logic_binding_count; index++) {
+	slot = zend_mir_logic_operand_hash(operand) & mask;
+	while (integration->logic_binding_index[slot] != 0) {
 		if (zend_mir_operand_equal(
-				&integration->logic_bindings[index].source, operand)) {
+				&integration->logic_bindings[
+					integration->logic_binding_index[slot] - 1].source,
+				operand)) {
 			return true;
 		}
+		slot = (slot + 1) & mask;
 	}
 	if (!zend_mir_resolve_operand(integration, operand, &value_id)) {
 		return false;
@@ -3992,6 +3999,7 @@ static bool zend_mir_add_logic_binding(
 	}
 	binding =
 		&integration->logic_bindings[integration->logic_binding_count++];
+	integration->logic_binding_index[slot] = integration->logic_binding_count;
 	memset(binding, 0, sizeof(*binding));
 	binding->source = *operand;
 	binding->value_id = value_id;
@@ -4012,13 +4020,21 @@ static bool zend_mir_prepare_logic(
 		return false;
 	}
 	binding_capacity = opcode_count * 3;
+	if (!zend_mir_index_capacity(
+			binding_capacity, &integration->logic_binding_index_capacity)) {
+		return false;
+	}
 	integration->logic_bindings = zend_mir_lowering_calloc(
 		binding_capacity == 0 ? 1 : binding_capacity,
 		sizeof(*integration->logic_bindings));
+	integration->logic_binding_index = zend_mir_lowering_calloc(
+		integration->logic_binding_index_capacity,
+		sizeof(*integration->logic_binding_index));
 	integration->logic_proofs = zend_mir_lowering_calloc(
 		opcode_count == 0 ? 1 : opcode_count,
 		sizeof(*integration->logic_proofs));
 	if (integration->logic_bindings == NULL
+			|| integration->logic_binding_index == NULL
 			|| integration->logic_proofs == NULL) {
 		return false;
 	}
@@ -4091,6 +4107,10 @@ static bool zend_mir_prepare_logic(
 	integration->logic_context.bindings = integration->logic_bindings;
 	integration->logic_context.binding_count =
 		integration->logic_binding_count;
+	integration->logic_context.binding_index =
+		integration->logic_binding_index;
+	integration->logic_context.binding_index_capacity =
+		integration->logic_binding_index_capacity;
 	integration->logic_context.opcode_proofs = integration->logic_proofs;
 	integration->logic_context.opcode_proof_count =
 		integration->logic_proof_count;
@@ -5210,6 +5230,7 @@ static void zend_mir_release(zend_mir_integration *integration)
 	free(integration->lifetime_value_index);
 	free(integration->lifetime_values);
 	free(integration->logic_proofs);
+	free(integration->logic_binding_index);
 	free(integration->logic_bindings);
 	free(integration->fact_index);
 	free(integration->facts);
