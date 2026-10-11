@@ -2371,6 +2371,47 @@ public:
 		finish_guarded_with(slow, done, std::move(decision),
 			[&] { frame_scratch.reset(); }, successors);
 	}
+	/*
+	 * Reserves RAX, where a helper returns its decision, for a decision
+	 * that the inline paths of an instruction set before they join the
+	 * helper's path at the instruction's one TPDE branch: when RAX is free
+	 * or holds a value its stack slot has too (dropping it emits nothing).
+	 * The reservation must end before the helper call; the paths then meet
+	 * with the decision in RAX instead of a stack slot.
+	 */
+	bool reserve_decision_register(ScratchReg &carry) {
+		const AsmReg rax{AsmReg::AX};
+		if (((register_file.allocatable >> rax.id()) & 1) == 0
+				|| register_file.is_fixed(rax)) {
+			return false;
+		}
+		if (register_file.is_used(rax)) {
+			const auto local_idx = register_file.reg_local_idx(rax);
+			if (local_idx == INVALID_VAL_LOCAL_IDX) {
+				return false;
+			}
+			tpde::AssignmentPartRef part{
+				val_assignment(local_idx), register_file.reg_part(rax)};
+			if (!part.stack_valid()) {
+				return false;
+			}
+			evict_reg(rax);
+		}
+		carry.alloc_specific(rax);
+		return true;
+	}
+	/* After the helper of a reserve_decision_register() join: its decision
+	 * in RAX, held by joined, which the branch then tests. */
+	void join_decision_register(ValuePart &decision, AsmReg decision_reg,
+			ScratchReg &joined) {
+		const AsmReg rax{AsmReg::AX};
+		if (decision_reg != rax) {
+			ZEND_ASSERT(!register_file.is_used(rax));
+			ASM(MOV32rr, rax, decision_reg);
+		}
+		decision.reset(this);
+		joined.alloc_specific(rax);
+	}
 	/* The branch of a decision a stack slot holds: successor 0 when it is
 	 * set, else successor 1. */
 	template <typename Successors>
@@ -5717,16 +5758,25 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 		&& scalar_layout.operand_offset <= INT32_MAX - sizeof(zval)
 		&& scalar_layout.result_offset <= INT32_MAX - sizeof(zval);
 	int32_t scalar_slot = 0;
+	/* The inline decision meets the helper's in RAX, its return register,
+	 * when RAX is free once everything is spilled; else in a stack slot. */
+	bool scalar_in_return_reg = false;
+	const AsmReg return_reg{AsmReg::AX};
 	auto scalar_join = text_writer.label_create();
 	auto scalar_helper = text_writer.label_create();
 	if (scalar_inline) {
-		scalar_slot = inst_stack_slot(sizeof(uint32_t));
 		release_spilled_regs(spill_before_branch(true));
 		const auto frame_reg = canonical_frame_register();
-		ScratchReg type{this};
+		scalar_in_return_reg = !register_file.is_used(return_reg)
+			&& ((register_file.allocatable >> return_reg.id()) & 1) != 0;
+		if (!scalar_in_return_reg) {
+			scalar_slot = inst_stack_slot(sizeof(uint32_t));
+		}
 		ScratchReg truth{this};
+		ScratchReg type{this};
+		const auto truth_reg = scalar_in_return_reg
+			? truth.alloc_specific(return_reg) : truth.alloc_gp();
 		const auto type_reg = type.alloc_gp();
-		const auto truth_reg = truth.alloc_gp();
 		const int32_t operand =
 			static_cast<int32_t>(scalar_layout.operand_offset);
 		auto is_long = text_writer.label_create();
@@ -5756,7 +5806,9 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 				result + static_cast<int32_t>(offsetof(zval, u1.type_info))),
 				type_reg);
 		}
-		ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, scalar_slot), truth_reg);
+		if (!scalar_in_return_reg) {
+			ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, scalar_slot), truth_reg);
+		}
 		generate_raw_jump(Jump::jmp, scalar_join);
 		label_place(scalar_helper);
 	}
@@ -5772,7 +5824,16 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 	auto decision_reg = decision_scratch.cur_reg();
 	emit_decision_exception_check(decision_reg, mir.exception_block_id,
 		[&] { decision_scratch.reset(); });
-	if (scalar_inline) {
+	if (scalar_in_return_reg) {
+		/* The return register holds the helper's decision already. */
+		if (decision_reg != return_reg) {
+			ZEND_ASSERT(!register_file.is_used(return_reg));
+			ASM(MOV32rr, return_reg, decision_reg);
+			decision_scratch.reset();
+			decision_reg = decision_scratch.alloc_specific(return_reg);
+		}
+		label_place(scalar_join);
+	} else if (scalar_inline) {
 		ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, scalar_slot), decision_reg);
 		decision_scratch.reset();
 		label_place(scalar_join);
@@ -18921,11 +18982,6 @@ bool ZendCompilerX64::compile_inst_impl(
 									&& val_parts(node.result).count() == 1))) {
 						return false;
 					}
-					const int32_t decision_slot =
-						inst_stack_slot(sizeof(uint32_t));
-					if (decision_slot >= 0) {
-						return false;
-					}
 					auto slow = text_writer.label_create();
 					auto end = text_writer.label_create();
 					auto branch = text_writer.label_create();
@@ -18955,6 +19011,17 @@ bool ZendCompilerX64::compile_inst_impl(
 					};
 					if (direct_exits) {
 						release_spilled_regs(spill_before_branch(true));
+					}
+					/* The paths' decision: in RAX, else in a stack slot. */
+					ScratchReg decision_carry{this};
+					const bool carry_decision = !direct_exits
+						&& reserve_decision_register(decision_carry);
+					int32_t decision_slot = 0;
+					if (!direct_exits && !carry_decision) {
+						decision_slot = inst_stack_slot(sizeof(uint32_t));
+						if (decision_slot >= 0) {
+							return false;
+						}
 					}
 					ScratchReg type{this};
 					ScratchReg array{this};
@@ -19236,6 +19303,14 @@ bool ZendCompilerX64::compile_inst_impl(
 					if (direct_exits) {
 						exit_to(Jump::jmp, 0, true);
 						cold_begin();
+					} else if (carry_decision) {
+						ASM(MOV32ri, decision_carry.cur_reg(), 1);
+						generate_raw_jump(Jump::jmp, branch);
+
+						label_place(end);
+						ASM(XOR32rr, decision_carry.cur_reg(),
+							decision_carry.cur_reg());
+						generate_raw_jump(Jump::jmp, branch);
 					} else {
 						ASM(MOV32mi,
 							FE_MEM(FE_BP, 0, FE_NOREG, decision_slot), 1);
@@ -19248,6 +19323,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 
 					label_place(slow);
+					decision_carry.reset();
 					type.reset();
 					array.reset();
 					position.reset();
@@ -19282,13 +19358,24 @@ bool ZendCompilerX64::compile_inst_impl(
 						cold_end();
 						return true;
 					}
-					ASM(MOV32mr,
-						FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
-						decision_reg);
-					decision.reset(this);
+					ScratchReg joined_decision{this};
+					if (carry_decision) {
+						join_decision_register(
+							decision, decision_reg, joined_decision);
+					} else {
+						ASM(MOV32mr,
+							FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
+							decision_reg);
+						decision.reset(this);
+					}
 
 					label_place(branch);
-					if (node.has_result) {
+					/* The value stays in its frame slot: a result nothing
+					 * reads is not loaded, as for an unused ZvalPayloadLoad. */
+					if (node.has_result
+							&& this->analyzer.liveness_info(
+								adaptor->val_local_idx(node.result)).ref_count
+								> 1) {
 						if (adaptor->machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_I64) {
 							auto [result_ref, result] =
@@ -19328,7 +19415,14 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					const auto &successors = adaptor->block_succs(
 						IRBlockRef{node.control_block});
-					branch_on_decision_slot(decision_slot, successors);
+					if (carry_decision) {
+						ASM(TEST32rr, joined_decision.cur_reg(),
+							joined_decision.cur_reg());
+						generate_cond_branch(
+							Jump::jne, successors[0], successors[1]);
+					} else {
+						branch_on_decision_slot(decision_slot, successors);
+					}
 					return true;
 				}
 			}
@@ -19474,10 +19568,22 @@ bool ZendCompilerX64::compile_inst_impl(
 					 * values survive a call in callee-saved registers.
 					 */
 					(void) spill_before_branch(true);
-					const int32_t decision_slot =
-						inst_stack_slot(sizeof(uint32_t));
-					if (decision_slot >= 0) {
-						return false;
+					/* With PHIs at a successor both paths join at one TPDE
+					 * branch, their decision in RAX, else in a stack slot. */
+					const auto &join_successors = adaptor->block_succs(
+						IRBlockRef{node.control_block});
+					const bool join_decision = join_successors.size() < 2
+						|| branch_needs_split(join_successors[0])
+						|| branch_needs_split(join_successors[1]);
+					ScratchReg decision_carry{this};
+					const bool carry_decision = join_decision
+						&& reserve_decision_register(decision_carry);
+					int32_t decision_slot = 0;
+					if (join_decision && !carry_decision) {
+						decision_slot = inst_stack_slot(sizeof(uint32_t));
+						if (decision_slot >= 0) {
+							return false;
+						}
 					}
 					auto slow = text_writer.label_create();
 					auto truthy = text_writer.label_create();
@@ -19775,10 +19881,16 @@ bool ZendCompilerX64::compile_inst_impl(
 					 * needed, so each outcome jumps to its block directly;
 					 * otherwise both paths join at one TPDE branch.
 					 */
-					const bool direct_tails = successors.size() >= 2
-						&& !branch_needs_split(successors[0])
-						&& !branch_needs_split(successors[1]);
-					if (!direct_tails) {
+					const bool direct_tails = !join_decision;
+					if (!direct_tails && carry_decision) {
+						const AsmReg carry_reg = decision_carry.cur_reg();
+						label_place(truthy);
+						ASM(MOV32ri, carry_reg, 1);
+						generate_raw_jump(Jump::jmp, fast_ready);
+						label_place(falsey);
+						ASM(XOR32rr, carry_reg, carry_reg);
+						label_place(fast_ready);
+					} else if (!direct_tails) {
 						label_place(truthy);
 						ASM(MOV32mi,
 							FE_MEM(FE_BP, 0, FE_NOREG,
@@ -19801,6 +19913,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					 * hot code. */
 					cold_begin();
 					label_place(slow);
+					decision_carry.reset();
 					if (fused && !emit_fused_compare_helper(
 							fused_compare, mir, frame_scratch)) {
 						return false;
@@ -19870,15 +19983,28 @@ bool ZendCompilerX64::compile_inst_impl(
 						release_spilled_regs(spilled);
 						return true;
 					}
-					ASM(MOV32mr,
-						FE_MEM(FE_BP, 0, FE_NOREG,
-							decision_slot),
-						decision_reg);
-					decision.reset(this);
+					ScratchReg joined_decision{this};
+					if (carry_decision) {
+						join_decision_register(
+							decision, decision_reg, joined_decision);
+					} else {
+						ASM(MOV32mr,
+							FE_MEM(FE_BP, 0, FE_NOREG,
+								decision_slot),
+							decision_reg);
+						decision.reset(this);
+					}
 					generate_raw_jump(Jump::jmp, branch);
 					cold_end();
 					label_place(branch);
-					branch_on_decision_slot(decision_slot, successors);
+					if (carry_decision) {
+						ASM(TEST32rr, joined_decision.cur_reg(),
+							joined_decision.cur_reg());
+						generate_cond_branch(
+							Jump::jne, successors[0], successors[1]);
+					} else {
+						branch_on_decision_slot(decision_slot, successors);
+					}
 					return true;
 				}
 			}
@@ -20020,17 +20146,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				mir.runtime_helper);
 			ValuePart decision{tpde::x64::PlatformConfig::GP_BANK, 4};
 			builder.add_ret(decision, tpde::CCAssignment{});
+			/* The decision keeps its register (the ValuePart holds it fixed)
+			 * while the result is loaded. */
 			auto decision_reg = decision.cur_reg_or_load(this);
-			const int32_t decision_slot = node.has_result
-				? inst_stack_slot(sizeof(uint32_t)) : -1;
-			if (node.has_result && decision_slot >= 0) {
-				return false;
-			}
-			if (node.has_result) {
-				ASM(MOV32mr,
-					FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
-					decision_reg);
-			}
 			emit_decision_exception_check(decision_reg, mir.exception_block_id,
 				[&] { decision.reset(this); });
 			const auto &successors = adaptor->block_succs(
@@ -20080,12 +20198,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
 						static_cast<int32_t>(frame_offset)));
 				result.set_modified();
-				branch_on_decision_slot(decision_slot, successors);
-			} else {
-				ASM(TEST32rr, decision_reg, decision_reg);
-				generate_cond_branch(
-					Jump::jne, successors[0], successors[1]);
 			}
+			ASM(TEST32rr, decision_reg, decision_reg);
+			generate_cond_branch(Jump::jne, successors[0], successors[1]);
 			return true;
 		}
 		case ZEND_MIR_OPCODE_CALL_DIRECT_USER: {
