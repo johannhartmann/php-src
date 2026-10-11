@@ -282,6 +282,7 @@ bool zend_mir_straight_line_value_at(
 	return false;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_straight_line_entry_contract_is_valid(
 	const zend_mir_straight_line_provider_context *provider_context)
 {
@@ -349,6 +350,23 @@ static bool zend_mir_straight_line_entry_contract_is_valid(
 	}
 	return true;
 }
+#endif
+
+/*
+ * Slot ids, kinds and order are fixed when the lowering prepares the entry,
+ * and frames at canonical locations carry no slots. Only debug builds recheck
+ * the whole contract, which is quadratic in the slot count, at every frame.
+ */
+static bool zend_mir_straight_line_entry_contract_holds(
+	const zend_mir_straight_line_provider_context *provider_context)
+{
+#if !defined(NDEBUG)
+	return zend_mir_straight_line_entry_contract_is_valid(provider_context);
+#else
+	return provider_context != NULL && provider_context->lifetime != NULL
+		&& provider_context->entry != NULL;
+#endif
+}
 
 static bool zend_mir_straight_line_slot_value(
 	zend_mir_straight_line_provider_context *provider_context,
@@ -406,7 +424,7 @@ bool zend_mir_straight_line_emit_frame_for_class(
 	uint32_t index;
 
 	if (!zend_mir_id_is_valid(function_id)
-			|| !zend_mir_straight_line_entry_contract_is_valid(provider_context)
+			|| !zend_mir_straight_line_entry_contract_holds(provider_context)
 			|| !zend_mir_straight_line_emit_source_position(
 				entry, source_opcode, mutator, &source_id)) {
 		return false;
@@ -514,7 +532,7 @@ zend_mir_lowering_status zend_mir_lower_entry_state(
 			|| !zend_mir_straight_line_mutator_has_frame_ops(mutator)) {
 		return ZEND_MIR_LOWERING_FAILED;
 	}
-	if (!zend_mir_straight_line_entry_contract_is_valid(provider_context)) {
+	if (!zend_mir_straight_line_entry_contract_holds(provider_context)) {
 		if (diagnostic_out != NULL) {
 			*diagnostic_out = ZEND_MIRL_CONTRADICTORY_FACT;
 		}
