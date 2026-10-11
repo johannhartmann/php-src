@@ -126,6 +126,14 @@ struct _zend_mir_integration {
 	zend_mir_source_position_id overlay_pending_store_source_position;
 	const zend_op_array *value_op_array;
 	bool deferred_finalize;
+	/* Per increment opline: the comparisons that structurally guard it,
+	 * guard_compares[first - 1 ..], computed on first query (first 0). */
+	uint32_t *guard_compare_first;
+	uint32_t *guard_compare_count;
+	int *guard_compare_slot;
+	uint32_t *guard_compares;
+	uint32_t guard_compare_used;
+	uint32_t guard_compare_capacity;
 };
 
 static zend_mir_lowering_result zend_mir_lowering_make_result(
@@ -780,13 +788,211 @@ static bool zend_mir_opcode_operand_fact(
 	return zend_mir_inferred_fact_for_use(integration, use, out);
 }
 
+/*
+ * Whether the IS_SMALLER at index and the JMPZ/JMPNZ after it guard the
+ * increment at inc_index of slot: the comparison reads slot, its true
+ * successor dominates the increment, and no other write to slot happens in
+ * a block that successor dominates. This keeps the relational < bound proof
+ * valid across arbitrary branch/merge blocks before the increment. Only the
+ * op_array and its SSA decide it; the bound's type is checked separately.
+ */
+static bool zend_mir_guard_compare_structure(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint32_t inc_index, uint32_t inc_block, int slot, uint32_t index)
+{
+	const zend_op *compare = &op_array->opcodes[index];
+	const zend_op *branch = &op_array->opcodes[index + 1];
+	const zend_ssa_op *compare_ssa = &ssa->ops[index];
+	const zend_ssa_op *branch_ssa = &ssa->ops[index + 1];
+	const zend_basic_block *compare_basic_block;
+	uint32_t compare_block;
+	uint32_t true_successor;
+	uint32_t definition_index;
+	bool dominates;
+
+	if (compare->opcode != ZEND_IS_SMALLER
+			|| (branch->opcode != ZEND_JMPNZ
+				&& branch->opcode != ZEND_JMPZ)
+			|| compare_ssa->op1_use < 0
+			|| compare_ssa->result_def < 0
+			|| branch_ssa->op1_use != compare_ssa->result_def
+			|| ssa->vars[compare_ssa->op1_use].var != slot) {
+		return false;
+	}
+	compare_block = ssa->cfg.map[index];
+	if (compare_block >= ssa->cfg.blocks_count
+			|| ssa->cfg.map[index + 1] != compare_block) {
+		return false;
+	}
+	compare_basic_block = &ssa->cfg.blocks[compare_block];
+	if (compare_basic_block->successors_count != 2) {
+		return false;
+	}
+	true_successor = (uint32_t) compare_basic_block->successors[
+		branch->opcode == ZEND_JMPNZ ? 0 : 1];
+	if (true_successor >= ssa->cfg.blocks_count
+			|| ssa->cfg.blocks[true_successor].level < 0
+			|| ssa->cfg.blocks[inc_block].level
+				< ssa->cfg.blocks[true_successor].level) {
+		return false;
+	}
+	dominates = true_successor == inc_block;
+	for (uint32_t block = inc_block; !dominates;) {
+		const int idom = ssa->cfg.blocks[block].idom;
+		if (idom < 0 || (uint32_t) idom == block) {
+			break;
+		}
+		block = (uint32_t) idom;
+		dominates = block == true_successor;
+	}
+	if (!dominates) {
+		return false;
+	}
+	for (definition_index = 0; definition_index < op_array->last;
+			definition_index++) {
+		const zend_ssa_op *definition = &ssa->ops[definition_index];
+		uint32_t definition_block;
+		bool defined = false;
+
+		if (definition_index == inc_index) {
+			continue;
+		}
+		if (definition->op1_def >= 0
+				&& ssa->vars[definition->op1_def].var == slot) {
+			defined = true;
+		}
+		if (definition->op2_def >= 0
+				&& ssa->vars[definition->op2_def].var == slot) {
+			defined = true;
+		}
+		if (definition->result_def >= 0
+				&& ssa->vars[definition->result_def].var == slot) {
+			defined = true;
+		}
+		if (!defined) {
+			continue;
+		}
+		definition_block = ssa->cfg.map[definition_index];
+		if (definition_block >= ssa->cfg.blocks_count
+				|| ssa->cfg.blocks[definition_block].level
+					< ssa->cfg.blocks[true_successor].level) {
+			continue;
+		}
+		dominates = definition_block == true_successor;
+		for (uint32_t block = definition_block; !dominates;) {
+			const int idom = ssa->cfg.blocks[block].idom;
+			if (idom < 0 || (uint32_t) idom == block) {
+				break;
+			}
+			block = (uint32_t) idom;
+			dominates = block == true_successor;
+		}
+		if (dominates) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
+ * The comparisons that structurally guard the increment at inc_index of
+ * slot. They depend on the op_array and its SSA only, so overlay
+ * preparation finds them once per increment and keeps them for the compile;
+ * the bound facts the guard also needs change while the scalar facts are
+ * inferred and closed, and are read on every query. Returns false when the
+ * memo cannot be extended; the caller then scans without it.
+ */
+static bool zend_mir_guard_compares(
+	const zend_mir_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	uint32_t inc_index, uint32_t inc_block, int slot,
+	const uint32_t **compares_out, uint32_t *count_out)
+{
+	/* The memo is a cache the const queries fill; the integration itself
+	 * is never const. */
+	zend_mir_integration *memo = (zend_mir_integration *) integration;
+	uint32_t index;
+
+	if (memo->guard_compare_first == NULL) {
+		memo->guard_compare_first = zend_mir_lowering_calloc(
+			op_array->last, sizeof(*memo->guard_compare_first));
+		memo->guard_compare_count = zend_mir_lowering_calloc(
+			op_array->last, sizeof(*memo->guard_compare_count));
+		memo->guard_compare_slot = zend_mir_lowering_calloc(
+			op_array->last, sizeof(*memo->guard_compare_slot));
+		if (memo->guard_compare_first == NULL
+				|| memo->guard_compare_count == NULL
+				|| memo->guard_compare_slot == NULL) {
+			free(memo->guard_compare_slot);
+			free(memo->guard_compare_count);
+			free(memo->guard_compare_first);
+			memo->guard_compare_slot = NULL;
+			memo->guard_compare_count = NULL;
+			memo->guard_compare_first = NULL;
+			return false;
+		}
+	}
+	if (memo->guard_compare_first[inc_index] == 0
+			|| memo->guard_compare_slot[inc_index] != slot) {
+		const uint32_t first = memo->guard_compare_used;
+		uint32_t count = 0;
+
+		for (index = 0; index + 1 < op_array->last; index++) {
+			if (!zend_mir_guard_compare_structure(
+					op_array, ssa, inc_index, inc_block, slot, index)) {
+				continue;
+			}
+			if (memo->guard_compare_used == memo->guard_compare_capacity) {
+				uint32_t capacity;
+				uint32_t *compares;
+
+				if (memo->guard_compare_capacity > UINT32_MAX / 2) {
+					return false;
+				}
+				capacity = memo->guard_compare_capacity == 0
+					? 8 : memo->guard_compare_capacity * 2;
+				compares = realloc(memo->guard_compares,
+					(size_t) capacity * sizeof(*compares));
+				if (compares == NULL) {
+					return false;
+				}
+				memo->guard_compares = compares;
+				memo->guard_compare_capacity = capacity;
+			}
+			memo->guard_compares[memo->guard_compare_used++] = index;
+			count++;
+		}
+		memo->guard_compare_first[inc_index] = first + 1;
+		memo->guard_compare_count[inc_index] = count;
+		memo->guard_compare_slot[inc_index] = slot;
+	}
+	*compares_out = memo->guard_compares == NULL ? NULL
+		: &memo->guard_compares[memo->guard_compare_first[inc_index] - 1];
+	*count_out = memo->guard_compare_count[inc_index];
+	return true;
+}
+
+/* Whether the comparison at index has an exact long bound. */
+static bool zend_mir_guard_compare_bound(
+	const zend_mir_integration *integration,
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t index)
+{
+	zend_mir_value_fact_ref bound;
+
+	return zend_mir_opcode_operand_fact(
+			integration, op_array, ssa, index, ZEND_MIR_FRONTEND_OP2, &bound)
+		&& bound.exact_type == ZEND_MIR_SCALAR_TYPE_I64;
+}
+
 static bool zend_mir_directly_guarded_long_inc(
 	const zend_mir_integration *integration,
 	const zend_op_array *op_array, const zend_ssa *ssa,
 	uint32_t inc_index, int slot)
 {
-	uint32_t index;
+	const uint32_t *compares;
+	uint32_t compare_count;
 	uint32_t inc_block;
+	uint32_t index;
 
 	if (integration == NULL || op_array == NULL || ssa == NULL
 			|| inc_index >= op_array->last || ssa->cfg.map == NULL
@@ -799,107 +1005,21 @@ static bool zend_mir_directly_guarded_long_inc(
 	if (inc_block >= ssa->cfg.blocks_count) {
 		return false;
 	}
+	if (zend_mir_guard_compares(integration, op_array, ssa,
+			inc_index, inc_block, slot, &compares, &compare_count)) {
+		for (index = 0; index < compare_count; index++) {
+			if (zend_mir_guard_compare_bound(
+					integration, op_array, ssa, compares[index])) {
+				return true;
+			}
+		}
+		return false;
+	}
 	for (index = 0; index + 1 < op_array->last; index++) {
-		const zend_op *compare = &op_array->opcodes[index];
-		const zend_op *branch = &op_array->opcodes[index + 1];
-		const zend_ssa_op *compare_ssa = &ssa->ops[index];
-		const zend_ssa_op *branch_ssa = &ssa->ops[index + 1];
-		const zend_basic_block *compare_basic_block;
-		zend_mir_value_fact_ref bound;
-		uint32_t compare_block;
-		uint32_t true_successor;
-		uint32_t definition_index;
-		bool dominates;
-
-		if (compare->opcode != ZEND_IS_SMALLER
-				|| (branch->opcode != ZEND_JMPNZ
-					&& branch->opcode != ZEND_JMPZ)
-				|| compare_ssa->op1_use < 0
-				|| compare_ssa->result_def < 0
-				|| branch_ssa->op1_use != compare_ssa->result_def
-				|| ssa->vars[compare_ssa->op1_use].var != slot
-				|| !zend_mir_opcode_operand_fact(
-					integration, op_array, ssa, index,
-					ZEND_MIR_FRONTEND_OP2, &bound)
-				|| bound.exact_type != ZEND_MIR_SCALAR_TYPE_I64) {
-			continue;
-		}
-		compare_block = ssa->cfg.map[index];
-		if (compare_block >= ssa->cfg.blocks_count
-				|| ssa->cfg.map[index + 1] != compare_block) {
-			continue;
-		}
-		compare_basic_block = &ssa->cfg.blocks[compare_block];
-		if (compare_basic_block->successors_count != 2) {
-			continue;
-		}
-		true_successor = (uint32_t) compare_basic_block->successors[
-			branch->opcode == ZEND_JMPNZ ? 0 : 1];
-		if (true_successor >= ssa->cfg.blocks_count
-				|| ssa->cfg.blocks[true_successor].level < 0
-				|| ssa->cfg.blocks[inc_block].level
-					< ssa->cfg.blocks[true_successor].level) {
-			continue;
-		}
-		dominates = true_successor == inc_block;
-		for (uint32_t block = inc_block; !dominates;) {
-			const int idom = ssa->cfg.blocks[block].idom;
-			if (idom < 0 || (uint32_t) idom == block) {
-				break;
-			}
-			block = (uint32_t) idom;
-			dominates = block == true_successor;
-		}
-		if (!dominates) {
-			continue;
-		}
-		/* No other write to the induction slot may occur after the
-		 * successful comparison.  This keeps the relational < bound proof
-		 * valid across arbitrary branch/merge blocks before the increment. */
-		for (definition_index = 0; definition_index < op_array->last;
-				definition_index++) {
-			const zend_ssa_op *definition = &ssa->ops[definition_index];
-			uint32_t definition_block;
-			bool defined = false;
-
-			if (definition_index == inc_index) {
-				continue;
-			}
-			if (definition->op1_def >= 0
-					&& ssa->vars[definition->op1_def].var == slot) {
-				defined = true;
-			}
-			if (definition->op2_def >= 0
-					&& ssa->vars[definition->op2_def].var == slot) {
-				defined = true;
-			}
-			if (definition->result_def >= 0
-					&& ssa->vars[definition->result_def].var == slot) {
-				defined = true;
-			}
-			if (!defined) {
-				continue;
-			}
-			definition_block = ssa->cfg.map[definition_index];
-			if (definition_block >= ssa->cfg.blocks_count
-					|| ssa->cfg.blocks[definition_block].level
-						< ssa->cfg.blocks[true_successor].level) {
-				continue;
-			}
-			dominates = definition_block == true_successor;
-			for (uint32_t block = definition_block; !dominates;) {
-				const int idom = ssa->cfg.blocks[block].idom;
-				if (idom < 0 || (uint32_t) idom == block) {
-					break;
-				}
-				block = (uint32_t) idom;
-				dominates = block == true_successor;
-			}
-			if (dominates) {
-				break;
-			}
-		}
-		if (definition_index == op_array->last) {
+		if (zend_mir_guard_compare_structure(
+					op_array, ssa, inc_index, inc_block, slot, index)
+				&& zend_mir_guard_compare_bound(
+					integration, op_array, ssa, index)) {
 			return true;
 		}
 	}
@@ -5202,6 +5322,10 @@ static void zend_mir_release(zend_mir_integration *integration)
 	free(integration->overlay_elided_boxed_opcodes);
 	free(integration->overlay_scalarized_opcodes);
 	free(integration->overlay_suppressed_opcodes);
+	free(integration->guard_compares);
+	free(integration->guard_compare_slot);
+	free(integration->guard_compare_count);
+	free(integration->guard_compare_first);
 	zend_mir_straight_line_provider_context_release(
 		&integration->lifetime_context);
 }
