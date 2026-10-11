@@ -2341,31 +2341,26 @@ static bool zend_mir_close_phi_components(
 				continue;
 			}
 			for (source = 0; source < sources; source++) {
-				uint32_t left = (uint32_t) phi->ssa_var;
+				uint32_t left;
 				uint32_t right;
 
 				if (phi->sources[source] < 0
 						|| (uint32_t) phi->sources[source] >= count) {
 					continue;
 				}
-				right = (uint32_t) phi->sources[source];
-				while (parents[left] != left) {
-					left = parents[left];
-				}
-				while (parents[right] != right) {
-					right = parents[right];
-				}
+				/* The PHI's root joins the input's root: which member
+				 * becomes a root matters below. */
+				left = zend_mir_component_find(
+					parents, (uint32_t) phi->ssa_var);
+				right = zend_mir_component_find(
+					parents, (uint32_t) phi->sources[source]);
 				parents[left] = right;
 			}
 		}
 	}
 	for (index = 0; index < count; index++) {
-		uint32_t root = index;
+		const uint32_t root = zend_mir_component_find(parents, index);
 
-		while (parents[root] != root) {
-			root = parents[root];
-		}
-		parents[index] = root;
 		sizes[root]++;
 	}
 	/* The root of a component is a member like any other: a component is
