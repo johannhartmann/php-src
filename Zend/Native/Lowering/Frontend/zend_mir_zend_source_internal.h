@@ -41,12 +41,14 @@ void zend_mir_frontend_set_diagnostic(
 	uint32_t operand_index,
 	uint32_t ssa_variable_id);
 
+/* On success the caller owns *slot_index_out, the validated slot index. */
 zend_mir_lowering_status zend_mir_frontend_validate_slots(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic,
-	uint32_t *slot_count);
+	uint32_t *slot_count,
+	void **slot_index_out);
 
 bool zend_mir_frontend_decode_slot(
 	const zend_op_array *op_array,

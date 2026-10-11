@@ -392,7 +392,8 @@ zend_mir_lowering_status zend_mir_frontend_validate_slots(
 	const zend_ssa *ssa,
 	zend_mir_op_array_id op_array_id,
 	zend_mir_frontend_diagnostic *diagnostic,
-	uint32_t *slot_count)
+	uint32_t *slot_count,
+	void **slot_index_out)
 {
 	uint32_t cv_count;
 	uint32_t i;
@@ -400,10 +401,11 @@ zend_mir_lowering_status zend_mir_frontend_validate_slots(
 	uint32_t ignored_slot;
 	zend_mir_source_slot_kind ignored_kind;
 
-	if (slot_count == NULL || op_array == NULL || ssa == NULL
-			|| op_array->last_var < 0) {
+	if (slot_count == NULL || slot_index_out == NULL || op_array == NULL
+			|| ssa == NULL || op_array->last_var < 0) {
 		goto invalid;
 	}
+	*slot_index_out = NULL;
 	cv_count = (uint32_t) op_array->last_var;
 	if (op_array->T > (ZEND_MIR_ID_MAX - cv_count) / 2) {
 		goto invalid;
@@ -424,7 +426,7 @@ zend_mir_lowering_status zend_mir_frontend_validate_slots(
 			return ZEND_MIR_LOWERING_REJECTED;
 		}
 	}
-	zend_mir_frontend_release_slot_index(index);
+	*slot_index_out = index;
 	return ZEND_MIR_LOWERING_SUCCESS;
 
 invalid:
