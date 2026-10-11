@@ -6885,7 +6885,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				encode_operand( operation.result, operation.result_unused_payload), 8);
 			if (explicit_auxiliary) {
 				add_const_arg(operation_call,
-					encode_operand(operation.auxiliary, operation.auxiliary_unused_payload), 8);
+					encode_operand(operation.auxiliary, operation.auxiliary_unused_payload)
+						| zend_tpde_auxiliary_cache_bits(
+							dispatch_case.helper, operation), 8);
 			}
 			add_const_arg(operation_call, operation.extended_value, 4);
 			add_const_arg(operation_call, dispatch_case.target_opcode, 4);
@@ -10724,7 +10726,8 @@ bool ZendCompilerX64::compile_inst_impl(
 				encode_operand( operation.result, operation.result_unused_payload), 8);
 			if (explicit_auxiliary) {
 				add_const_arg(builder,
-					encode_operand(operation.auxiliary, operation.auxiliary_unused_payload), 8);
+					encode_operand(operation.auxiliary, operation.auxiliary_unused_payload)
+						| zend_tpde_auxiliary_cache_bits(helper, operation), 8);
 			}
 			add_const_arg(builder, operation.extended_value, 4);
 			add_const_arg(builder, source_opcode, 4);

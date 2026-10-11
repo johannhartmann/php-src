@@ -386,6 +386,7 @@ bool user_opcode_source_operation(
 		}
 		operation->auxiliary_unused_payload =
 			data->op1_type == IS_UNUSED ? data->op1.num : 0;
+		operation->auxiliary_extended_value = data->extended_value;
 		operation->auxiliary_storage_id =
 			source_descriptor_storage(op_array, operation->auxiliary);
 	}

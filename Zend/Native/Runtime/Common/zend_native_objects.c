@@ -31,6 +31,8 @@ typedef struct _zend_native_explicit_object_operation {
 	znode_op auxiliary;
 	uint32_t extended_value;
 	uint32_t source_position_id;
+	/* An assignment's ZEND_NATIVE_AUXILIARY_CACHE_OFFSET(). */
+	uint32_t auxiliary_cache_offset;
 } zend_native_explicit_object_operation;
 
 static bool zend_native_object_init_explicit_operation(
@@ -71,6 +73,8 @@ static bool zend_native_object_init_explicit_assignment(
 	uint32_t source_position_id, uint8_t expected_opcode,
 	zend_native_explicit_object_operation *operation)
 {
+	operation->auxiliary_cache_offset =
+		ZEND_NATIVE_AUXILIARY_CACHE_OFFSET(auxiliary);
 	return zend_native_object_init_explicit_operation(
 			execute_data, op1, op2, result, extended_value, source_opcode,
 			source_position_id, expected_opcode, operation)
@@ -78,6 +82,32 @@ static bool zend_native_object_init_explicit_assignment(
 			execute_data, auxiliary, &operation->auxiliary_type,
 			&operation->auxiliary)
 		&& operation->auxiliary_type != IS_UNUSED;
+}
+
+/*
+ * The run-time cache offset in the OP_DATA of an ASSIGN_OBJ_OP or
+ * ASSIGN_STATIC_PROP_OP: the one the compiler passed, unless it did not fit
+ * the auxiliary operand.
+ */
+static zend_always_inline uint32_t zend_native_object_data_cache_offset(
+	const zend_execute_data *execute_data, uint32_t cache_offset,
+	uint32_t source_position_id)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+	const zend_op *data = &op_array->opcodes[source_position_id + 1];
+
+	ZEND_ASSERT(source_position_id + 1 < op_array->last
+		&& (op_array->opcodes[source_position_id].opcode
+				== ZEND_ASSIGN_OBJ_OP
+			|| op_array->opcodes[source_position_id].opcode
+				== ZEND_ASSIGN_STATIC_PROP_OP)
+		&& data->opcode == ZEND_OP_DATA
+		&& (cache_offset == ZEND_NATIVE_AUXILIARY_CACHE_NONE
+			|| cache_offset == data->extended_value));
+	if (UNEXPECTED(cache_offset == ZEND_NATIVE_AUXILIARY_CACHE_NONE)) {
+		cache_offset = data->extended_value;
+	}
+	return cache_offset;
 }
 
 static zval *zend_native_object_read_r_explicit(
@@ -1145,19 +1175,17 @@ static zend_native_status zend_native_object_assign_op_explicit(
 	 * ZEND_ASSIGN_OBJ_OP does. */
 	if (operation->op2_type == IS_CONST
 			&& execute_data->run_time_cache != NULL) {
-		const zend_op *data = &execute_data->func->op_array.opcodes[
-			operation->source_position_id + 1];
+		const uint32_t cache_offset = zend_native_object_data_cache_offset(
+			execute_data, operation->auxiliary_cache_offset,
+			operation->source_position_id);
 
-		ZEND_ASSERT(operation->source_position_id + 1
-				< execute_data->func->op_array.last
-			&& data->opcode == ZEND_OP_DATA
-			&& data->extended_value
+		ZEND_ASSERT(cache_offset
 				<= (uint32_t) execute_data->func->op_array.cache_size
 			&& 3 * sizeof(void *)
 				<= (uint32_t) execute_data->func->op_array.cache_size
-					- data->extended_value);
+					- cache_offset);
 		cache_storage = (void **) ((char *) execute_data->run_time_cache
-			+ data->extended_value);
+			+ cache_offset);
 	}
 	address = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
 		Z_OBJ_P(receiver), name, BP_VAR_RW, cache_storage);
@@ -1654,13 +1682,9 @@ static void **zend_native_static_cache_slot(
 	/* ASSIGN_STATIC_PROP_OP keeps its binary operator in extended_value
 	 * and its cache slot in the OP_DATA's. */
 	if (operation->opcode == ZEND_ASSIGN_STATIC_PROP_OP) {
-		const zend_op *opline =
-			&op_array->opcodes[operation->source_position_id];
-
-		ZEND_ASSERT(operation->source_position_id + 1 < op_array->last
-			&& opline->opcode == ZEND_ASSIGN_STATIC_PROP_OP
-			&& opline[1].opcode == ZEND_OP_DATA);
-		offset = opline[1].extended_value;
+		offset = zend_native_object_data_cache_offset(execute_data,
+			operation->auxiliary_cache_offset,
+			operation->source_position_id);
 	} else {
 		offset = operation->extended_value & ~ZEND_FETCH_OBJ_FLAGS;
 	}
@@ -3016,7 +3040,7 @@ zend_native_status zend_native_execute_object_assign_op(
 	uint32_t extended_value, uint32_t actual_source_opcode,
 	uint32_t source_position_id)
 {
-	const zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t cache_offset = ZEND_NATIVE_AUXILIARY_CACHE_OFFSET(auxiliary);
 	zval *receiver = NULL;
 	zval *property;
 	zend_object *object;
@@ -3024,25 +3048,29 @@ zend_native_status zend_native_execute_object_assign_op(
 	uintptr_t property_offset;
 	zend_long right;
 	zend_long updated;
-	const zend_op *data;
 
 	if ((extended_value != ZEND_ADD && extended_value != ZEND_SUB)
 			|| ZEND_NATIVE_OPERAND_TYPE(op2) != IS_CONST
 			|| ZEND_NATIVE_OPERAND_TYPE(result) != IS_UNUSED
-			|| execute_data->run_time_cache == NULL) {
+			|| execute_data->run_time_cache == NULL
+			|| cache_offset == ZEND_NATIVE_AUXILIARY_CACHE_NONE) {
 		goto general;
 	}
-	/* The compiler takes the operator and the operands from this
-	 * ASSIGN_OBJ_OP, whose OP_DATA holds a literal name's cache slot. */
-	data = &op_array->opcodes[source_position_id + 1];
-	ZEND_ASSERT(source_position_id + 1 < op_array->last
-		&& op_array->opcodes[source_position_id].opcode == ZEND_ASSIGN_OBJ_OP
-		&& op_array->opcodes[source_position_id].extended_value
-			== extended_value
-		&& data->opcode == ZEND_OP_DATA
-		&& data->extended_value <= (uint32_t) op_array->cache_size
+	/* The compiler takes the operator, the operands and the OP_DATA's
+	 * cache slot of a literal name from this ASSIGN_OBJ_OP. */
+	ZEND_ASSERT(source_position_id + 1 < execute_data->func->op_array.last
+		&& execute_data->func->op_array.opcodes[source_position_id].opcode
+			== ZEND_ASSIGN_OBJ_OP
+		&& execute_data->func->op_array.opcodes[
+				source_position_id].extended_value == extended_value
+		&& execute_data->func->op_array.opcodes[
+				source_position_id + 1].opcode == ZEND_OP_DATA
+		&& execute_data->func->op_array.opcodes[
+				source_position_id + 1].extended_value == cache_offset
+		&& cache_offset <= (uint32_t) execute_data->func->op_array.cache_size
 		&& 3 * sizeof(void *)
-			<= (uint32_t) op_array->cache_size - data->extended_value);
+			<= (uint32_t) execute_data->func->op_array.cache_size
+				- cache_offset);
 	if (ZEND_NATIVE_OPERAND_TYPE(op1) == IS_UNUSED) {
 		receiver = &execute_data->This;
 	} else if (ZEND_NATIVE_OPERAND_TYPE(op1) == IS_CV) {
@@ -3055,7 +3083,7 @@ zend_native_status zend_native_execute_object_assign_op(
 	}
 	object = Z_OBJ_P(receiver);
 	cache_slot = (void **) ((char *) execute_data->run_time_cache
-		+ data->extended_value);
+		+ cache_offset);
 	if (cache_slot[0] != object->ce || cache_slot[2] != NULL) {
 		goto general;
 	}

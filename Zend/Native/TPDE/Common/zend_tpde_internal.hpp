@@ -348,6 +348,27 @@ static inline bool zend_tpde_helper_has_explicit_auxiliary(
 }
 
 /*
+ * The bits an explicit auxiliary operand carries above the operand
+ * encoding: the OP_DATA's run-time cache offset of ASSIGN_OBJ_OP and
+ * ASSIGN_STATIC_PROP_OP (ZEND_NATIVE_AUXILIARY_CACHE_OFFSET), so their
+ * helpers do not read the OP_DATA.
+ */
+static inline uint64_t zend_tpde_auxiliary_cache_bits(
+	zend_native_runtime_helper_id helper,
+	const zend_mir_executable_value_ref &operation)
+{
+	if (helper != ZEND_NATIVE_HELPER_OBJECT_ASSIGN_OP
+			&& helper != ZEND_NATIVE_HELPER_STATIC_ASSIGN_OP) {
+		return 0;
+	}
+	return uint64_t{operation.auxiliary_extended_value
+				< ZEND_NATIVE_AUXILIARY_CACHE_NONE
+			? operation.auxiliary_extended_value
+			: ZEND_NATIVE_AUXILIARY_CACHE_NONE}
+		<< ZEND_NATIVE_AUXILIARY_CACHE_SHIFT;
+}
+
+/*
  * Selective frame initialization leaves an unobserved TMP/VAR slot
  * uninitialized until a boundary actually materializes a result there.
  * Explicit runtime helpers that define a new Zend result require a fresh

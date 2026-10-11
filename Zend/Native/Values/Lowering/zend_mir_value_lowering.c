@@ -1964,6 +1964,7 @@ bool zend_mir_emit_executable_values(
 		operation->auxiliary.index = ZEND_MIR_ID_INVALID;
 		operation->auxiliary.ssa_variable_id = ZEND_MIR_ID_INVALID;
 		operation->auxiliary_unused_payload = 0;
+		operation->auxiliary_extended_value = 0;
 		operation->auxiliary_storage_id = ZEND_MIR_ID_INVALID;
 		if (index + 1 < op_array->last
 				&& op_array->opcodes[index + 1].opcode == ZEND_OP_DATA) {
@@ -1978,6 +1979,8 @@ bool zend_mir_emit_executable_values(
 			operation->auxiliary_unused_payload =
 				data_opcode.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 					? op_array->opcodes[index + 1].op1.num : 0;
+			operation->auxiliary_extended_value =
+				op_array->opcodes[index + 1].extended_value;
 			operation->auxiliary_storage_id =
 				zend_mir_operand_storage_id(
 					op_array, &data_opcode.op1);

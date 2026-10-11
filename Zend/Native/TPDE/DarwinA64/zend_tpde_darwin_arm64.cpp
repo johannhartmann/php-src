@@ -2494,7 +2494,9 @@ bool ZendCompilerA64::compile_inst_impl(
 			if (explicit_auxiliary) {
 				operation_call.add_arg(ValuePart{
 					encode_operand(operation.auxiliary,
-						operation.auxiliary_unused_payload), 8,
+						operation.auxiliary_unused_payload)
+						| zend_tpde_auxiliary_cache_bits(
+							dispatch_case.helper, operation), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			}
 			operation_call.add_arg(ValuePart{
@@ -4960,7 +4962,8 @@ bool ZendCompilerA64::compile_inst_impl(
 			if (explicit_auxiliary) {
 				builder.add_arg(ValuePart{
 					encode_operand(operation.auxiliary,
-						operation.auxiliary_unused_payload), 8,
+						operation.auxiliary_unused_payload)
+						| zend_tpde_auxiliary_cache_bits(helper, operation), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			}
 			builder.add_arg(ValuePart{operation.extended_value, 4,

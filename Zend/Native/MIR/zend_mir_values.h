@@ -288,6 +288,11 @@ typedef struct _zend_mir_executable_value_ref {
 	 */
 	zend_mir_source_operand_ref auxiliary;
 	uint32_t auxiliary_unused_payload;
+	/*
+	 * The OP_DATA's extended_value: the run-time cache offset of
+	 * ASSIGN_OBJ_OP and ASSIGN_STATIC_PROP_OP. Zero without an OP_DATA.
+	 */
+	uint32_t auxiliary_extended_value;
 	zend_mir_storage_id op1_storage_id;
 	zend_mir_storage_id op2_storage_id;
 	zend_mir_storage_id result_storage_id;

@@ -17,6 +17,17 @@
 #define ZEND_NATIVE_OPERAND_TYPE(encoded) ((uint8_t) ((encoded) & 0xff))
 #define ZEND_NATIVE_OPERAND_VALUE(encoded) ((uint32_t) ((encoded) >> 8))
 
+/*
+ * ASSIGN_OBJ_OP and ASSIGN_STATIC_PROP_OP keep their run-time cache offset in
+ * the OP_DATA's extended_value. The compiler passes it in bits 40-63 of the
+ * auxiliary operand, or ZEND_NATIVE_AUXILIARY_CACHE_NONE when it does not
+ * fit there and the helper reads the OP_DATA.
+ */
+#define ZEND_NATIVE_AUXILIARY_CACHE_SHIFT 40
+#define ZEND_NATIVE_AUXILIARY_CACHE_NONE 0xffffffu
+#define ZEND_NATIVE_AUXILIARY_CACHE_OFFSET(encoded) \
+	((uint32_t) ((encoded) >> ZEND_NATIVE_AUXILIARY_CACHE_SHIFT))
+
 /* The variable of a CV, TMP or VAR operand. */
 #define ZEND_NATIVE_OPERAND_VAR(execute_data, encoded) \
 	ZEND_CALL_VAR((execute_data), ZEND_NATIVE_OPERAND_VALUE(encoded))
