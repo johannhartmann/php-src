@@ -9835,6 +9835,9 @@ bool initialize_plan(
 									== ZEND_MIR_SOURCE_OPERAND_UNUSED
 								|| zend_mir_scalar_type_is_exact(
 									descriptor->result_type));
+						/* The leaf frame copies payloads as their exact type
+						 * without checking it: an argument whose type only a
+						 * run-time guard proves takes the guarded frame. */
 						for (uint32_t n = 0;
 								leaf_scalar_frame
 									&& n < site.arguments.count; ++n) {
@@ -9843,7 +9846,9 @@ bool initialize_plan(
 								&& descriptor->arguments[n].mode
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 								&& zend_mir_scalar_type_is_exact(
-									descriptor->arguments[n].exact_type);
+									descriptor->arguments[n].exact_type)
+								&& !zend_mir_scalar_type_is_exact(
+									argument_guard_types[n]);
 						}
 						if (leaf_scalar_frame) {
 							descriptor->flags |=
