@@ -9850,6 +9850,7 @@ bool initialize_plan(
 								ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME;
 						}
 					}
+					zend_native_direct_call_descriptor_derive(descriptor);
 					plan->instructions[i].direct_call = descriptor;
 					plan->direct_calls[plan->direct_call_count++] = descriptor;
 					require_runtime_helper(
@@ -14839,6 +14840,9 @@ extern "C" zend_result zend_native_image_deserialize(
 					const_cast<zend_class_entry *>(
 						static_cast<const zend_class_entry *>(
 							resolved_scope));
+				/* The derived flags hold for the function this process
+				 * resolved. */
+				zend_native_direct_call_descriptor_derive(descriptor);
 				image->direct_calls[image->direct_call_count++] = descriptor;
 				address = descriptor;
 				break;

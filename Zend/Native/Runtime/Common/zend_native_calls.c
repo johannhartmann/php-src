@@ -8274,6 +8274,75 @@ static bool zend_native_call_preflight(
 	return EG(exception) == NULL;
 }
 
+/* Whether zend_native_call_direct_enter() accepts the descriptor for its
+ * expected function. */
+static bool zend_native_direct_call_enter_valid(
+	const zend_native_direct_call_descriptor *descriptor)
+{
+	const zend_function *function = descriptor->expected_function;
+
+	return function != NULL && ZEND_USER_CODE(function->type)
+		&& descriptor->argument_count <= ZEND_MIR_ID_MAX
+		&& (descriptor->flags
+			& ~(ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME
+				| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER
+				| ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE
+				| ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME
+				| ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT
+				| ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED
+				| ZEND_NATIVE_DIRECT_CALL_ENTER_VALID
+				| ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME)) == 0
+		&& descriptor->frame_argument_count
+			>= function->common.required_num_args;
+}
+
+/*
+ * Whether the inline frame of a valid descriptor is trivial: exactly the
+ * declared, required and untyped parameters of a function without scope,
+ * further variables or temporaries, so its arguments need no RECV.
+ */
+static bool zend_native_direct_call_trivial_frame(
+	const zend_native_direct_call_descriptor *descriptor)
+{
+	const zend_function *function = descriptor->expected_function;
+	bool trivial_frame =
+		(descriptor->flags & ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
+		&& descriptor->frame_size
+			== zend_vm_calc_used_stack(
+				descriptor->frame_argument_count,
+				(zend_function *) function)
+		&& function->op_array.scope == NULL
+		&& function->op_array.num_args == descriptor->frame_argument_count
+		&& function->op_array.required_num_args
+			== descriptor->frame_argument_count
+		&& function->op_array.last_var == function->op_array.num_args
+		&& function->op_array.T == 0
+		&& (function->op_array.fn_flags
+			& (ZEND_ACC_VARIADIC | ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
+	uint32_t index;
+
+	for (index = 0;
+			trivial_frame && index < function->op_array.num_args; index++) {
+		trivial_frame = function->op_array.arg_info == NULL
+			|| !ZEND_TYPE_IS_SET(function->op_array.arg_info[index].type);
+	}
+	return trivial_frame;
+}
+
+void zend_native_direct_call_descriptor_derive(
+	zend_native_direct_call_descriptor *descriptor)
+{
+	descriptor->flags &= ~(ZEND_NATIVE_DIRECT_CALL_ENTER_VALID
+		| ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME);
+	if (!zend_native_direct_call_enter_valid(descriptor)) {
+		return;
+	}
+	descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_ENTER_VALID;
+	if (zend_native_direct_call_trivial_frame(descriptor)) {
+		descriptor->flags |= ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME;
+	}
+}
+
 zend_native_direct_call_entry zend_native_call_direct_enter(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
@@ -8298,29 +8367,28 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	bool receiver_owned = false;
 	bool trivial_frame;
 
-	if (caller == NULL || caller->func == NULL || context == NULL
-			|| !ZEND_USER_CODE(caller->func->type)
-			|| cell == NULL || descriptor == NULL
+	/* The compiler emits the call from the caller's op array with its
+	 * frame and context; the descriptor's own facts were derived when it
+	 * was built or loaded. */
+	ZEND_ASSERT(caller != NULL && caller->func != NULL && context != NULL
+		&& ZEND_USER_CODE(caller->func->type)
+		&& cell != NULL && descriptor != NULL
+		&& descriptor->source_position < caller->func->op_array.last
+		&& ((descriptor->flags & ZEND_NATIVE_DIRECT_CALL_ENTER_VALID) != 0)
+			== zend_native_direct_call_enter_valid(descriptor)
+		&& ((descriptor->flags & ZEND_NATIVE_DIRECT_CALL_ENTER_VALID) == 0
+			|| ((descriptor->flags
+					& ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0)
+				== zend_native_direct_call_trivial_frame(descriptor)));
+	if ((descriptor->flags & ZEND_NATIVE_DIRECT_CALL_ENTER_VALID) == 0
 			|| (code = zend_native_entry_cell_load(cell)) == NULL
-			|| cell->function == NULL
-			|| cell->function != descriptor->expected_function
-			|| !ZEND_USER_CODE(cell->function->type)
-			|| descriptor->argument_count > ZEND_MIR_ID_MAX
-			|| (descriptor->flags
-				& ~(ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME
-					| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER
-					| ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE
-					| ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME
-					| ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT
-					| ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED)) != 0
-			|| descriptor->source_position >= caller->func->op_array.last) {
+			|| cell->function != descriptor->expected_function) {
 		zend_throw_error(NULL, "Invalid direct native call descriptor");
 		return result;
 	}
 	function = cell->function;
 	entry = zend_native_code_frame_entry(code);
-	if (entry == NULL || descriptor->frame_argument_count
-			< function->common.required_num_args) {
+	if (entry == NULL) {
 		zend_throw_error(NULL, "Direct native callee entry is incompatible");
 		return result;
 	}
@@ -8431,23 +8499,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 			return result;
 	}
 	trivial_frame =
-		(descriptor->flags & ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
-		&& descriptor->frame_size
-			== zend_vm_calc_used_stack(
-				descriptor->frame_argument_count, function)
-		&& function->op_array.scope == NULL
-		&& function->op_array.num_args == descriptor->frame_argument_count
-		&& function->op_array.required_num_args
-			== descriptor->frame_argument_count
-		&& function->op_array.last_var == function->op_array.num_args
-		&& function->op_array.T == 0
-		&& (function->op_array.fn_flags
-			& (ZEND_ACC_VARIADIC | ZEND_ACC_CALL_VIA_TRAMPOLINE)) == 0;
-	for (index = 0;
-			trivial_frame && index < function->op_array.num_args; index++) {
-		trivial_frame = function->op_array.arg_info == NULL
-			|| !ZEND_TYPE_IS_SET(function->op_array.arg_info[index].type);
-	}
+		(descriptor->flags & ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME) != 0;
 	used_stack = trivial_frame
 		? descriptor->frame_size
 		: zend_vm_calc_used_stack(

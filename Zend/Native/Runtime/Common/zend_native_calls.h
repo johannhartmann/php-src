@@ -249,6 +249,14 @@ typedef struct _zend_native_direct_call_argument {
 #define ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME UINT32_C(8)
 #define ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT UINT32_C(32)
 #define ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED UINT32_C(128)
+/*
+ * Derived from the descriptor and its expected function by
+ * zend_native_direct_call_descriptor_derive() when the descriptor is built
+ * or loaded: ENTER_VALID when zend_native_call_direct_enter() accepts it,
+ * TRIVIAL_FRAME when its inline frame needs no RECV processing.
+ */
+#define ZEND_NATIVE_DIRECT_CALL_ENTER_VALID UINT32_C(256)
+#define ZEND_NATIVE_DIRECT_CALL_TRIVIAL_FRAME UINT32_C(512)
 
 typedef struct _zend_native_direct_call_descriptor {
 	uint32_t argument_count;
@@ -910,6 +918,10 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	zend_native_entry_cell *cell,
 	const zend_native_direct_call_descriptor *descriptor,
 	zend_native_execution_context *context);
+/* Set ZEND_NATIVE_DIRECT_CALL_ENTER_VALID and _TRIVIAL_FRAME from the
+ * descriptor's other fields and its expected function. */
+void zend_native_direct_call_descriptor_derive(
+	zend_native_direct_call_descriptor *descriptor);
 zend_native_direct_call_result zend_native_call_direct_leave(
 	zend_execute_data *caller,
 	const zend_native_direct_call_descriptor *descriptor,
