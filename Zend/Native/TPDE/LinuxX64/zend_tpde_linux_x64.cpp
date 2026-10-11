@@ -2622,12 +2622,16 @@ public:
 	 * around the helper and then spilled.
 	 */
 	void evict_caller_saved(AsmReg keep = AsmReg::make_invalid()) {
+		evict_caller_saved_except(
+			keep.valid() ? uint64_t{1} << keep.id() : 0);
+	}
+	/* The same, keeping the registers keep names. */
+	void evict_caller_saved_except(uint64_t keep) {
 		const uint64_t callee_saved =
 			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
 		for (auto reg : tpde::util::BitSetIterator<>{
-				register_file.used & ~callee_saved}) {
-			if (!register_file.is_fixed(AsmReg{reg})
-					&& (!keep.valid() || reg != keep.id())) {
+				register_file.used & ~callee_saved & ~keep}) {
+			if (!register_file.is_fixed(AsmReg{reg})) {
 				evict_reg(AsmReg{reg});
 			}
 		}
@@ -2848,7 +2852,6 @@ public:
 				},
 				[&] { after_insert(); });
 		}
-		ASM(XOR32rr, status_reg, status_reg);
 		cold_begin();
 		label_place(general);
 		if (init && zend_tpde_helper_requires_undef_result(
@@ -2899,15 +2902,10 @@ public:
 					| (uint64_t{position} << 32)));
 			},
 			[&] { ASM(MOV32rr, status_reg, FE_AX); });
-		generate_raw_jump(Jump::jmp, joined);
+		/* Only the helper fails: the inline insert cannot. */
+		emit_inline_status_check(status_reg, mir.exception_block_id, joined);
 		cold_end();
 		label_place(joined);
-		/* As after a call: the status tail's return path then spills
-		 * nothing the continuation would miss. */
-		evict_caller_saved();
-		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-		status.set_value(this, std::move(status_scratch));
-		emit_status_tail(std::move(status), mir.exception_block_id, true);
 		return true;
 	}
 
@@ -3029,10 +3027,7 @@ public:
 		generate_raw_jump(Jump::jmp, joined);
 		cold_end();
 		label_place(joined);
-		evict_caller_saved();
-		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-		status.set_value(this, std::move(status_scratch));
-		emit_status_tail(std::move(status), mir.exception_block_id, true);
+		emit_inline_status_tail(status_reg, mir.exception_block_id);
 		return true;
 	}
 
@@ -3082,6 +3077,77 @@ public:
 		} else {
 			return_builder.ret();
 		}
+		cold_end();
+	}
+
+	/*
+	 * The failure of an inline primitive's status (status_reg holds a
+	 * status other than RETURNED), at a point the code never continues
+	 * from: an exception branches to the exception block when there is
+	 * one, any other status returns from the function. No register
+	 * assignment changes, so the primitive's continuation compiles with
+	 * the allocator state of its fast path. The values that caller-saved
+	 * registers hold unspilled are stored first, as the eviction after a
+	 * call stores them.
+	 */
+	void emit_inline_status_failure(AsmReg status_reg,
+			zend_mir_block_id exception_block) {
+		const uint64_t callee_saved =
+			cur_cc_assigner()->get_ccinfo().callee_saved_regs;
+		for (auto reg_id : tpde::util::BitSetIterator<>{
+				register_file.used & ~callee_saved}) {
+			const AsmReg reg{reg_id};
+			const auto local_idx = register_file.reg_local_idx(reg);
+			if (register_file.is_fixed(reg)
+					|| local_idx == INVALID_VAL_LOCAL_IDX) {
+				continue;
+			}
+			tpde::AssignmentPartRef part{
+				val_assignment(local_idx), register_file.reg_part(reg)};
+			if (part.stack_valid() || part.variable_ref()) {
+				continue;
+			}
+			allocate_spill_slot(part);
+			spill_reg(reg, part.frame_off(), part.part_size());
+		}
+		if (zend_mir_id_is_valid(exception_block)) {
+			auto propagate = text_writer.label_create();
+			ASM(CMP32ri, status_reg, ZEND_NATIVE_EXCEPTION);
+			generate_raw_jump(Jump::jne, propagate);
+			generate_exception_branch(adaptor->block_ref(exception_block));
+			label_place(propagate);
+		}
+		/* As RetBuilder returns a status, without its register moves. */
+		tpde::CCAssignment ret{};
+		ret.bank = tpde::x64::PlatformConfig::GP_BANK;
+		ret.size = sizeof(zend_native_status);
+		cur_cc_assigner()->reset();
+		cur_cc_assigner()->assign_ret(ret);
+		ZEND_ASSERT(ret.reg.valid() && ret.int_ext == 0);
+		const AsmReg ret_reg{ret.reg};
+		if (ret_reg != status_reg) {
+			ASM(MOV32rr, ret_reg, status_reg);
+		}
+		this->gen_func_epilog();
+	}
+	/* RETURNED continues at continued; any other status fails here. */
+	void emit_inline_status_check(AsmReg status_reg,
+			zend_mir_block_id exception_block, tpde::Label continued) {
+		static_assert(ZEND_NATIVE_RETURNED == 0);
+		ASM(TEST32rr, status_reg, status_reg);
+		generate_raw_jump(Jump::je, continued);
+		emit_inline_status_failure(status_reg, exception_block);
+	}
+	/* RETURNED falls through; any other status fails in the cold area. */
+	void emit_inline_status_tail(AsmReg status_reg,
+			zend_mir_block_id exception_block) {
+		auto failed = text_writer.label_create();
+		static_assert(ZEND_NATIVE_RETURNED == 0);
+		ASM(TEST32rr, status_reg, status_reg);
+		generate_raw_jump(Jump::jne, failed);
+		cold_begin();
+		label_place(failed);
+		emit_inline_status_failure(status_reg, exception_block);
 		cold_end();
 	}
 
@@ -10274,7 +10340,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					+ offsetof(zval, u1.type_info))),
 				static_cast<int32_t>(ZEND_CALL_MAY_HAVE_UNDEF));
 			generate_raw_jump(Jump::jne, undefined);
-			ASM(XOR32rr, status_reg, status_reg);
 			cold_begin();
 			label_place(undefined);
 			emit_preserving_call(register_file.used
@@ -10282,16 +10347,12 @@ bool ZendCompilerX64::compile_inst_impl(
 				ZEND_NATIVE_HELPER_CALL_CHECK_UNDEF_FRAME,
 				[&] { ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG, 0)); },
 				[&] { ASM(MOV32rr, status_reg, FE_AX); });
-			generate_raw_jump(Jump::jmp, checked);
+			/* Only the helper reports a status. */
+			emit_inline_status_check(status_reg, mir.exception_block_id,
+				checked);
 			cold_end();
 			label_place(checked);
 			pending.reset();
-			/* As after a call: the status tail's return path then spills
-			 * nothing the continuation would miss. */
-			evict_caller_saved();
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-			status.set_value(this, std::move(status_scratch));
-			emit_status_tail(std::move(status), mir.exception_block_id, true);
 			return true;
 		}
 		if ((helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
@@ -23501,6 +23562,15 @@ bool ZendCompilerX64::compile_inst_impl(
 					const tpde::SymRef do_cell_slot = image_symbol_slot(
 						ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
 						call.call_site->target_id);
+					const AsmReg context_reg = canonical_value_register(
+						IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+					/* The phase published every value: the caller-saved
+					 * registers are free on both paths, as after a call,
+					 * and the helper calls keep only the frame, the context
+					 * and the scratch registers. */
+					evict_caller_saved_except(
+						(uint64_t{1} << frame_reg.id())
+						| (uint64_t{1} << context_reg.id()));
 					ScratchReg status_scratch{this};
 					ScratchReg callee{this};
 					ScratchReg work{this};
@@ -23512,8 +23582,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto general = text_writer.label_create();
 					auto finish = text_writer.label_create();
 					auto finished = text_writer.label_create();
-					const AsmReg context_reg = canonical_value_register(
-						IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
 					auto context_global = [&](AsmReg target, size_t field) {
 						ASM(MOV64rm, target, FE_MEM(context_reg, 0, FE_NOREG,
 							static_cast<int32_t>(field)));
@@ -23556,8 +23624,12 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64mr, FE_MEM(work_reg, 0, FE_NOREG, 0),
 						callee_reg);
 					/* The handler, with every live caller-saved register
-					 * kept: the value state stays as it is. */
-					emit_preserving_call(register_file.used,
+					 * kept: the value state stays as it is. The status and
+					 * work scratches are written before they are read
+					 * again. */
+					emit_preserving_call(register_file.used
+							& ~(uint64_t{1} << status_reg.id())
+							& ~(uint64_t{1} << work_reg.id()),
 						ZEND_NATIVE_HELPER_COUNT,
 						[&] {
 							/* Either source may sit in the other's
@@ -23665,10 +23737,11 @@ bool ZendCompilerX64::compile_inst_impl(
 						zend_native_execution_context, vm_stack_top));
 					ASM(MOV64mr, FE_MEM(work_reg, 0, FE_NOREG, 0),
 						callee_reg);
-					ASM(XOR32rr, status_reg, status_reg);
+					/* Only the helpers report a status. */
 					cold_begin();
 					const uint64_t live = register_file.used
 						& ~(uint64_t{1} << status_reg.id());
+					auto status_check = text_writer.label_create();
 					label_place(finish);
 					emit_preserving_call(live,
 						ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH,
@@ -23682,7 +23755,7 @@ bool ZendCompilerX64::compile_inst_impl(
 								FE_MEM(frame_reg, 0, FE_NOREG, 0));
 						},
 						[&] { ASM(MOV32rr, status_reg, FE_AX); });
-					generate_raw_jump(Jump::jmp, finished);
+					generate_raw_jump(Jump::jmp, status_check);
 					label_place(general);
 					emit_preserving_call(live,
 						ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN,
@@ -23702,18 +23775,15 @@ bool ZendCompilerX64::compile_inst_impl(
 								FE_MEM(frame_reg, 0, FE_NOREG, 0));
 						},
 						[&] { ASM(MOV32rr, status_reg, FE_AX); });
-					generate_raw_jump(Jump::jmp, finished);
+					label_place(status_check);
+					emit_inline_status_check(status_reg,
+						call.exception_block_id, finished);
 					cold_end();
 					label_place(finished);
+					status_scratch.reset();
 					callee.reset();
 					work.reset();
 					return_value.reset();
-					/* Both paths kept every value in its register; leave
-					 * the caller-saved ones free, as after a call, so that
-					 * the status tail's return path spills nothing the
-					 * continuation would then miss. */
-					evict_caller_saved();
-					status.set_value(this, std::move(status_scratch));
 				} else {
 					tpde::x64::CCAssignerSysV assigner{false};
 					CallBuilder builder{*this, assigner};
@@ -23730,9 +23800,9 @@ bool ZendCompilerX64::compile_inst_impl(
 						? ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN
 						: ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
 					builder.add_ret(status, tpde::CCAssignment{});
+					emit_status_tail(std::move(status),
+						call.exception_block_id);
 				}
-				emit_status_tail(std::move(status),
-					call.exception_block_id);
 				if (node.has_result
 						&& !(node.operands[frame_base + 2 + argument_count]
 								== IRValueRef{Adaptor::FRAME_VALUE}
