@@ -1463,17 +1463,39 @@ static bool zend_mir_freeze_suspend_liveness(
 				}
 				for (phi = ssa->blocks[successor_number].phis;
 					phi != NULL; phi = phi->next) {
-					const int source =
-						phi->sources[predecessor_index];
+					const zend_ssa_phi *edge_pi;
+					int source;
+					/*
+					 * An e-SSA pi constrains only the edge from its pi
+					 * block, also where it shares a block with several
+					 * predecessors and a phi of the same variable.
+					 */
+					if (phi->pi >= 0
+							&& phi->pi != (int) block_number) {
+						continue;
+					}
+					source = phi->sources[
+						phi->pi >= 0 ? 0 : predecessor_index];
 					if (!zend_mir_ssa_id_valid(
 							source,
 							(uint32_t) ssa->vars_count)) {
 						goto done;
 					}
-					if (source >= 0) {
-						zend_mir_bit_set(
-							next_out, (uint32_t) source);
+					if (source < 0) {
+						continue;
 					}
+					/*
+					 * A phi operand naming such a pi is defined on this
+					 * edge; the predecessor keeps the pi's own operand
+					 * live, which the pi itself contributes.
+					 */
+					edge_pi = ssa->vars[source].definition_phi;
+					if (phi->pi < 0 && edge_pi != NULL
+							&& edge_pi->pi >= 0
+							&& edge_pi->block == successor_number) {
+						continue;
+					}
+					zend_mir_bit_set(next_out, (uint32_t) source);
 				}
 			}
 			for (word = 0; word < word_count; word++) {

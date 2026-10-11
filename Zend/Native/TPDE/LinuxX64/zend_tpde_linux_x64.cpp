@@ -10153,11 +10153,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const IRInstRef next = *remaining_instructions.from;
 		const Adaptor::InstNode &consumer = adaptor->node(next);
+		/* A generator continuation's terminal reloads its resume values;
+		 * a fused branch would never run that reload. */
 		return consumer.kind == Adaptor::InstKind::MIR
 			&& consumer.operands.size() == 1
 			&& consumer.operands[0] == node.result
 			&& adaptor->instruction_record(next).opcode
 				== ZEND_MIR_OPCODE_COND_BRANCH
+			&& adaptor->generator_resume_values(next).empty()
 			&& this->analyzer.liveness_info(
 				adaptor->val_local_idx(node.result)).ref_count == 2;
 	};

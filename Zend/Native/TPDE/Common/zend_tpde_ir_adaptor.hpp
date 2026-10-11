@@ -5610,7 +5610,8 @@ public:
 			}
 		}
 		auto emit_generator_resume = [&](uint32_t block,
-				uint32_t source_position, bool exact_source_position) {
+				uint32_t source_position, bool exact_source_position,
+				uint32_t use_instruction) {
 			for (uint32_t resume_index = 0;
 					resume_index < plan_->generator_resume_count;
 					++resume_index) {
@@ -5651,14 +5652,38 @@ public:
 							|| !machine_value_is_register_authoritative(candidate)) {
 						continue;
 					}
-					bool duplicate = false;
-					for (uint32_t operand = resume_value_offset;
-							operand < generator_resume_values_.size(); ++operand) {
-						duplicate = duplicate
-							|| generator_resume_values_[operand] == candidate;
-					}
-					if (!duplicate) {
-						generator_resume_values_.push_back(candidate);
+					auto add_resume_value = [&](IRValueRef resumed) {
+						for (uint32_t operand = resume_value_offset;
+								operand < generator_resume_values_.size();
+								++operand) {
+							if (generator_resume_values_[operand] == resumed) {
+								return;
+							}
+						}
+						generator_resume_values_.push_back(resumed);
+					};
+					add_resume_value(candidate);
+					/*
+					 * An elided COPY leaves later uses of the live value
+					 * (statepoint stores, PHI edges, copy operands) on the
+					 * register of its input. Resume runs in a new native
+					 * activation, so that register must be redefined from
+					 * the same slot as well; the input holds the same
+					 * scalar by SSA.
+					 */
+					const IRValueRef resolved = resolve_materializable_scalar(
+						value, block, use_instruction, 0,
+						resolve_materializable_scalar);
+					if (resolved != INVALID_VALUE_REF
+							&& resolved != candidate
+							&& canonical_storage(resolved)
+								== canonical_storage(candidate)
+							&& machine_kind(resolved) == machine_kind(candidate)
+							&& !constant(resolved, &constant_bits)
+							&& machine_value_has_register_definition(resolved)
+							&& machine_value_is_register_authoritative(
+								resolved)) {
+						add_resume_value(resolved);
 					}
 				}
 				InstNode resume_node{
@@ -5678,7 +5703,7 @@ public:
 			}
 		};
 		auto emit_source_landing = [&](uint32_t block,
-				uint32_t source_position) {
+				uint32_t source_position, uint32_t use_instruction) {
 			if (source_position >= source_landing_emitted.size()
 					|| source_landing_emitted[source_position] != 0
 					|| source_landing_blocks[source_position] != block) {
@@ -5691,7 +5716,8 @@ public:
 			 * the next MIR record. Place the machine landing before that
 			 * fragment so resume executes the complete source operation.
 			 */
-			emit_generator_resume(block, source_position, true);
+			emit_generator_resume(
+				block, source_position, true, use_instruction);
 			if (plan_->user_opcode_callbacks) {
 				add_node(block_instructions, block, InstNode{
 					InstKind::UserOpcodeLanding,
@@ -6096,12 +6122,12 @@ public:
 							&& next_source <= record.source_position_id
 							&& next_source < source_end) {
 						emit_source_landing(
-							static_cast<uint32_t>(block), next_source++);
+							static_cast<uint32_t>(block), next_source++, i);
 					}
 				}
 			}
 			emit_generator_resume(static_cast<uint32_t>(block),
-				record.source_position_id, false);
+				record.source_position_id, false, i);
 			if ((instruction.machine_control_flow_flags
 					& ZEND_TPDE_MACHINE_CONTROL_FLOW_RESULT_ALIAS) != 0) {
 				continue;
@@ -10396,9 +10422,16 @@ public:
 					resume_node.generator_resume_value_count);
 			const std::vector<IRValueRef> resume_values{
 				resume_value_span.begin(), resume_value_span.end()};
+			/* The terminal's statepoint materializations consume their own
+			 * operands; the reload needs a use of its own. */
+			const uint32_t resume_operand_offset = liveness_operand_offset
+				+ (terminal_node.materialization_operand_index == UINT32_MAX
+					? 0
+					: static_cast<uint32_t>(
+						materializations(terminal->value).size()));
 			for (const IRValueRef value : resume_values) {
 				if (std::find(
-						operands_.begin() + liveness_operand_offset,
+						operands_.begin() + resume_operand_offset,
 						operands_.end(), value) == operands_.end()) {
 					operands_.push_back(value);
 				}
@@ -10449,7 +10482,7 @@ public:
 					const uint32_t block =
 						source_landing_blocks[next_source];
 					if (block != UINT32_MAX) {
-						emit_source_landing(block, next_source);
+						emit_source_landing(block, next_source, UINT32_MAX);
 					}
 					++next_source;
 				}

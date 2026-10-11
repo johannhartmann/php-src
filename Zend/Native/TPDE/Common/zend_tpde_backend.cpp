@@ -2520,6 +2520,68 @@ bool freeze_source_call_phases(
 	return true;
 }
 
+/*
+ * A resume target that begins a block names that block's PHIs and the COPYs
+ * at its head. The suspension in a predecessor block publishes the value they
+ * receive on its edge: the definitions themselves run only after the resume.
+ */
+static uint32_t generator_suspend_value_index(
+	const zend_tpde_plan *plan, const int32_t *definitions,
+	uint32_t suspend_instruction, uint32_t value_index)
+{
+	if (definitions == nullptr
+			|| plan->block_predecessor_offsets == nullptr
+			|| plan->block_predecessors == nullptr) {
+		return value_index;
+	}
+	const zend_mir_instruction_record suspend_record =
+		zend_tpde_instruction_record_at(
+			plan, &plan->instructions[suspend_instruction]);
+	const int32_t suspend_block =
+		zend_tpde_block_index(plan, suspend_record.block_id);
+	for (uint32_t depth = 0; depth <= plan->value_count; ++depth) {
+		const int32_t definition = definitions[value_index];
+		if (suspend_block < 0 || definition < 0
+				|| static_cast<uint32_t>(definition)
+					>= plan->instruction_count) {
+			return value_index;
+		}
+		const zend_tpde_instruction &instruction =
+			plan->instructions[static_cast<uint32_t>(definition)];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		const int32_t block = zend_tpde_block_index(plan, record.block_id);
+		if (block < 0 || block == suspend_block
+				|| (record.opcode != ZEND_MIR_OPCODE_PHI
+					&& (record.opcode != ZEND_MIR_OPCODE_COPY
+						|| instruction.operand_count != 1))) {
+			return value_index;
+		}
+		const uint32_t begin = plan->block_predecessor_offsets[block];
+		const uint32_t end = plan->block_predecessor_offsets[block + 1];
+		uint32_t edge = end;
+		for (uint32_t predecessor = begin; predecessor < end; ++predecessor) {
+			if (plan->block_predecessors[predecessor]
+					== static_cast<uint32_t>(suspend_block)) {
+				edge = predecessor;
+				break;
+			}
+		}
+		const uint32_t operand = record.opcode == ZEND_MIR_OPCODE_PHI
+			? edge - begin : 0;
+		if (edge == end || operand >= instruction.operand_count) {
+			return value_index;
+		}
+		const int32_t input = zend_tpde_value_index(plan,
+			zend_tpde_operand_at(plan, &instruction, operand));
+		if (input < 0) {
+			return value_index;
+		}
+		value_index = static_cast<uint32_t>(input);
+	}
+	return value_index;
+}
+
 bool freeze_machine_plan_consumers(
 	zend_tpde_plan *plan, zend_native_diagnostic *diag)
 {
@@ -2713,7 +2775,10 @@ bool freeze_machine_plan_consumers(
 						value < plan->value_count; ++value) {
 					if (zend_tpde_generator_resume_value_live(
 							plan, resume, value)
-							&& !visit_use(plan->values[value].id,
+							&& !visit_use(plan->values[
+									generator_suspend_value_index(plan,
+										plan->value_definition_instructions,
+										instruction_index, value)].id,
 								instruction_index, value, resume,
 								ZEND_TPDE_MACHINE_USE_SUSPEND_LIVE,
 								fill, cursors)) {
@@ -4834,6 +4899,23 @@ bool freeze_statepoint_materializations(
 	std::vector<uint32_t> block_instruction_begin(
 		plan->block_count, plan->instruction_count);
 	std::vector<uint32_t> block_instruction_end(plan->block_count, 0);
+	/* Value definitions for generator suspensions; the machine-plan table is
+	 * frozen only after the materializations. */
+	std::vector<int32_t> generator_definitions;
+	if (plan->generator_resume_count != 0) {
+		generator_definitions.assign(plan->value_count, -1);
+		for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(
+					plan, &plan->instructions[index]);
+			const int32_t value_index = zend_mir_id_is_valid(record.result_id)
+				? zend_tpde_value_index(plan, record.result_id) : -1;
+			if (value_index >= 0) {
+				generator_definitions[static_cast<uint32_t>(value_index)] =
+					static_cast<int32_t>(index);
+			}
+		}
+	}
 
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction =
@@ -5525,6 +5607,11 @@ bool freeze_statepoint_materializations(
 				record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				&& frame->safepoint_class
 					== ZEND_MIR_SAFEPOINT_CLASS_FUNCTION_ENTRY;
+			const bool generator_suspend = instruction.has_value_operation
+				&& (record.opcode == ZEND_MIR_OPCODE_GENERATOR_CREATE
+					|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
+					|| record.opcode
+						== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM);
 			if (!function_entry) {
 				for (uint32_t slot_index = 0;
 						slot_index < frame->slots.count; ++slot_index) {
@@ -5541,7 +5628,7 @@ bool freeze_statepoint_materializations(
 							|| !zend_mir_id_is_valid(slot.value_id)) {
 						continue;
 					}
-					const int32_t value_index =
+					int32_t value_index =
 						zend_tpde_value_index(plan, slot.value_id);
 					if (value_index < 0) {
 						zend_tpde_set_diagnostic(diag,
@@ -5549,18 +5636,27 @@ bool freeze_statepoint_materializations(
 							"materialization references an unknown value");
 						return false;
 					}
+					const zend_mir_storage_id storage_id =
+						plan->values[static_cast<uint32_t>(value_index)]
+							.canonical_storage_id;
+					/* A suspension's frame is the state at its resume. */
+					if (generator_suspend) {
+						value_index = static_cast<int32_t>(
+							generator_suspend_value_index(plan,
+								generator_definitions.data(), index,
+								static_cast<uint32_t>(value_index)));
+					}
 					const zend_tpde_value &value =
 						plan->values[static_cast<uint32_t>(value_index)];
 					if (value.slot_state
 								!= ZEND_TPDE_CANONICAL_SLOT_DIRTY
-							|| !zend_mir_id_is_valid(
-								value.canonical_storage_id)
+							|| !zend_mir_id_is_valid(storage_id)
 							|| value.constant) {
 						continue;
 					}
 					append_materialization(
 						static_cast<uint32_t>(value_index),
-						value.canonical_storage_id,
+						storage_id,
 						value.machine_kind, value_index, -1);
 				}
 			}
@@ -5620,12 +5716,15 @@ bool freeze_statepoint_materializations(
 				if (plan->generator_resume_targets[resume] != target) {
 					continue;
 				}
-				for (uint32_t value_index = 0;
-						value_index < plan->value_count; ++value_index) {
+				for (uint32_t live_index = 0;
+						live_index < plan->value_count; ++live_index) {
 					if (!zend_tpde_generator_resume_value_live(
-							plan, resume, value_index)) {
+							plan, resume, live_index)) {
 						continue;
 					}
+					const uint32_t value_index =
+						generator_suspend_value_index(plan,
+							generator_definitions.data(), index, live_index);
 					const zend_tpde_value &value =
 						plan->values[value_index];
 					/*
@@ -5647,7 +5746,8 @@ bool freeze_statepoint_materializations(
 						continue;
 					}
 					append_materialization(
-						value_index, value.canonical_storage_id,
+						value_index,
+						plan->values[live_index].canonical_storage_id,
 						value.machine_kind, value_index, -1);
 				}
 				break;
