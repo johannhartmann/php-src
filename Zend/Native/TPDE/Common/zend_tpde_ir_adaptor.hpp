@@ -159,6 +159,50 @@ public:
 		uint32_t deopt_store_count = 0;
 	};
 
+	/*
+	 * The slots of a result vector each value was written to, newest first,
+	 * so a query for a value's definitions need not scan the whole vector.
+	 * A slot overwritten since keeps its stale link; visit() skips it.
+	 */
+	struct ResultDefinitions {
+		std::vector<uint32_t> heads;
+		std::vector<std::pair<uint32_t, uint32_t>> links;
+
+		void add(uint32_t slot, IRValueRef value) {
+			const uint32_t raw = static_cast<uint32_t>(value);
+			if (value == INVALID_VALUE_REF) {
+				return;
+			}
+			if (raw >= heads.size()) {
+				heads.resize(static_cast<size_t>(raw) + 1, UINT32_MAX);
+			}
+			links.emplace_back(slot, heads[raw]);
+			heads[raw] = static_cast<uint32_t>(links.size() - 1);
+		}
+		bool contains(const std::vector<IRValueRef> &results,
+				IRValueRef value) const {
+			bool found = false;
+			visit(results, value, [&](uint32_t) { found = true; });
+			return found;
+		}
+		/* Calls f(slot) for every slot of results that holds value. */
+		template <typename F>
+		void visit(const std::vector<IRValueRef> &results, IRValueRef value,
+				F &&f) const {
+			const uint32_t raw = static_cast<uint32_t>(value);
+			if (value == INVALID_VALUE_REF || raw >= heads.size()) {
+				return;
+			}
+			for (uint32_t link = heads[raw]; link != UINT32_MAX;
+					link = links[link].second) {
+				const uint32_t slot = links[link].first;
+				if (slot < results.size() && results[slot] == value) {
+					f(slot);
+				}
+			}
+		}
+	};
+
 	struct DerivedValue {
 		zend_mir_representation representation;
 		zend_mir_scalar_type_mask exact_type;
@@ -320,6 +364,12 @@ private:
 	std::vector<IRValueRef> value_overrides_;
 	std::vector<IRValueRef> source_ssa_overrides_;
 	std::vector<IRValueRef> instruction_results_;
+	ResultDefinitions instruction_result_definitions_;
+	/* Per storage below the largest frame-slot storage: the first frame-slot
+	 * machine reference, UINT32_MAX if none. */
+	std::vector<uint32_t> frame_slot_references_;
+	/* Sorted storages an ASSIGN_REF names as either operand. */
+	std::vector<zend_mir_storage_id> reference_assigned_storages_;
 	std::vector<uint32_t> block_info_;
 	std::vector<uint32_t> block_info2_;
 	std::vector<DerivedValue> derived_values_;
@@ -371,6 +421,10 @@ private:
 	}
 	std::vector<IRValueRef> &active_instruction_results() {
 		return instruction_results_;
+	}
+	void set_instruction_result(uint32_t index, IRValueRef value) {
+		instruction_results_[index] = value;
+		instruction_result_definitions_.add(index, value);
 	}
 
 	bool frozen_typed_component_call(uint32_t instruction_index) const {
@@ -606,23 +660,9 @@ private:
 
 	bool storage_assigned_by_reference(
 			zend_mir_storage_id storage_id) const {
-		if (!zend_mir_id_is_valid(storage_id)) {
-			return false;
-		}
-		for (uint32_t index = 0; index < plan_->instruction_count; ++index) {
-			const zend_tpde_instruction &candidate =
-				plan_->instructions[index];
-			if (candidate.has_value_operation
-					&& candidate.record.opcode
-						== ZEND_MIR_OPCODE_VALUE_ASSIGN_REF
-					&& (candidate.value_operation.op1_storage_id
-							== storage_id
-						|| candidate.value_operation.op2_storage_id
-							== storage_id)) {
-				return true;
-			}
-		}
-		return false;
+		return zend_mir_id_is_valid(storage_id)
+			&& std::ranges::binary_search(
+				reference_assigned_storages_, storage_id);
 	}
 
 	bool long_binary_machine_operands(
@@ -764,6 +804,11 @@ private:
 	uint32_t machine_reference_index(
 			zend_tpde_machine_reference_kind kind,
 			uint32_t stable_storage_or_layout_id) const {
+		if (kind == ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT
+				&& stable_storage_or_layout_id
+					< frame_slot_references_.size()) {
+			return frame_slot_references_[stable_storage_or_layout_id];
+		}
 		for (uint32_t index = 0;
 				index < plan_->machine_reference_count; ++index) {
 			const zend_tpde_machine_reference &reference =
@@ -2386,6 +2431,46 @@ public:
 			plan_->source_ssa_variable_count, INVALID_VALUE_REF);
 		instruction_results_.assign(
 			plan_->instruction_count, INVALID_VALUE_REF);
+		for (uint32_t index = 0;
+				index < plan_->machine_reference_count; ++index) {
+			const zend_tpde_machine_reference &reference =
+				plan_->machine_references[index];
+			if (reference.kind != ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT
+					|| reference.stable_storage_or_layout_id
+						> plan_->machine_reference_count + 4096) {
+				continue;
+			}
+			if (reference.stable_storage_or_layout_id
+					>= frame_slot_references_.size()) {
+				frame_slot_references_.resize(
+					reference.stable_storage_or_layout_id + 1, UINT32_MAX);
+			}
+			if (frame_slot_references_[
+					reference.stable_storage_or_layout_id] == UINT32_MAX) {
+				frame_slot_references_[
+					reference.stable_storage_or_layout_id] = index;
+			}
+		}
+		for (uint32_t index = 0; index < plan_->instruction_count; ++index) {
+			const zend_tpde_instruction &candidate =
+				plan_->instructions[index];
+			if (candidate.has_value_operation
+					&& candidate.record.opcode
+						== ZEND_MIR_OPCODE_VALUE_ASSIGN_REF) {
+				for (const zend_mir_storage_id storage : {
+						candidate.value_operation.op1_storage_id,
+						candidate.value_operation.op2_storage_id}) {
+					if (zend_mir_id_is_valid(storage)) {
+						reference_assigned_storages_.push_back(storage);
+					}
+				}
+			}
+		}
+		std::ranges::sort(reference_assigned_storages_);
+		reference_assigned_storages_.erase(
+			std::unique(reference_assigned_storages_.begin(),
+				reference_assigned_storages_.end()),
+			reference_assigned_storages_.end());
 		if (function_mode_ == FunctionMode::ZendEntry) {
 			arguments_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
 			arguments_.push_back(
@@ -3189,7 +3274,7 @@ public:
 							canonical_index - MIR_VALUE_BASE].refcount_state
 						: ZEND_MIR_REFCOUNT_UNKNOWN));
 				register_component_results[i] = result;
-				active_instruction_results()[i] = result;
+				set_instruction_result(i, result);
 				if (canonical_result != INVALID_VALUE_REF
 						&& canonical_index >= MIR_VALUE_BASE
 						&& canonical_index - MIR_VALUE_BASE
@@ -3763,7 +3848,7 @@ public:
 						continue;
 					}
 					register_boolean_results[i] = selected;
-					active_instruction_results()[i] = selected;
+					set_instruction_result(i, selected);
 					active_value_overrides()[
 						static_cast<uint32_t>(result_index)] = selected;
 					active_source_ssa_overrides()[result_ssa] = selected;
@@ -3796,7 +3881,7 @@ public:
 					valid_ = false;
 					continue;
 				}
-				active_instruction_results()[i] = condition;
+				set_instruction_result(i, condition);
 				active_value_overrides()[
 					static_cast<uint32_t>(result_index)] = condition;
 				active_source_ssa_overrides()[result_ssa] = condition;
@@ -3920,7 +4005,7 @@ public:
 					ZEND_MIR_REFCOUNT_IMMORTAL);
 				register_boolean_results[i] = selected;
 				preselected_phi_results[i] = selected;
-				active_instruction_results()[i] = selected;
+				set_instruction_result(i, selected);
 				active_value_overrides()[result_index] = selected;
 				if (zend_mir_value_is_original_ssa(
 						plan_->values[result_index].id)
@@ -4106,7 +4191,7 @@ public:
 					: ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
 				ownership(canonical), refcount_state(canonical));
 			register_binary_results[i] = selected;
-			active_instruction_results()[i] = selected;
+			set_instruction_result(i, selected);
 			active_value_overrides()[
 				static_cast<uint32_t>(result_index)] = selected;
 			active_source_ssa_overrides()[result_ssa] = selected;
@@ -4184,7 +4269,7 @@ public:
 				false, 0, machine_kind(canonical),
 				ownership(canonical), refcount_state(canonical));
 			register_branch_results[i] = selected;
-			active_instruction_results()[i] = selected;
+			set_instruction_result(i, selected);
 			active_value_overrides()[
 				static_cast<uint32_t>(result_index)] = selected;
 			active_source_ssa_overrides()[result_ssa] = selected;
@@ -4249,7 +4334,7 @@ public:
 					? ZEND_MIR_REFCOUNT_IMMORTAL
 					: refcount_state(canonical));
 			register_branch_results[i] = selected;
-			active_instruction_results()[i] = selected;
+			set_instruction_result(i, selected);
 			active_value_overrides()[
 				static_cast<uint32_t>(result_index)] = selected;
 			active_source_ssa_overrides()[result_ssa] = selected;
@@ -4487,7 +4572,7 @@ public:
 			active_value_overrides()[
 				static_cast<uint32_t>(mutation_index)] = mutation;
 			active_source_ssa_overrides()[mutation_ssa] = mutation;
-			active_instruction_results()[i] = mutation;
+			set_instruction_result(i, mutation);
 			mutation_results[i] = mutation;
 			lazy_mutation_storages.push_back(
 				instruction.value_operation.op1_storage_id);
@@ -4733,6 +4818,16 @@ public:
 			}
 			selected_phi_results[i] = selected_phi;
 		}
+		ResultDefinitions selected_phi_definitions;
+		for (uint32_t i = 0; i < selected_phi_results.size(); ++i) {
+			selected_phi_definitions.add(i, selected_phi_results[i]);
+		}
+		/* The register assignments are final here. */
+		ResultDefinitions register_assignment_definitions;
+		for (uint32_t i = 0; i < register_assignment_results.size(); ++i) {
+			register_assignment_definitions.add(
+				i, register_assignment_results[i]);
+		}
 		auto value_ref_for_block = [&](zend_mir_value_id value_id,
 				uint32_t use_block, uint32_t use_instruction) {
 			const int32_t value_index = zend_tpde_value_index(plan_, value_id);
@@ -4745,27 +4840,22 @@ public:
 			if (selected == INVALID_VALUE_REF || selected == canonical) {
 				return selected;
 			}
-			for (uint32_t definition = 0;
-					definition < active_instruction_results().size(); ++definition) {
-				if (active_instruction_results()[definition] != selected
-						|| !machine_block_dominates(
-							instruction_blocks[definition], use_block)
-						|| (instruction_blocks[definition] == use_block
-							&& use_instruction != UINT32_MAX
-							&& definition > use_instruction)) {
-					continue;
-				}
-				return selected;
-			}
-			for (uint32_t definition = 0;
-					definition < selected_phi_results.size(); ++definition) {
-				if (selected_phi_results[definition] == selected
-						&& machine_block_dominates(
-							instruction_blocks[definition], use_block)) {
-					return selected;
-				}
-			}
-			return canonical;
+			bool reaches = false;
+			instruction_result_definitions_.visit(active_instruction_results(),
+				selected, [&](uint32_t definition) {
+					reaches = reaches
+						|| (machine_block_dominates(
+								instruction_blocks[definition], use_block)
+							&& (instruction_blocks[definition] != use_block
+								|| use_instruction == UINT32_MAX
+								|| definition <= use_instruction));
+				});
+			selected_phi_definitions.visit(selected_phi_results, selected,
+				[&](uint32_t definition) {
+					reaches = reaches || machine_block_dominates(
+						instruction_blocks[definition], use_block);
+				});
+			return reaches ? selected : canonical;
 		};
 		/*
 		 * A source binding without its own definition resolves through the
@@ -4779,32 +4869,23 @@ public:
 				return true;
 			}
 			bool defined = false;
-			for (uint32_t definition = 0;
-					definition < active_instruction_results().size();
-					++definition) {
-				if (active_instruction_results()[definition] != value) {
-					continue;
-				}
-				defined = true;
-				if (machine_block_dominates(
-							instruction_blocks[definition], use_block)
-						&& (instruction_blocks[definition] != use_block
-							|| definition < use_instruction)) {
-					return true;
-				}
-			}
-			for (uint32_t definition = 0;
-					definition < selected_phi_results.size(); ++definition) {
-				if (selected_phi_results[definition] != value) {
-					continue;
-				}
-				defined = true;
-				if (machine_block_dominates(
-						instruction_blocks[definition], use_block)) {
-					return true;
-				}
-			}
-			return !defined;
+			bool reaches = false;
+			instruction_result_definitions_.visit(active_instruction_results(),
+				value, [&](uint32_t definition) {
+					defined = true;
+					reaches = reaches
+						|| (machine_block_dominates(
+								instruction_blocks[definition], use_block)
+							&& (instruction_blocks[definition] != use_block
+								|| definition < use_instruction));
+				});
+			selected_phi_definitions.visit(selected_phi_results, value,
+				[&](uint32_t definition) {
+					defined = true;
+					reaches = reaches || machine_block_dominates(
+						instruction_blocks[definition], use_block);
+				});
+			return reaches || !defined;
 		};
 		auto entry_argument_has_register_definition =
 				[&](IRValueRef value) {
@@ -4882,9 +4963,8 @@ public:
 								plan_value.canonical_storage_id)
 							&& plan_->values[input_index].canonical_storage_id
 								== plan_value.canonical_storage_id
-							&& std::ranges::find(register_assignment_results,
-								copied_input)
-								!= register_assignment_results.end()) {
+							&& register_assignment_definitions.contains(
+								register_assignment_results, copied_input)) {
 						return self(static_cast<uint32_t>(input_index),
 							use_block, use_instruction, depth + 1, self);
 					}
@@ -4895,21 +4975,18 @@ public:
 						|| entry_argument_has_register_definition(value))) {
 				bool assignment_result = false;
 				bool assignment_dominates = false;
-				for (uint32_t assignment_index = 0;
-						assignment_index < register_assignment_results.size();
-						++assignment_index) {
-					if (register_assignment_results[assignment_index] != value) {
-						continue;
-					}
-					assignment_result = true;
-					const uint32_t assignment_block =
-						guarded_continuation_blocks[assignment_index]
-								!= UINT32_MAX
-							? guarded_continuation_blocks[assignment_index]
-							: instruction_blocks[assignment_index];
-					assignment_dominates |= machine_block_dominates(
-						assignment_block, use_block);
-				}
+				register_assignment_definitions.visit(
+					register_assignment_results, value,
+					[&](uint32_t assignment_index) {
+						assignment_result = true;
+						const uint32_t assignment_block =
+							guarded_continuation_blocks[assignment_index]
+									!= UINT32_MAX
+								? guarded_continuation_blocks[assignment_index]
+								: instruction_blocks[assignment_index];
+						assignment_dominates |= machine_block_dominates(
+							assignment_block, use_block);
+					});
 				if (assignment_result && !assignment_dominates) {
 					return INVALID_VALUE_REF;
 				}
@@ -5247,6 +5324,7 @@ public:
 					continue;
 				}
 				selected_phi_results[i] = selected_phi;
+				selected_phi_definitions.add(i, selected_phi);
 			}
 			for (uint32_t n = 0; n < predecessor_count; ++n) {
 				boxed_phi_input_overrides[
@@ -6064,7 +6142,7 @@ public:
 				add_node(block_instructions, block, InstNode{
 					InstKind::MIR, i, UINT32_MAX, result, {},
 					operand_offset, 2, true});
-				active_instruction_results()[i] = result;
+				set_instruction_result(i, result);
 				active_source_ssa_overrides()[
 					instruction.value_operation.result.ssa_variable_id] =
 						result;
@@ -6126,7 +6204,7 @@ public:
 						source_type});
 					source = boxed;
 				}
-				active_instruction_results()[i] = source;
+				set_instruction_result(i, source);
 				active_source_ssa_overrides()[
 					instruction.value_operation.result.ssa_variable_id] =
 						source;
@@ -6354,7 +6432,7 @@ public:
 								.result_storage_id,
 							false, 0,
 							ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
-						instruction_results[i] = result;
+						set_instruction_result(i, result);
 						if (result_ssa < source_overrides.size()) {
 							source_overrides[result_ssa] = result;
 						} else if (canonical_result
@@ -6378,7 +6456,7 @@ public:
 				if (i < selected_phi_results.size()
 						&& selected_phi_results[i] != INVALID_VALUE_REF) {
 					result = selected_phi_results[i];
-					active_instruction_results()[i] = result;
+					set_instruction_result(i, result);
 					active_value_overrides()[
 						static_cast<uint32_t>(result_index)] = result;
 				}
@@ -6499,7 +6577,7 @@ public:
 							active_source_ssa_overrides()[record.result_id] =
 								result;
 						}
-						active_instruction_results()[i] = result;
+						set_instruction_result(i, result);
 						block_phis.push_back(
 							{static_cast<uint32_t>(block), result});
 						phi_values_[static_cast<uint32_t>(result)] = 1;
@@ -6767,7 +6845,7 @@ public:
 							: ZEND_TPDE_MACHINE_VALUE_I64,
 						ZEND_MIR_OWNERSHIP_STATE_BORROWED,
 						ZEND_MIR_REFCOUNT_IMMORTAL);
-					instruction_results[i] = result;
+					set_instruction_result(i, result);
 					value_overrides[
 						canonical_index - MIR_VALUE_BASE] = result;
 					if (result_ssa < source_overrides.size()) {
@@ -7019,7 +7097,7 @@ public:
 						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
 						ZEND_MIR_OWNERSHIP_STATE_OWNED,
 						ZEND_MIR_REFCOUNT_UNKNOWN);
-				instruction_results[i] = result;
+				set_instruction_result(i, result);
 				value_overrides[
 					canonical_index - MIR_VALUE_BASE] = result;
 				if (result_ssa < source_overrides.size()) {
@@ -7068,7 +7146,7 @@ public:
 								: ZEND_TPDE_MACHINE_VALUE_I64,
 						ZEND_MIR_OWNERSHIP_STATE_BORROWED,
 						ZEND_MIR_REFCOUNT_IMMORTAL);
-					active_instruction_results()[i] = result;
+					set_instruction_result(i, result);
 					active_value_overrides()[
 						canonical_index - MIR_VALUE_BASE] = result;
 					if (result_ssa < active_source_ssa_overrides().size()) {
@@ -7238,7 +7316,7 @@ public:
 							InstKind::ZvalPayloadLoad, i, UINT32_MAX,
 							result, {}, load_operand_offset, 1, true,
 							result_storage, exact_type(result)});
-						active_instruction_results()[i] = result;
+						set_instruction_result(i, result);
 					}
 					continue;
 				}
@@ -9249,7 +9327,7 @@ public:
 					storage_id, reload_type};
 				load.control_block = reload_block;
 				add_node(block_instructions, reload_block, std::move(load));
-				active_instruction_results()[i] = loaded;
+				set_instruction_result(i, loaded);
 			};
 			auto materialize_boxed_result_for_helper = [&](
 					uint32_t materialization_block, IRValueRef value) {
@@ -9346,11 +9424,11 @@ public:
 							mutation_result;
 						active_source_ssa_overrides()[mutation_ssa] =
 							mutation_result;
-						active_instruction_results()[i] = mutation_result;
+						set_instruction_result(i, mutation_result);
 					}
 				} else if (register_mutation_result && scalar_mutation_result
 						&& i < active_instruction_results().size()) {
-					active_instruction_results()[i] = mutation_result;
+					set_instruction_result(i, mutation_result);
 				}
 				const IRValueRef guarded_result =
 					machine_result ? result
@@ -9965,7 +10043,7 @@ public:
 							active_source_ssa_overrides();
 						auto &instruction_results =
 							active_instruction_results();
-						instruction_results[i] = pointer;
+						set_instruction_result(i, pointer);
 						value_overrides[
 							static_cast<uint32_t>(
 								canonical_value_index)] =
@@ -10190,7 +10268,7 @@ public:
 							InstKind::ZvalPayloadLoad, i, UINT32_MAX,
 							array, {}, load_operand_offset, 1, true,
 							storage_id, ZEND_MIR_SCALAR_TYPE_NONE});
-					instruction_results[i] = array;
+					set_instruction_result(i, array);
 					value_overrides[
 						canonical_index - MIR_VALUE_BASE] = array;
 					const uint32_t result_ssa =
