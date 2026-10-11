@@ -39,6 +39,9 @@
 #include "zend_call_stack.h"
 #include "zend_frameless_function.h"
 #include "zend_partial.h"
+#ifdef HAVE_NATIVE_ENGINE
+# include "Native/Runtime/Common/zend_native_reentry_cache.h"
+#endif
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
 #endif
@@ -899,6 +902,11 @@ zend_result zend_call_function(zend_fcall_info *fci, zend_fcall_info_cache *fci_
 	}
 #endif
 
+#ifdef HAVE_NATIVE_ENGINE
+	if (func->type == ZEND_USER_FUNCTION) {
+		zend_native_reentry_prefetch(func, false);
+	}
+#endif
 	call = zend_vm_stack_push_call_frame(call_info,
 		func, fci->param_count, object_or_called_scope);
 	uint32_t consumed_args = fci->param_count ? fci->consumed_args : 0;
@@ -1056,6 +1064,9 @@ cleanup_args:
 	if (func->type == ZEND_USER_FUNCTION) {
 		uint32_t orig_jit_trace_num = EG(jit_trace_num);
 
+#ifdef HAVE_NATIVE_ENGINE
+		zend_native_reentry_prefetch(func, true);
+#endif
 		zend_init_func_execute_data(call, &func->op_array, fci->retval);
 		ZEND_OBSERVER_FCALL_BEGIN(call);
 		zend_execute_ex(call);

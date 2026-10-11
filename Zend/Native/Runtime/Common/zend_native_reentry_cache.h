@@ -51,6 +51,23 @@ zend_native_reentry_cache_slot(const zend_op *opcodes, uint64_t signature)
 			& (ZEND_NATIVE_REENTRY_CACHE_SIZE - 1)];
 }
 
+/* zend_call_function() names the lines execute_ex reads for a user
+ * function, while it copies the arguments: the cache entry, then (once the
+ * entry is in) the cell it holds. */
+static zend_always_inline void zend_native_reentry_prefetch(
+	const zend_function *function, bool cell)
+{
+	const zend_native_reentry_cache_entry *cached =
+		zend_native_reentry_cache_slot(
+			function->op_array.opcodes, zend_native_reentry_signature());
+
+	if (!cell) {
+		__builtin_prefetch(cached);
+	} else if (cached->opcodes == function->op_array.opcodes) {
+		__builtin_prefetch(cached->cell);
+	}
+}
+
 /* The cached ready cell of a user function whose code is still the one
  * cached with its frame entry, or NULL. */
 static zend_always_inline zend_native_frame_entry_t
