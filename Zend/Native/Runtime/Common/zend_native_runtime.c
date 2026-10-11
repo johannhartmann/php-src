@@ -116,18 +116,16 @@ void zend_native_runtime_source_probe(uint32_t source_position_id)
 }
 
 static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
-	{ZEND_NATIVE_HELPER_USER_CALL_BEGIN,
-		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
-			| ZEND_NATIVE_EFFECT_MAY_FAIL,
-		(const void *) zend_native_call_begin},
+	{ZEND_NATIVE_HELPER_USER_CALL_BEGIN, 0,
+		(const void *) zend_native_call_retired_helper},
 	{ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER,
 		ZEND_NATIVE_RUNTIME_EFFECT_FRAME_WRITE,
 		(const void *) zend_native_call_set_integer_argument},
 	{ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE,
 		ZEND_NATIVE_RUNTIME_EFFECT_FRAME_WRITE,
 		(const void *) zend_native_call_set_double_argument},
-	{ZEND_NATIVE_HELPER_USER_CALL_FINISH, ZEND_NATIVE_EFFECT_CALL,
-		(const void *) zend_native_call_invoke_finish},
+	{ZEND_NATIVE_HELPER_USER_CALL_FINISH, 0,
+		(const void *) zend_native_call_retired_helper},
 	{ZEND_NATIVE_HELPER_ECHO_INTEGER,
 		ZEND_NATIVE_EFFECT_FRAME_READ | ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
 			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
@@ -170,9 +168,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,
 		(const void *) zend_native_catch_enter},
-	{ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE,
-		ZEND_NATIVE_EFFECT_CALL,
-		(const void *) zend_native_call_invoke_finish_source},
+	{ZEND_NATIVE_HELPER_USER_CALL_FINISH_SOURCE, 0,
+		(const void *) zend_native_call_retired_helper},
 	{ZEND_NATIVE_HELPER_FINALLY_ENTER,
 		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_THROW,
 		(const void *) zend_native_finally_enter},
@@ -537,9 +534,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		ZEND_NATIVE_EFFECT_SYMBOL_SLOW_WRITE
 			| ZEND_NATIVE_RUNTIME_EFFECT_OBJECT_WRITE,
 		(const void *) zend_native_execute_include_or_eval},
-	{ZEND_NATIVE_HELPER_DIRECT_USER_CALL,
-		ZEND_NATIVE_EFFECT_CALL,
-		(const void *) zend_native_call_direct},
+	{ZEND_NATIVE_HELPER_DIRECT_USER_CALL, 0,
+		(const void *) zend_native_call_retired_helper},
 	{ZEND_NATIVE_HELPER_VERIFY_RETURN_TYPE,
 		ZEND_NATIVE_EFFECT_FRAME_WRITE | ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
@@ -915,15 +911,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT,
 		ZEND_NATIVE_EFFECT_ARRAY_SLOW_READ,
 		(const void *) zend_native_value_isset_isempty_dim_direct},
-	{ZEND_NATIVE_HELPER_USER_CALL_INVOKE,
-		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ | ZEND_NATIVE_EFFECT_FRAME_WRITE
-			| ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
-			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
-			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
-			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
-			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
-			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
-		(const void *) zend_native_call_invoke_user},
+	{ZEND_NATIVE_HELPER_USER_CALL_INVOKE, 0,
+		(const void *) zend_native_call_retired_helper},
 	{ZEND_NATIVE_HELPER_CALL_FAST_LEAVE,
 		ZEND_NATIVE_EFFECT_CALL | ZEND_NATIVE_EFFECT_FRAME_READ | ZEND_NATIVE_EFFECT_FRAME_WRITE
 			| ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
@@ -940,15 +929,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
 			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
 		(const void *) zend_native_call_fast_undefined_argument},
-	{ZEND_NATIVE_HELPER_CALL_FAST_PREPARE,
-		ZEND_NATIVE_EFFECT_FRAME_READ | ZEND_NATIVE_EFFECT_FRAME_WRITE
-			| ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
-			| ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
-			| ZEND_NATIVE_RUNTIME_EFFECT_USERLAND
-			| ZEND_NATIVE_RUNTIME_EFFECT_REENTER
-			| ZEND_NATIVE_RUNTIME_EFFECT_THROW
-			| ZEND_NATIVE_RUNTIME_EFFECT_BAILOUT,
-		(const void *) zend_native_call_fast_prepare},
+	{ZEND_NATIVE_HELPER_CALL_FAST_PREPARE, 0,
+		(const void *) zend_native_call_retired_helper},
 	{ZEND_NATIVE_HELPER_CALL_FAST_SCALAR_VIOLATION,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE
 			| ZEND_NATIVE_RUNTIME_EFFECT_THROW,

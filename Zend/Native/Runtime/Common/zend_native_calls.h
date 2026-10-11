@@ -563,10 +563,6 @@ typedef struct _zend_native_user_call_resolution {
 	/* Exact bytes reserved for the eventual callee frame. The universal setup
 	 * activation is already stored in its preceding fake setup frame. */
 	uint32_t frame_size;
-	/* Retained for ABI layout stability. Universal calls expose no trailing callee
-	 * activation; reservation_size is therefore identical to frame_size. */
-	uint32_t activation_size;
-	uint32_t reservation_size;
 	uint32_t ownership;
 } zend_native_user_call_resolution;
 
@@ -780,16 +776,6 @@ zend_native_status zend_native_frame_observer_begin(
 zend_native_status zend_native_frame_observer_end(
 	zend_native_direct_activation *activation, zend_native_status status);
 /*
- * The DO phase of a resolved dynamic user call in one transition: prepare the
- * frame, notify observers, invoke the resolved entry, finalize the frame and
- * release the activation. Returns 0 once the activation is released (the
- * caller then checks for a pending exception) and 1 when preparation or
- * finalization failed with the activation still active.
- */
-uint32_t zend_native_call_invoke_user(
-	zend_native_direct_activation *activation,
-	zend_native_execution_context *context);
-/*
  * A frameless internal call whose operands the compiler resolved to frame
  * offsets (ZEND_NATIVE_FRAMELESS_DIRECT_*).
  */
@@ -816,17 +802,7 @@ zend_native_status zend_native_call_frameless_internal(
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
 
-/*
- * begin may extend the VM stack and initialize a real Zend call frame. The
- * generated caller remains current after it returns. Argument setters mutate
- * only that pending frame. invoke_finish re-enters native code, restores the
- * caller on every normal/exception/bailout outcome, destroys the pending
- * scalar arguments/result and releases the frame before returning.
- */
-void zend_native_call_begin(
-	zend_execute_data *caller,
-	zend_native_entry_cell *cell,
-	const zend_native_user_call_descriptor *descriptor);
+/* The argument setters mutate only the caller's pending call frame. */
 void zend_native_call_set_integer_argument(
 	zend_execute_data *caller,
 	uint32_t ordinal,
@@ -834,12 +810,6 @@ void zend_native_call_set_integer_argument(
 	zend_mir_scalar_type_mask exact_type);
 void zend_native_call_set_double_argument(
 	zend_execute_data *caller, uint32_t ordinal, double value);
-uint64_t zend_native_call_invoke_finish(
-	zend_execute_data *caller, zend_native_entry_cell *cell);
-zend_native_status zend_native_call_invoke_finish_source(
-	zend_execute_data *caller,
-	zend_native_entry_cell *cell,
-	const zend_native_user_call_descriptor *descriptor);
 /*
  * Completes only ZEND_CALLABLE_CONVERT(_PARTIAL) for caller->call. The
  * operands are compiler-decoded source identities; source_position is used
@@ -925,11 +895,6 @@ uint32_t zend_native_call_universal_init(
 	uint32_t setup_size,
 	uint32_t argument_count,
 	uint32_t result_offset);
-zend_native_direct_call_result zend_native_call_direct(
-	zend_execute_data *caller,
-	zend_native_entry_cell *cell,
-	const zend_native_direct_call_descriptor *descriptor,
-	zend_native_execution_context *context);
 zend_native_direct_call_entry zend_native_call_direct_enter(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
@@ -963,7 +928,8 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
-uint32_t zend_native_call_fast_prepare(zend_execute_data *callee);
+/* The address of a retired helper id's table slot; aborts. */
+void zend_native_call_retired_helper(void);
 void zend_native_call_fast_scalar_violation(void);
 /*
  * A dynamic site's Init: the recorded target's Zend entry, NULL on a miss,

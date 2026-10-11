@@ -2100,6 +2100,20 @@ zend_native_status zend_native_frame_finalize(
 }
 
 /*
+ * Pops an unlinked setup record that owns nothing any more, as
+ * zend_native_frame_activation_pop() does after checking that.
+ */
+static zend_always_inline void zend_native_frame_activation_pop_record(
+	zend_native_direct_activation *activation)
+{
+	zend_execute_data *setup_frame = activation->setup_frame;
+
+	activation->setup_frame = NULL;
+	activation->setup_record = false;
+	zend_vm_stack_free_call_frame(setup_frame);
+}
+
+/*
  * Completion of a FAST_FRAME call that returned without exception: the leave
  * path of zend_native_execution_finish_direct_frame() and
  * zend_native_call_direct_release() for a frame with nothing but CVs, extra
@@ -2116,14 +2130,13 @@ static void zend_native_call_fast_complete(
 	ZEND_ASSERT((ownership & ~(ZEND_NATIVE_USER_CALL_OWNS_TARGET_OBJECT
 		| ZEND_NATIVE_USER_CALL_OWNS_TARGET_CLOSURE
 		| ZEND_NATIVE_USER_CALL_OWNS_ENTRY_CELL_ACTIVE)) == 0);
+	/* A universal setup record holds no entry cell of its own. */
+	ZEND_ASSERT(activation->setup_record && !activation->cell_active
+		&& !activation->raw_arguments_owned);
 	zend_vm_stack_free_extra_args(callee);
 	zend_free_compiled_variables(callee);
 	activation->frame_requires_finish = false;
 	activation->frame_initialized = false;
-	if (activation->cell_active && activation->cell != NULL) {
-		zend_native_entry_cell_release_active(activation->cell);
-		activation->cell_active = false;
-	}
 	if (activation->uses_discarded_return
 			&& !Z_ISUNDEF(activation->discarded_return)) {
 		zval_ptr_dtor(&activation->discarded_return);
@@ -2145,19 +2158,19 @@ static void zend_native_call_fast_complete(
 	EG(current_execute_data) = caller;
 	zend_native_active_direct_call = activation->previous;
 	zend_vm_stack_free_call_frame(callee);
-	zend_native_frame_activation_pop(activation);
+	zend_native_frame_activation_pop_record(activation);
 	if (release_object != NULL) {
 		OBJ_RELEASE(release_object);
 	}
 }
 
 /*
- * Whether a returned frame completes on the fast path; an undefined result
- * becomes null first. Its return type needs no check here: as in the VM,
- * the callee's own VERIFY_RETURN_TYPE (or VERIFY_NEVER_TYPE) checked or
+ * The result of a frame returning on the fast path: an undefined one
+ * becomes null. Its return type needs no check here: as in the VM, the
+ * callee's own VERIFY_RETURN_TYPE (or VERIFY_NEVER_TYPE) checked or
  * coerced every returned value, unless the optimizer proved the type.
  */
-static zend_always_inline bool zend_native_call_fast_return_valid(
+static zend_always_inline void zend_native_call_fast_return_normalize(
 	zend_execute_data *callee)
 {
 	zval *return_value = callee->return_value;
@@ -2165,19 +2178,20 @@ static zend_always_inline bool zend_native_call_fast_return_valid(
 	if (Z_ISUNDEF_P(return_value)) {
 		ZVAL_NULL(return_value);
 	}
-	return true;
 }
 
-uint32_t zend_native_call_invoke_user(
+/* The user target of zend_native_call_universal_do()'s active setup
+ * record. */
+static uint32_t zend_native_call_invoke_user(
 	zend_native_direct_activation *activation,
 	zend_native_execution_context *context)
 {
 	zend_native_status status;
 
+	ZEND_ASSERT(zend_native_active_direct_call == activation);
 	if ((activation->resolution.placement_flags
 				& ZEND_NATIVE_USER_CALL_PLACEMENTS_FAST_FRAME) != 0
 			&& !ZEND_OBSERVER_ENABLED
-			&& zend_native_active_direct_call == activation
 			&& activation->raw_arguments_owned
 			&& !activation->frame_initialized
 			&& activation->callee != NULL) {
@@ -2217,8 +2231,8 @@ uint32_t zend_native_call_invoke_user(
 				&& EG(exception) == NULL
 				&& !zend_atomic_bool_load_ex(&EG(vm_interrupt))
 				&& (ZEND_CALL_INFO(callee) & (ZEND_CALL_HAS_SYMBOL_TABLE
-					| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0
-				&& zend_native_call_fast_return_valid(callee))) {
+					| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0)) {
+			zend_native_call_fast_return_normalize(callee);
 			zend_native_call_fast_complete(activation, callee);
 			return 0;
 		}
@@ -2305,8 +2319,8 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 	if (EXPECTED(status == ZEND_NATIVE_RETURNED && EG(exception) == NULL
 			&& !zend_atomic_bool_load_ex(&EG(vm_interrupt))
 			&& (call_info & (ZEND_CALL_HAS_SYMBOL_TABLE
-				| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0
-			&& zend_native_call_fast_return_valid(callee))) {
+				| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0)) {
+		zend_native_call_fast_return_normalize(callee);
 		/* An unused result is released at return, before the callee's CVs,
 		 * as a NULL return_value makes the VM's RETURN do: a temporary dies
 		 * without a GC root check, a CV's copy only drops its reference. */
@@ -2380,7 +2394,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
  * zend_native_call_invoke_user() does for such a FAST_FRAME target. Returns
  * ZEND_NATIVE_RETURNED to enter, ZEND_NATIVE_EXCEPTION to leave.
  */
-uint32_t zend_native_call_fast_prepare(zend_execute_data *callee)
+static uint32_t zend_native_call_fast_prepare(zend_execute_data *callee)
 {
 	zend_execute_data *caller = callee->prev_execute_data;
 
@@ -2415,6 +2429,15 @@ static ZEND_COLD ZEND_NORETURN void zend_native_call_abort(const char *message)
 {
 	zend_throw_error(NULL, "%s", message);
 	zend_bailout();
+}
+
+/*
+ * The table slot of a retired runtime helper id: no generated code calls
+ * it.
+ */
+void zend_native_call_retired_helper(void)
+{
+	zend_native_call_abort("Retired native runtime helper called");
 }
 
 static zend_function *zend_native_call_reject_target(const char *message)
@@ -2646,7 +2669,7 @@ static zend_function *zend_native_call_object_method(
 		}
 	}
 	if (function == NULL) {
-		if (function == NULL && EG(exception) == NULL) {
+		if (EG(exception) == NULL) {
 			zend_undefined_method(original->ce, Z_STR_P(name));
 		}
 		if (consume_sources) {
@@ -3449,11 +3472,6 @@ static bool zend_native_call_resolution_set_sizes(
 	}
 	resolution->frame_size = (uint32_t) MAX(
 		raw_frame_size, normalized_frame_size);
-	/* Universal-call metadata lives in the separately reserved setup frame.
-	 * Keep the v75 fields deterministic without asking generated code to append
-	 * a second activation after the callee. */
-	resolution->activation_size = 0;
-	resolution->reservation_size = resolution->frame_size;
 	return true;
 }
 
@@ -3960,11 +3978,17 @@ typedef enum _zend_native_call_resolution_receiver {
 typedef struct _zend_native_call_resolution_cache_entry
 	zend_native_call_resolution_cache_entry;
 
+/*
+ * An entry is reached only through its call site's header, whose chain the
+ * store links in the current epoch and only for that site's descriptor
+ * (zend_native_call_resolution_cache_site()); headers start zeroed, which
+ * no epoch matches. Entries live until request end, which advances the
+ * epoch.
+ */
 struct _zend_native_call_resolution_cache_entry {
 	zend_native_call_resolution_cache_entry *next_allocated;
 	/* The next entry of the same call site, most recently stored first. */
 	zend_native_call_resolution_cache_entry *next_site;
-	const zend_native_user_call_descriptor *descriptor;
 	/* The target, or NULL for a closure callable, which matches code. */
 	zend_function *function;
 	const zend_op *code;
@@ -3978,7 +4002,6 @@ struct _zend_native_call_resolution_cache_entry {
 	uint8_t lookup;
 	uint8_t receiver;
 	const zend_op *caller_opcodes;
-	uint64_t epoch;
 	uint32_t argument_count;
 	zend_native_user_call_resolution resolution;
 	zend_native_user_call_placement placements[1];
@@ -4051,12 +4074,10 @@ zend_native_call_resolution_cache_find(
 	 * caller's opcodes tell the call sites apart. */
 	for (entry = zend_native_call_resolution_cache_site(descriptor);
 			entry != NULL; entry = entry->next_site) {
-		if (entry->descriptor == descriptor
-				&& entry->lookup != ZEND_NATIVE_CALL_LOOKUP_CALLABLE
+		if (entry->lookup != ZEND_NATIVE_CALL_LOOKUP_CALLABLE
 				&& entry->function == function
 				&& entry->caller_opcodes == caller->func->op_array.opcodes
-				&& entry->argument_count == argument_count
-				&& entry->epoch == zend_native_call_resolution_cache_epoch) {
+				&& entry->argument_count == argument_count) {
 			return entry;
 		}
 	}
@@ -4439,16 +4460,13 @@ static zend_always_inline bool zend_native_call_resolve_cached_entry(
 	void **slot;
 	uint32_t count;
 
-	if (entry->descriptor != descriptor
-			|| entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NONE
-			|| entry->epoch != zend_native_call_resolution_cache_epoch
+	if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NONE
 			|| entry->caller_opcodes != caller->func->op_array.opcodes
 			|| entry->argument_count != (argument_count_hint
 					== ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO
 				? descriptor->initial_argument_count : argument_count_hint)
 			|| entry->resolution.placement_count
-				> activation->placement_capacity
-			|| placements == NULL || caller->run_time_cache == NULL) {
+				> activation->placement_capacity) {
 		return false;
 	}
 	if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_CALLABLE) {
@@ -4580,6 +4598,11 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 {
 	const zend_native_call_resolution_cache_entry *entry;
 
+	/* The resolver's workspace holds the placements. */
+	ZEND_ASSERT(activation->resolution.placements != NULL);
+	if (UNEXPECTED(caller->run_time_cache == NULL)) {
+		return false;
+	}
 	for (entry = zend_native_call_resolution_cache_site(descriptor);
 			entry != NULL; entry = entry->next_site) {
 		if (zend_native_call_resolve_cached_entry(activation, caller,
@@ -5746,8 +5769,7 @@ static void zend_native_call_recorded_target_store(
 		(ZEND_NATIVE_CELL_CACHED_RECORDED
 			| (target - zend_native_call_recorded_targets)));
 	target->by_value = true;
-	if (resolution->function != NULL
-			&& resolution->function->type == ZEND_USER_FUNCTION) {
+	if (resolution->function->type == ZEND_USER_FUNCTION) {
 		const zend_op_array *target_op_array = &resolution->function->op_array;
 		const uint32_t count = target_op_array->num_args
 			+ ((target_op_array->fn_flags & ZEND_ACC_VARIADIC) != 0);
@@ -6611,7 +6633,6 @@ static void zend_native_call_resolution_cache_store(
 		header->resolution = entry;
 		header->epoch = zend_native_call_resolution_cache_epoch;
 	}
-	entry->descriptor = descriptor;
 	entry->function = dynamic
 			&& callable_kind == ZEND_NATIVE_CALL_CALLABLE_CLOSURE
 		? NULL : resolution->function;
@@ -6632,7 +6653,6 @@ static void zend_native_call_resolution_cache_store(
 			entry, caller, descriptor, resolution);
 	}
 	entry->caller_opcodes = caller->func->op_array.opcodes;
-	entry->epoch = zend_native_call_resolution_cache_epoch;
 	entry->argument_count = resolution->argument_count;
 	entry->resolution = *resolution;
 	entry->resolution.placements = NULL;
@@ -6655,18 +6675,26 @@ static void zend_native_call_resolution_cache_store(
 	zend_native_call_fast_publish(caller, header, descriptor, entry);
 }
 
-zend_native_user_call_resolution_status zend_native_call_resolve_user(
+/*
+ * zend_native_call_resolve_user() for the linked setup record of a valid
+ * workspace whose resolution holds nothing but its placements, as
+ * zend_native_call_universal_init() builds it: a hit copies the cached
+ * resolution, a miss fills the zeroed one.
+ */
+static zend_native_user_call_resolution_status
+zend_native_call_resolve_user_linked(
 	zend_native_direct_activation *activation,
 	zend_native_entry_cell *entry_cell_hint,
 	uint32_t argument_count_hint)
 {
 	const zend_native_call_resolution_cache_entry *cached;
-	zend_execute_data *caller;
-	const zend_native_user_call_descriptor *descriptor;
-	zend_native_user_call_placement *placements;
-	zend_native_user_call_resolution *resolution;
-	uint32_t placement_capacity;
-	uint32_t *target_set;
+	zend_execute_data *caller = activation->caller;
+	const zend_native_user_call_descriptor *descriptor =
+		(const zend_native_user_call_descriptor *) activation->descriptor;
+	zend_native_user_call_resolution *resolution = &activation->resolution;
+	zend_native_user_call_placement *placements = resolution->placements;
+	const uint32_t placement_capacity = activation->placement_capacity;
+	uint32_t *target_set = (uint32_t *) (placements + placement_capacity);
 	uint32_t target_capacity;
 	zend_function *function = NULL;
 	void *object_or_called_scope = NULL;
@@ -6675,28 +6703,12 @@ zend_native_user_call_resolution_status zend_native_call_resolve_user(
 	bool receiver_owned = false;
 	bool no_call = false;
 
-	if (activation == NULL || !activation->setup_record
-			|| zend_native_active_direct_call != activation) {
-		if (EG(exception) == NULL) {
-			zend_throw_error(NULL,
-				"Native user call activation is missing");
-		}
-		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
-	}
-	caller = activation->caller;
-	descriptor = (const zend_native_user_call_descriptor *)
-		activation->descriptor;
-	resolution = &activation->resolution;
-	placements = resolution->placements;
-	placement_capacity = activation->placement_capacity;
-	target_set = placements != NULL
-		? (uint32_t *) (placements + placement_capacity) : NULL;
-	if (activation->setup_frame == NULL || target_set == NULL
-			|| (char *) target_set
-				> (char *) activation->setup_frame + activation->setup_size) {
-		zend_throw_error(NULL, "Invalid native call placement workspace");
-		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
-	}
+	ZEND_ASSERT(activation->setup_record
+		&& zend_native_active_direct_call == activation
+		&& activation->setup_frame != NULL && placements != NULL
+		&& (char *) target_set
+			<= (char *) activation->setup_frame + activation->setup_size
+		&& resolution->ownership == 0);
 	if (caller != NULL && descriptor != NULL
 			&& zend_native_call_resolve_cached(
 				activation, caller, descriptor, argument_count_hint)) {
@@ -6705,8 +6717,6 @@ zend_native_user_call_resolution_status zend_native_call_resolve_user(
 	target_capacity = (uint32_t) (
 		((char *) activation->setup_frame + activation->setup_size
 			- (char *) target_set) / sizeof(*target_set));
-	memset(resolution, 0, sizeof(*resolution));
-	resolution->placements = placements;
 	if (caller == NULL || caller->func == NULL || descriptor == NULL
 			|| !ZEND_USER_CODE(caller->func->type)
 			|| descriptor->argument_count > ZEND_MIR_ID_MAX
@@ -6931,6 +6941,37 @@ zend_native_user_call_resolution_status zend_native_call_resolve_user(
 	return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
 }
 
+zend_native_user_call_resolution_status zend_native_call_resolve_user(
+	zend_native_direct_activation *activation,
+	zend_native_entry_cell *entry_cell_hint,
+	uint32_t argument_count_hint)
+{
+	zend_native_user_call_placement *placements;
+	uint32_t *target_set;
+
+	if (activation == NULL || !activation->setup_record
+			|| zend_native_active_direct_call != activation) {
+		if (EG(exception) == NULL) {
+			zend_throw_error(NULL,
+				"Native user call activation is missing");
+		}
+		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
+	}
+	placements = activation->resolution.placements;
+	target_set = placements != NULL
+		? (uint32_t *) (placements + activation->placement_capacity) : NULL;
+	if (activation->setup_frame == NULL || target_set == NULL
+			|| (char *) target_set
+				> (char *) activation->setup_frame + activation->setup_size) {
+		zend_throw_error(NULL, "Invalid native call placement workspace");
+		return ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE;
+	}
+	memset(&activation->resolution, 0, sizeof(activation->resolution));
+	activation->resolution.placements = placements;
+	return zend_native_call_resolve_user_linked(
+		activation, entry_cell_hint, argument_count_hint);
+}
+
 static bool zend_native_call_start_runtime_expansion(
 	zend_native_direct_activation *activation)
 {
@@ -7132,7 +7173,13 @@ zend_execute_data *zend_native_call_expand_user_arguments(
 	return callee;
 }
 
-void zend_native_call_begin(
+/*
+ * Pushes the pending Zend call frame of a legacy source call: it may extend
+ * the VM stack, and the generated caller remains current after it returns.
+ * zend_native_call_invoke_finish_source() re-enters native code, restores
+ * the caller on every outcome and releases the frame.
+ */
+static void zend_native_call_begin(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
 	const zend_native_user_call_descriptor *descriptor)
@@ -8093,8 +8140,6 @@ static void zend_native_call_transfer_resolution_target(
 void zend_native_frame_activation_pop(
 	zend_native_direct_activation *activation)
 {
-	zend_execute_data *setup_frame;
-
 	if (activation == NULL || !activation->setup_record
 			|| activation->setup_frame == NULL
 			|| zend_native_active_direct_call == activation
@@ -8107,10 +8152,7 @@ void zend_native_frame_activation_pop(
 			|| !Z_ISUNDEF(activation->discarded_return)) {
 		return;
 	}
-	setup_frame = activation->setup_frame;
-	activation->setup_frame = NULL;
-	activation->setup_record = false;
-	zend_vm_stack_free_call_frame(setup_frame);
+	zend_native_frame_activation_pop_record(activation);
 }
 
 /*
@@ -8895,27 +8937,6 @@ complete:
 	return status;
 }
 
-zend_native_direct_call_result zend_native_call_direct(
-	zend_execute_data *caller,
-	zend_native_entry_cell *cell,
-	const zend_native_direct_call_descriptor *descriptor,
-	zend_native_execution_context *context)
-{
-	zend_native_direct_call_entry invocation =
-		zend_native_call_direct_enter(caller, cell, descriptor, context);
-
-	if (invocation.callee == NULL || invocation.entry == NULL) {
-		zend_native_direct_call_result result = {
-			.status = ZEND_NATIVE_EXCEPTION,
-			.payload = 0
-		};
-		return result;
-	}
-	return zend_native_call_direct_leave(
-		caller, descriptor, context,
-		invocation.entry(invocation.callee, context));
-}
-
 static bool zend_native_frame_descends_from(
 	zend_execute_data *frame, zend_execute_data *ancestor)
 {
@@ -8993,50 +9014,7 @@ void zend_native_call_direct_abandon(zend_execute_data *outermost)
 	}
 }
 
-uint64_t zend_native_call_invoke_finish(
-	zend_execute_data *caller, zend_native_entry_cell *cell)
-{
-	uint64_t payload_bits = 0;
-	zval return_value;
-	zend_native_status status = zend_native_call_invoke(
-		caller, cell, &return_value);
-
-	if (status == ZEND_NATIVE_RETURNED) {
-		switch (Z_TYPE(return_value)) {
-			case IS_NULL:
-				payload_bits = 0;
-				break;
-			case IS_FALSE:
-				payload_bits = 0;
-				break;
-			case IS_TRUE:
-				payload_bits = 1;
-				break;
-			case IS_LONG:
-				payload_bits = (uint64_t) Z_LVAL(return_value);
-				break;
-			case IS_DOUBLE:
-				memcpy(&payload_bits, &Z_DVAL(return_value),
-					sizeof(payload_bits));
-				break;
-			default:
-				zend_throw_error(
-					NULL, "Native callee returned a non-scalar value");
-				status = ZEND_NATIVE_EXCEPTION;
-				break;
-		}
-	}
-	if (!Z_ISUNDEF(return_value)) {
-		zval_ptr_dtor(&return_value);
-	}
-	if (status != ZEND_NATIVE_RETURNED) {
-		zend_bailout();
-	}
-	return payload_bits;
-}
-
-
-zend_native_status zend_native_call_invoke_finish_source(
+static zend_native_status zend_native_call_invoke_finish_source(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
 	const zend_native_user_call_descriptor *descriptor)
@@ -9423,6 +9401,9 @@ uint32_t zend_native_call_universal_init(
 	}
 	activation = (zend_native_direct_activation *)
 		((char *) setup + activation_offset);
+	/* Zeroes the resolution, too, before a lookup can bail out: the
+	 * generated code sizes the workspace for argument_count placements
+	 * and their target set. */
 	memset(activation, 0, sizeof(*activation));
 	activation->setup_frame = setup;
 	activation->caller = caller;
@@ -9435,8 +9416,8 @@ uint32_t zend_native_call_universal_init(
 	activation->setup_record = true;
 	activation->previous = zend_native_active_direct_call;
 	zend_native_active_direct_call = activation;
-	status = zend_native_call_resolve_user(activation, entry_cell_hint,
-		ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO);
+	status = zend_native_call_resolve_user_linked(activation,
+		entry_cell_hint, ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO);
 	if (status != ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS) {
 		if (activation->resolution.ownership != 0) {
 			zend_native_call_release_user_resolution(&activation->resolution);
