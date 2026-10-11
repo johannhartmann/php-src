@@ -1541,10 +1541,8 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 	}
 	epoch = zend_native_reentry_cache_epoch();
 	signature = zend_native_reentry_signature();
-	cached = &zend_native_reentry_cache[
-		((((uintptr_t) function->op_array.opcodes ^ signature)
-				* UINT64_C(0x9e3779b97f4a7c15)) >> 40)
-			& (ZEND_NATIVE_REENTRY_CACHE_SIZE - 1)];
+	cached = zend_native_reentry_cache_slot(
+		function->op_array.opcodes, signature);
 	if (cached->opcodes == function->op_array.opcodes
 			&& cached->last == function->op_array.last
 			&& cached->signature == signature
@@ -1579,16 +1577,10 @@ zend_native_entry_cell *zend_native_reentry_resolve(
 	return cell;
 }
 
-zend_native_frame_entry_t zend_native_reentry_resolve_entry(
+zend_native_frame_entry_t zend_native_reentry_resolve_entry_miss(
 	zend_function *function, zend_native_entry_cell **cell,
 	const zend_native_code **code)
 {
-	const zend_native_frame_entry_t entry =
-		zend_native_reentry_cached_entry(function, cell, code);
-
-	if (EXPECTED(entry != NULL)) {
-		return entry;
-	}
 	*cell = zend_native_reentry_resolve(function);
 	*code = *cell != NULL ? zend_native_entry_cell_load(*cell) : NULL;
 	return *code != NULL ? zend_native_code_executable_entry(*code) : NULL;
@@ -3407,20 +3399,19 @@ static bool zend_native_call_resolution_user_entry(
 	if (RUN_TIME_CACHE(&function->op_array) == NULL) {
 		zend_init_func_run_time_cache(&function->op_array);
 	}
+	/* A cell's non-NULL code makes it READY. */
 	if (entry_cell_hint != NULL
-			&& entry_cell_hint->function == function
-			&& entry_cell_hint->state == ZEND_NATIVE_ENTRY_READY) {
+			&& entry_cell_hint->function == function) {
 		entry_cell = entry_cell_hint;
-		code = zend_native_entry_cell_load(entry_cell);
+		code = zend_native_entry_cell_load_nonnull(entry_cell);
 	}
 	if (code == NULL) {
 		/* The reentry cache keeps a persistent cell across requests. */
 		entry_cell = zend_native_reentry_resolve(function);
 		if (entry_cell != NULL
 				&& zend_native_call_entry_matches_function(
-					entry_cell, function)
-				&& entry_cell->state == ZEND_NATIVE_ENTRY_READY) {
-			code = zend_native_entry_cell_load(entry_cell);
+					entry_cell, function)) {
+			code = zend_native_entry_cell_load_nonnull(entry_cell);
 		}
 	}
 	frame_entry = code != NULL ? zend_native_code_frame_entry(code) : NULL;
@@ -5806,13 +5797,11 @@ static zend_always_inline bool zend_native_call_recorded_target_current(
 	/* A closure's target names its code; the cell names the function the
 	 * closures of that code are copied from. */
 	if (!target->persistent || (cell = target->cell) == NULL
-			|| cell->state != ZEND_NATIVE_ENTRY_READY
+			|| (code = zend_native_entry_cell_load_nonnull(cell)) == NULL
 			|| (target->kind == ZEND_NATIVE_CALL_RECORDED_CLOSURE
 				? cell->function == NULL
 					|| cell->function->op_array.opcodes != target->key
 				: cell->function != target->function)
-			|| (code = zend_native_entry_cell_load(
-				(zend_native_entry_cell *) cell)) == NULL
 			|| zend_native_code_frame_entry(code) != target->entry) {
 		return false;
 	}
@@ -7142,8 +7131,7 @@ void zend_native_call_begin(
 	if (caller == NULL || cell == NULL || descriptor == NULL) {
 		zend_native_call_abort("Invalid pending native call state");
 	}
-	if (cell->state != ZEND_NATIVE_ENTRY_READY || cell->code == NULL
-			|| cell->function == NULL) {
+	if (!zend_native_entry_cell_is_ready(cell) || cell->function == NULL) {
 		zend_native_call_abort("Native callee entry is not ready");
 	}
 	function = cell->function;
@@ -7191,8 +7179,7 @@ void zend_native_call_begin(
 			if (resolved->type == ZEND_USER_FUNCTION
 					&& resolved != function) {
 				cell = zend_native_reentry_resolve(resolved);
-				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-						|| cell->code == NULL) {
+				if (!zend_native_entry_cell_is_ready(cell)) {
 					function = zend_native_call_reject_target(
 						"Native named target compilation failed");
 					break;
@@ -7217,8 +7204,7 @@ void zend_native_call_begin(
 			}
 			if (function->type == ZEND_USER_FUNCTION) {
 				cell = zend_native_reentry_resolve(function);
-				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-						|| cell->code == NULL) {
+				if (!zend_native_entry_cell_is_ready(cell)) {
 					function = zend_native_call_reject_target(
 						"Native named target compilation failed");
 					object_or_called_scope = NULL;
@@ -7244,8 +7230,7 @@ void zend_native_call_begin(
 					&& (function->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
 				cell = zend_native_reentry_resolve(function);
-				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-						|| cell->code == NULL) {
+				if (!zend_native_entry_cell_is_ready(cell)) {
 					if ((call_info & ZEND_CALL_RELEASE_THIS) != 0) {
 						OBJ_RELEASE((zend_object *) object_or_called_scope);
 					} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
@@ -7281,8 +7266,7 @@ void zend_native_call_begin(
 					&& (resolved->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
 				cell = zend_native_reentry_resolve(resolved);
-				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-						|| cell->code == NULL) {
+				if (!zend_native_entry_cell_is_ready(cell)) {
 					if (receiver_owned) {
 						OBJ_RELEASE(object);
 					}
@@ -7320,8 +7304,7 @@ void zend_native_call_begin(
 					&& (resolved->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
 				cell = zend_native_reentry_resolve(resolved);
-				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-						|| cell->code == NULL) {
+				if (!zend_native_entry_cell_is_ready(cell)) {
 					function = zend_native_call_reject_target(
 						"Native static method target compilation failed");
 					object_or_called_scope = NULL;
@@ -7354,8 +7337,7 @@ void zend_native_call_begin(
 					&& (resolved->common.fn_flags
 						& ZEND_ACC_CALL_VIA_TRAMPOLINE) == 0) {
 				cell = zend_native_reentry_resolve(resolved);
-				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-						|| cell->code == NULL) {
+				if (!zend_native_entry_cell_is_ready(cell)) {
 					function = zend_native_call_reject_target(
 						"Native parent property hook compilation failed");
 					object_or_called_scope = NULL;
@@ -7391,8 +7373,7 @@ void zend_native_call_begin(
 			}
 			if (resolved != function && resolved->type == ZEND_USER_FUNCTION) {
 				cell = zend_native_reentry_resolve(resolved);
-				if (cell == NULL || cell->state != ZEND_NATIVE_ENTRY_READY
-						|| cell->code == NULL) {
+				if (!zend_native_entry_cell_is_ready(cell)) {
 					OBJ_RELEASE(object);
 					function = zend_native_call_reject_target(
 						"Native constructor target compilation failed");
@@ -10448,8 +10429,8 @@ static bool zend_native_call_fast_rearm_site(
 		default:
 			return false;
 	}
-	if (cell->state != ZEND_NATIVE_ENTRY_READY || cell->function != function
-			|| (code = zend_native_entry_cell_load(cell)) == NULL
+	if ((code = zend_native_entry_cell_load_nonnull(cell)) == NULL
+			|| cell->function != function
 			|| zend_native_code_frame_entry(code) != header->fast_entry) {
 		return false;
 	}

@@ -132,6 +132,19 @@ zend_native_entry_cell_load(const zend_native_entry_cell *cell)
 	return cell == NULL ? NULL : __atomic_load_n(&cell->code, __ATOMIC_ACQUIRE);
 }
 
+/*
+ * The code of a cell the caller holds. Its code is non-NULL exactly while
+ * the cell is READY: publishing sets the state before the code, failing and
+ * resetting clear the code before the state, and a tier-2 swap replaces the
+ * code of a READY cell; a loaded non-NULL code needs no state test.
+ */
+static zend_always_inline const zend_native_code *
+zend_native_entry_cell_load_nonnull(const zend_native_entry_cell *cell)
+{
+	ZEND_ASSERT(cell != NULL);
+	return __atomic_load_n(&cell->code, __ATOMIC_ACQUIRE);
+}
+
 static zend_always_inline bool zend_native_entry_cell_is_ready(
 	const zend_native_entry_cell *cell)
 {
@@ -634,8 +647,9 @@ void zend_native_reentry_scope_leave(zend_native_reentry_scope *scope);
 zend_native_entry_cell *zend_native_reentry_resolve(
 	zend_function *function);
 /* zend_native_reentry_resolve() with the ready cell's executable code and
- * frame entry, kept with the cached cell; NULL when there is none. */
-zend_native_frame_entry_t zend_native_reentry_resolve_entry(
+ * frame entry, kept with the cached cell; NULL when there is none. For a
+ * function zend_native_reentry_cached_entry() missed. */
+zend_native_frame_entry_t zend_native_reentry_resolve_entry_miss(
 	zend_function *function, zend_native_entry_cell **cell,
 	const zend_native_code **code);
 

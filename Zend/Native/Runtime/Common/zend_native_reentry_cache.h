@@ -54,22 +54,30 @@ zend_native_reentry_cache_slot(const zend_op *opcodes, uint64_t signature)
 /* zend_call_function() names the lines execute_ex reads for a user
  * function, while it copies the arguments: the cache entry, then (once the
  * entry is in) the cell it holds. */
-static zend_always_inline void zend_native_reentry_prefetch(
-	const zend_function *function, bool cell)
+static zend_always_inline const zend_native_reentry_cache_entry *
+zend_native_reentry_prefetch_entry(const zend_function *function)
 {
 	const zend_native_reentry_cache_entry *cached =
 		zend_native_reentry_cache_slot(
 			function->op_array.opcodes, zend_native_reentry_signature());
 
-	if (!cell) {
-		__builtin_prefetch(cached);
-	} else if (cached->opcodes == function->op_array.opcodes) {
+	__builtin_prefetch(cached);
+	return cached;
+}
+
+static zend_always_inline void zend_native_reentry_prefetch_cell(
+	const zend_native_reentry_cache_entry *cached,
+	const zend_function *function)
+{
+	if (cached->opcodes == function->op_array.opcodes) {
 		__builtin_prefetch(cached->cell);
 	}
 }
 
 /* The cached ready cell of a user function whose code is still the one
- * cached with its frame entry, or NULL. */
+ * cached with its frame entry, or NULL. An entry holds a cell, and a cell
+ * whose code is the non-NULL cached one is READY; NULL code caches a NULL
+ * entry. */
 static zend_always_inline zend_native_frame_entry_t
 zend_native_reentry_cached_entry(const zend_function *function,
 	zend_native_entry_cell **cell, const zend_native_code **code)
@@ -85,9 +93,8 @@ zend_native_reentry_cached_entry(const zend_function *function,
 			|| cached->epoch != (cached->persistent
 				? zend_native_reentry_persistent_epoch
 				: zend_native_call_resolution_cache_epoch)
-			|| cached->cell->state != ZEND_NATIVE_ENTRY_READY
-			|| cached->entry == NULL
-			|| zend_native_entry_cell_load(cached->cell) != cached->code) {
+			|| zend_native_entry_cell_load_nonnull(cached->cell)
+				!= cached->code) {
 		return NULL;
 	}
 	*cell = cached->cell;

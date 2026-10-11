@@ -3539,7 +3539,7 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			execute_data->func, &cell, &code);
 
 		if (UNEXPECTED(entry == NULL)) {
-			entry = zend_native_reentry_resolve_entry(
+			entry = zend_native_reentry_resolve_entry_miss(
 				execute_data->func, &cell, &code);
 		}
 

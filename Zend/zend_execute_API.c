@@ -903,8 +903,10 @@ zend_result zend_call_function(zend_fcall_info *fci, zend_fcall_info_cache *fci_
 #endif
 
 #ifdef HAVE_NATIVE_ENGINE
+	const zend_native_reentry_cache_entry *reentry = NULL;
+
 	if (func->type == ZEND_USER_FUNCTION) {
-		zend_native_reentry_prefetch(func, false);
+		reentry = zend_native_reentry_prefetch_entry(func);
 	}
 #endif
 	call = zend_vm_stack_push_call_frame(call_info,
@@ -1065,7 +1067,7 @@ cleanup_args:
 		uint32_t orig_jit_trace_num = EG(jit_trace_num);
 
 #ifdef HAVE_NATIVE_ENGINE
-		zend_native_reentry_prefetch(func, true);
+		zend_native_reentry_prefetch_cell(reentry, func);
 #endif
 		zend_init_func_execute_data(call, &func->op_array, fci->retval);
 		ZEND_OBSERVER_FCALL_BEGIN(call);
