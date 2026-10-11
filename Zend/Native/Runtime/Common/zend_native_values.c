@@ -223,9 +223,7 @@ zend_native_status zend_native_value_make_ref(
 		execute_data, opline->op1_type, opline->op1);
 	result = zend_native_operand_slot(
 		execute_data, opline->result_type, opline->result);
-	if (source == NULL || result == NULL) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
+	ZEND_ASSERT(source != NULL && result != NULL);
 	if (opline->op1_type == IS_CV) {
 		if (UNEXPECTED(Z_TYPE_P(source) == IS_UNDEF)) {
 			ZVAL_NEW_EMPTY_REF(source);
@@ -280,9 +278,7 @@ zend_native_status zend_native_value_assign_ref(
 		execute_data, opline->op1_type, opline->op1);
 	value_slot = zend_native_operand_slot(
 		execute_data, opline->op2_type, opline->op2);
-	if (variable == NULL || value_slot == NULL) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
+	ZEND_ASSERT(variable != NULL && value_slot != NULL);
 	/* A failed writable fetch must retain its original exception. The VM never
 	 * advances into ASSIGN_REF after that helper reports failure. */
 	if (UNEXPECTED(EG(exception) != NULL)) {
@@ -338,9 +334,7 @@ zend_native_status zend_native_value_assign_ref(
 	if (opline->result_type != IS_UNUSED) {
 		zval *result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
-		if (result == NULL) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
+		ZEND_ASSERT(result != NULL);
 		ZVAL_COPY(result, variable);
 	}
 	if (garbage != NULL) {
@@ -2437,9 +2431,7 @@ zend_native_status zend_native_value_incdec(
 	if (opline->result_type != IS_UNUSED) {
 		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
-		if (result == NULL) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
+		ZEND_ASSERT(result != NULL);
 	}
 	if (post && result == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -2686,9 +2678,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			zval *result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
 
-			if (result == NULL) {
-				return ZEND_NATIVE_ITERATOR_EXCEPTION;
-			}
+			ZEND_ASSERT(result != NULL);
 			ZVAL_TRUE(result);
 		}
 		return truth
@@ -2721,9 +2711,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		if (truth) {
 			result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
-			if (result == NULL) {
-				return ZEND_NATIVE_ITERATOR_EXCEPTION;
-			}
+			ZEND_ASSERT(result != NULL);
 			if (opline->op1_type == IS_CONST
 					|| opline->op1_type == IS_CV) {
 				zend_native_zval_copy_deref_or_dup(result, value);
@@ -2760,9 +2748,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		}
 		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
-		if (result == NULL) {
-			return ZEND_NATIVE_ITERATOR_EXCEPTION;
-		}
+		ZEND_ASSERT(result != NULL);
 		short_circuiting_type =
 			opline->extended_value & ZEND_SHORT_CIRCUITING_CHAIN_MASK;
 		if (short_circuiting_type == ZEND_SHORT_CIRCUITING_CHAIN_EXPR) {
@@ -2786,9 +2772,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			|| opline->opcode == ZEND_JMPNZ_EX) {
 		zval *result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
-		if (result == NULL) {
-			return ZEND_NATIVE_ITERATOR_EXCEPTION;
-		}
+		ZEND_ASSERT(result != NULL);
 		/*
 		 * Zend commonly reuses one TMP slot for the condition and the
 		 * short-circuit result. Consume the old value before publishing the
@@ -3945,9 +3929,7 @@ static bool zend_native_value_take_explicit(
 	}
 	if (preserve_reference && (operand_type == IS_CV || operand_type == IS_VAR)) {
 		slot = zend_native_operand_slot(execute_data, operand_type, operand);
-		if (slot == NULL) {
-			return false;
-		}
+		ZEND_ASSERT(slot != NULL);
 		if (operand_type == IS_VAR && Z_TYPE_P(slot) == IS_INDIRECT) {
 			slot = Z_INDIRECT_P(slot);
 		}
@@ -4547,9 +4529,7 @@ static bool zend_native_assign_string_offset(
 		zval *result = zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 
-		if (result == NULL) {
-			return false;
-		}
+		ZEND_ASSERT(result != NULL);
 		ZVAL_CHAR(result, character);
 		*assigned = result;
 	} else {
@@ -7051,9 +7031,7 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_array(
 	zval *result = zend_native_operand_slot(
 		execute_data, opline->result_type, opline->result);
 
-	if (result == NULL) {
-		return ZEND_NATIVE_ITERATOR_EXCEPTION;
-	}
+	ZEND_ASSERT(result != NULL);
 	if (!by_reference) {
 		if (opline->op1_type == IS_TMP_VAR) {
 			ZVAL_COPY_VALUE(result, array);
@@ -7102,9 +7080,7 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_object(
 		execute_data, opline->result_type, opline->result);
 	HashTable *properties;
 
-	if (result == NULL) {
-		return ZEND_NATIVE_ITERATOR_EXCEPTION;
-	}
+	ZEND_ASSERT(result != NULL);
 	if (UNEXPECTED(zend_object_is_lazy(zobj))) {
 		zobj = zend_lazy_object_init(zobj);
 		if (UNEXPECTED(EG(exception) != NULL)) {
@@ -7285,9 +7261,7 @@ static bool zend_native_iterator_set_key(
 	}
 	result = zend_native_operand_slot(
 		execute_data, opline->result_type, opline->result);
-	if (result == NULL) {
-		return false;
-	}
+	ZEND_ASSERT(result != NULL);
 	if (key == NULL) {
 		ZVAL_LONG(result, index);
 	} else if (!property_table || ZSTR_VAL(key)[0] != '\0') {
@@ -7311,9 +7285,7 @@ static bool zend_native_iterator_assign_value(
 	zval *destination = zend_native_operand_slot(
 		execute_data, opline->op2_type, opline->op2);
 
-	if (destination == NULL) {
-		return false;
-	}
+	ZEND_ASSERT(destination != NULL);
 	if (by_reference) {
 		if (!Z_ISREF_P(value)) {
 			zval original;
@@ -7421,9 +7393,7 @@ static zend_native_iterator_branch_result zend_native_iterator_fetch_object(
 		if (opline->result_type != IS_UNUSED) {
 			zval *key = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
-			if (key == NULL) {
-				return ZEND_NATIVE_ITERATOR_EXCEPTION;
-			}
+			ZEND_ASSERT(key != NULL);
 			if (funcs->get_current_key != NULL) {
 				funcs->get_current_key(iterator, key);
 			} else {
@@ -7519,9 +7489,7 @@ zend_native_iterator_branch_result zend_native_value_iterator_branch(
 	}
 	holder = zend_native_operand_slot(
 		execute_data, opline->op1_type, opline->op1);
-	if (holder == NULL) {
-		return ZEND_NATIVE_ITERATOR_EXCEPTION;
-	}
+	ZEND_ASSERT(holder != NULL);
 	by_reference = opline->opcode == ZEND_FE_FETCH_RW;
 	value = holder;
 	while (Z_ISREF_P(value)) {
