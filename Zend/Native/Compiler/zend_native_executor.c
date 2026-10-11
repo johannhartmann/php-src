@@ -3304,6 +3304,20 @@ zend_result zend_native_executor_register_preloaded_script(
 	return SUCCESS;
 }
 
+void zend_native_executor_prefetch_include(const zend_op_array *op_array)
+{
+	if (zend_native_executor_bundle_rid >= 0) {
+		__builtin_prefetch(
+			op_array->reserved[zend_native_executor_bundle_rid]);
+	}
+#ifndef ZTS
+	if (op_array->opcodes != NULL) {
+		__builtin_prefetch(
+			zend_native_executor_include_cache_entry(op_array->opcodes));
+	}
+#endif
+}
+
 zend_result zend_native_executor_register_script_owner(
 	zend_op_array *op_array, const zend_script *script)
 {
@@ -3312,6 +3326,18 @@ zend_result zend_native_executor_register_script_owner(
 	zend_native_executor_dispatch *dispatch;
 	zend_native_executor_dispatch_key key;
 
+#ifndef ZTS
+	/* The include cache entry prefetched when the script was loaded holds
+	 * the cell the include reads next. */
+	if (op_array != NULL && op_array->opcodes != NULL) {
+		const zend_native_executor_include_entry *cached =
+			zend_native_executor_include_cache_entry(op_array->opcodes);
+
+		if (cached->opcodes == op_array->opcodes) {
+			__builtin_prefetch(cached->entry_cell);
+		}
+	}
+#endif
 	if (bundle == NULL
 			|| bundle->storage
 				!= ZEND_NATIVE_OPCACHE_BUNDLE_PERSISTENT) {

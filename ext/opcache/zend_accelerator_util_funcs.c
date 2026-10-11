@@ -377,6 +377,9 @@ zend_op_array* zend_accel_load_script(zend_persistent_script *persistent_script,
 
 	op_array = (zend_op_array *) emalloc(sizeof(zend_op_array));
 	*op_array = persistent_script->script.main_op_array;
+#ifdef HAVE_NATIVE_ENGINE
+	zend_native_executor_prefetch_include(op_array);
+#endif
 
 	if (EXPECTED(from_shared_memory)) {
 		if (ZCSG(map_ptr_last) > CG(map_ptr_last)) {

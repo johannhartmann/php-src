@@ -72,6 +72,10 @@ ZEND_API zend_result zend_native_executor_prepare_script(
 ZEND_API zend_result zend_native_executor_prepare_preloaded_script(
 	zend_script *script,
 	zend_native_compile_diagnostic *diagnostic);
+/* OPcache loads a cached script: what its native include reads later is
+ * requested from memory while the script's tables are bound. */
+ZEND_API void zend_native_executor_prefetch_include(
+	const zend_op_array *op_array);
 ZEND_API zend_result zend_native_executor_register_script_owner(
 	zend_op_array *op_array, const zend_script *script);
 ZEND_API zend_result zend_native_executor_register_preloaded_script(
