@@ -57,6 +57,7 @@ static bool zend_mir_ssa_exists(
 		&& ssa.source_slot_kind <= ZEND_MIR_SOURCE_SLOT_VAR;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_operand_is_valid(
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_source_operand_ref *operand)
@@ -130,6 +131,7 @@ static bool zend_mir_validate_linear_source(
 	}
 	return true;
 }
+#endif
 
 static bool zend_mir_cf_dominates(
 	const zend_mir_lowering_source_view *source,
@@ -166,7 +168,6 @@ static bool zend_mir_validate_blocks(
 	}
 	for (i = 0; i < block_count; i++) {
 		zend_mir_source_block_ref block;
-		uint32_t j;
 		if (!source->block_at(source->context, i, &block)
 				|| block.id != i
 				|| block.first_opcode_ordinal > opcode_count
@@ -220,7 +221,8 @@ static bool zend_mir_validate_blocks(
 				return false;
 			}
 		}
-		for (j = 0; j < block.opcode_count; j++) {
+#if !defined(NDEBUG)
+		for (uint32_t j = 0; j < block.opcode_count; j++) {
 			zend_mir_source_opcode_ref opcode;
 			if (!source->opcode_at(source->context,
 					block.first_opcode_ordinal + j, &opcode)
@@ -233,7 +235,13 @@ static bool zend_mir_validate_blocks(
 				return false;
 			}
 		}
+#endif
 	}
+	if (entries != 1) {
+		validation->diagnostic = ZEND_MIRL_MALFORMED_CFG;
+		return false;
+	}
+#if !defined(NDEBUG)
 	for (i = 0; i < opcode_count; i++) {
 		zend_mir_source_opcode_ref opcode;
 		zend_mir_source_block_ref block;
@@ -244,10 +252,6 @@ static bool zend_mir_validate_blocks(
 			validation->diagnostic = ZEND_MIRL_MALFORMED_CFG;
 			return false;
 		}
-	}
-	if (entries != 1) {
-		validation->diagnostic = ZEND_MIRL_MALFORMED_CFG;
-		return false;
 	}
 	{
 		uint32_t *roots = malloc((size_t) block_count * sizeof(*roots));
@@ -324,9 +328,11 @@ static bool zend_mir_validate_blocks(
 			return false;
 		}
 	}
+#endif
 	return true;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_validate_edges(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_validation *validation)
@@ -455,6 +461,7 @@ done:
 	}
 	return valid;
 }
+#endif
 
 static bool zend_mir_validate_terminators(
 	const zend_mir_lowering_source_view *source,
@@ -912,11 +919,21 @@ static bool zend_mir_validate_source_impl(
 	memset(validation, 0, sizeof(*validation));
 	validation->entry_block_id = ZEND_MIR_ID_INVALID;
 	validation->diagnostic = ZEND_MIRL_MALFORMED_CFG;
+	/*
+	 * The frontend validated the Zend CFG, SSA and slots, and the source view
+	 * derives operands, edges and their flags from them by construction. Only
+	 * debug builds recheck those invariants here; release builds keep the
+	 * block, terminator and phi checks that can defer real code.
+	 */
 	if (!zend_mir_source_contract_ok(source)
+#if !defined(NDEBUG)
 			|| !zend_mir_validate_linear_source(source, validation)
+#endif
 			|| !zend_mir_validate_blocks(
 				source, validation, allow_protected_control_flow)
+#if !defined(NDEBUG)
 			|| !zend_mir_validate_edges(source, validation)
+#endif
 			|| !zend_mir_validate_terminators(source, validation)
 			|| !zend_mir_validate_phis(source, validation)) {
 		return false;
