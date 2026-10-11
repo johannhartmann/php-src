@@ -43,8 +43,8 @@ typedef struct _zend_dtrace_user_frame {
 ZEND_API zend_op_array *dtrace_compile_file(zend_file_handle *file_handle, int type);
 ZEND_API void dtrace_execute_ex(zend_execute_data *execute_data);
 ZEND_API void dtrace_execute_internal(zend_execute_data *execute_data, zval *return_value);
-ZEND_API void zend_dtrace_user_frame_begin(
-	zend_execute_data *execute_data, zend_dtrace_user_frame *frame);
+/* Fires the entry probes for EG(current_execute_data). */
+ZEND_API void zend_dtrace_user_frame_begin(zend_dtrace_user_frame *frame);
 ZEND_API void zend_dtrace_user_frame_end(
 	const zend_dtrace_user_frame *frame);
 #include <zend_dtrace_gen.h>

@@ -721,74 +721,17 @@ static void compute_protected_postnum(
 }
 /* }}} */
 
-/* Computes dominator tree using algorithm from "A Simple, Fast Dominance Algorithm" by
- * Cooper, Harvey and Kennedy. */
-ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, zend_cfg *cfg) /* {{{ */
+static void compute_protected_dominators(
+		zend_cfg *cfg, int *postnum, zend_cfg_postorder_frame *stack,
+		uint32_t j) /* {{{ */
 {
 	zend_basic_block *blocks = cfg->blocks;
 	uint32_t blocks_count = cfg->blocks_count;
-	uint32_t j;
 	int changed;
-
-	if (cfg->blocks_count == 1) {
-		blocks[0].level = 0;
-		return;
-	}
-
-	ALLOCA_FLAG(use_heap)
 	ALLOCA_FLAG(component_use_heap)
-	ALLOCA_FLAG(stack_use_heap)
-	int *postnum = do_alloca(sizeof(int) * cfg->blocks_count, use_heap);
-	zend_cfg_postorder_frame *stack = do_alloca(
-		sizeof(zend_cfg_postorder_frame) * cfg->blocks_count, stack_use_heap);
-	memset(postnum, -1, sizeof(int) * cfg->blocks_count);
-	j = 0;
-	compute_postnum(postnum, &j, cfg, 0, stack);
-
-	/* FIXME: move declarations */
-	blocks[0].idom = 0;
-	do {
-		changed = 0;
-		/* Iterating in RPO here would converge faster */
-		for (j = 1; j < blocks_count; j++) {
-			int idom = -1;
-
-			if ((blocks[j].flags & ZEND_BB_REACHABLE) == 0) {
-				continue;
-			}
-			for (uint32_t k = 0; k < blocks[j].predecessors_count; k++) {
-				int pred = cfg->predecessors[blocks[j].predecessor_offset + k];
-
-				if (blocks[pred].idom >= 0) {
-					if (idom < 0) {
-						idom = pred;
-					} else {
-						while (idom != pred) {
-							while (postnum[pred] < postnum[idom]) pred = blocks[pred].idom;
-							while (postnum[idom] < postnum[pred]) idom = blocks[idom].idom;
-						}
-					}
-				}
-			}
-
-			if (idom >= 0 && blocks[j].idom != idom) {
-				blocks[j].idom = idom;
-				changed = 1;
-			}
-		}
-	} while (changed);
-	blocks[0].idom = -1;
-
-	/*
-	 * Catch entries and their control flow are reachable at runtime, but the
-	 * CFG intentionally has no synthetic exception predecessor from a try
-	 * block. Compute a dominator forest for those disconnected components as
-	 * well. This keeps short-circuit temporaries and array-construction values
-	 * live across branches inside a catch/finally region. Components stop when
-	 * they join a block already dominated from the ordinary entry.
-	 */
 	bool *component = do_alloca(
 		sizeof(bool) * cfg->blocks_count, component_use_heap);
+
 	for (uint32_t root = 1; root < blocks_count; root++) {
 		if ((blocks[root].flags & ZEND_BB_REACHABLE) == 0
 				|| blocks[root].idom >= 0
@@ -836,6 +779,79 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 		} while (changed);
 		blocks[root].idom = -1;
 	}
+	free_alloca(component, component_use_heap);
+}
+/* }}} */
+
+/* Computes dominator tree using algorithm from "A Simple, Fast Dominance Algorithm" by
+ * Cooper, Harvey and Kennedy. */
+ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, zend_cfg *cfg) /* {{{ */
+{
+	zend_basic_block *blocks = cfg->blocks;
+	uint32_t blocks_count = cfg->blocks_count;
+	uint32_t j;
+	int changed;
+
+	if (cfg->blocks_count == 1) {
+		blocks[0].level = 0;
+		return;
+	}
+
+	ALLOCA_FLAG(use_heap)
+	ALLOCA_FLAG(stack_use_heap)
+	int *postnum = do_alloca(sizeof(int) * cfg->blocks_count, use_heap);
+	zend_cfg_postorder_frame *stack = do_alloca(
+		sizeof(zend_cfg_postorder_frame) * cfg->blocks_count, stack_use_heap);
+	memset(postnum, -1, sizeof(int) * cfg->blocks_count);
+	j = 0;
+	compute_postnum(postnum, &j, cfg, 0, stack);
+
+	/* FIXME: move declarations */
+	blocks[0].idom = 0;
+	do {
+		changed = 0;
+		/* Iterating in RPO here would converge faster */
+		for (j = 1; j < blocks_count; j++) {
+			int idom = -1;
+
+			if ((blocks[j].flags & ZEND_BB_REACHABLE) == 0) {
+				continue;
+			}
+			for (uint32_t k = 0; k < blocks[j].predecessors_count; k++) {
+				int pred = cfg->predecessors[blocks[j].predecessor_offset + k];
+
+				if (blocks[pred].idom >= 0) {
+					if (idom < 0) {
+						idom = pred;
+					} else {
+						while (idom != pred) {
+							while (postnum[pred] < postnum[idom]) pred = blocks[pred].idom;
+							while (postnum[idom] < postnum[pred]) idom = blocks[idom].idom;
+						}
+					}
+				}
+			}
+
+			if (idom >= 0 && blocks[j].idom != idom) {
+				blocks[j].idom = idom;
+				changed = 1;
+			}
+		}
+	} while (changed);
+	blocks[0].idom = -1;
+
+	/*
+	 * Catch entries and their control flow are reachable at runtime, but the
+	 * CFG intentionally has no synthetic exception predecessor from a try
+	 * block. An SSA over protected regions (ZEND_SSA_PROTECTED_REGIONS)
+	 * computes a dominator forest for those disconnected components as well.
+	 * This keeps short-circuit temporaries and array-construction values
+	 * live across branches inside a catch/finally region. Components stop
+	 * when they join a block already dominated from the ordinary entry.
+	 */
+	if (cfg->flags & ZEND_SSA_PROTECTED_REGIONS) {
+		compute_protected_dominators(cfg, postnum, stack, j);
+	}
 
 	for (j = 1; j < blocks_count; j++) {
 		if ((blocks[j].flags & ZEND_BB_REACHABLE) == 0) {
@@ -875,7 +891,6 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 		blocks[j].level = level;
 	}
 
-	free_alloca(component, component_use_heap);
 	free_alloca(postnum, use_heap);
 	free_alloca(stack, stack_use_heap);
 }

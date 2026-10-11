@@ -548,8 +548,7 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 	zend_try {
 #ifdef HAVE_DTRACE
 		if (zend_dtrace_enabled) {
-			zend_dtrace_user_frame_begin(
-				execute_data, &state->dtrace_frame);
+			zend_dtrace_user_frame_begin(&state->dtrace_frame);
 			state->dtrace_frame_started = true;
 		}
 #endif

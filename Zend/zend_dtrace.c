@@ -52,10 +52,8 @@ ZEND_API zend_op_array *dtrace_compile_file(zend_file_handle *file_handle, int t
 	return res;
 }
 
-ZEND_API void zend_dtrace_user_frame_begin(
-	zend_execute_data *execute_data, zend_dtrace_user_frame *frame)
+ZEND_API void zend_dtrace_user_frame_begin(zend_dtrace_user_frame *frame)
 {
-	(void) execute_data;
 	memset(frame, 0, sizeof(*frame));
 
 	/* we need filename and lineno for both execute and function probes */
@@ -107,7 +105,7 @@ ZEND_API void dtrace_execute_ex(zend_execute_data *execute_data)
 {
 	zend_dtrace_user_frame frame;
 
-	zend_dtrace_user_frame_begin(execute_data, &frame);
+	zend_dtrace_user_frame_begin(&frame);
 	execute_ex(execute_data);
 	zend_dtrace_user_frame_end(&frame);
 }

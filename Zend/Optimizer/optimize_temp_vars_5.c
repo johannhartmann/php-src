@@ -38,6 +38,7 @@
 		max = i;							\
 	}
 
+#ifdef HAVE_NATIVE_ENGINE
 static bool zend_temp_vars_is_call_end(uint8_t opcode)
 {
 	switch (opcode) {
@@ -90,6 +91,7 @@ static bool zend_temp_vars_is_send(uint8_t opcode)
 			return false;
 	}
 }
+#endif
 
 void zend_optimize_temporary_variables(zend_op_array *op_array, zend_optimizer_ctx *ctx)
 {
@@ -221,6 +223,7 @@ void zend_optimize_temporary_variables(zend_op_array *op_array, zend_optimizer_c
 			}
 		}
 
+#ifdef HAVE_NATIVE_ENGINE
 		/* A temporary sent to a call stays in its slot until the call's DO,
 		 * so that code which transfers arguments at DO (the native engine's
 		 * direct calls) still finds the SEND-time value. */
@@ -247,6 +250,7 @@ void zend_optimize_temporary_variables(zend_op_array *op_array, zend_optimizer_c
 				}
 			}
 		}
+#endif
 
 		opline--;
 	}

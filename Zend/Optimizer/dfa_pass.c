@@ -65,6 +65,9 @@ static zend_result zend_dfa_analyze_op_array_impl(
 	}
 
 	/* Compute Dominators Tree */
+	if (allow_protected_regions) {
+		ssa->cfg.flags |= ZEND_SSA_PROTECTED_REGIONS;
+	}
 	zend_cfg_compute_dominators_tree(op_array, &ssa->cfg);
 
 	/* Identify reducible and irreducible loops */
@@ -112,9 +115,6 @@ static zend_result zend_dfa_analyze_op_array_impl(
 		 */
 		ssa->var_info = zend_arena_calloc(
 			&ctx->arena, ssa->vars_count, sizeof(zend_ssa_var_info));
-		if (ssa->vars_count != 0 && ssa->var_info == NULL) {
-			return FAILURE;
-		}
 		for (i = 0; i < ssa->vars_count; i++) {
 			ssa->var_info[i].type =
 				MAY_BE_UNDEF | MAY_BE_RC1 | MAY_BE_RCN | MAY_BE_REF
@@ -143,12 +143,6 @@ zend_result zend_dfa_analyze_op_array(
 		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
 {
 	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, false, false);
-}
-
-zend_result zend_dfa_analyze_op_array_with_protected_regions(
-		zend_op_array *op_array, zend_optimizer_ctx *ctx, zend_ssa *ssa)
-{
-	return zend_dfa_analyze_op_array_impl(op_array, ctx, ssa, true, false);
 }
 
 zend_result zend_dfa_analyze_op_array_with_dynamic_bindings(
