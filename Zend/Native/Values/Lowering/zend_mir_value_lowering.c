@@ -1737,6 +1737,21 @@ bool zend_mir_emit_executable_values(
 			machine_defined_values[value_index] = 1;
 		}
 	}
+	/* The call instructions join the table when the value operations are
+	 * composed; their results are machine-defined already. */
+	if (module->pending_calls.pending) {
+		for (index = 0; index < module->pending_calls.count; index++) {
+			const zend_mir_instruction_record *call =
+				&module->pending_calls.instructions[index].record;
+			uint32_t value_index;
+
+			if (zend_mir_id_is_valid(call->result_id)
+					&& zend_mir_module_find_value(
+						module, call->result_id, &value_index)) {
+				machine_defined_values[value_index] = 1;
+			}
+		}
+	}
 	for (index = 0; index < view->constant_count(view->context); index++) {
 		zend_mir_constant_record constant;
 		uint32_t value_index;

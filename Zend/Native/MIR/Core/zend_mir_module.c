@@ -648,6 +648,11 @@ static bool zend_mir_add_instruction(void *context,
 		return zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
 			"invalid instruction arguments");
 	}
+	/* An instruction added after the call model follows its calls. */
+	if (module->pending_calls.pending
+			&& !zend_mir_module_compose_instructions(module, NULL, 0, NULL)) {
+		return false;
+	}
 	block = zend_mir_find_block(module, record->block_id);
 	if (block == NULL || !zend_mir_function_is_open(module, block->function_id)
 			|| !zend_mir_opcode_is_valid(record->opcode)
@@ -1357,15 +1362,13 @@ static void zend_mir_core_init_frame_state(
 	frame->canonical = true;
 }
 
-static bool zend_mir_core_append_call_instruction(
-	zend_mir_module *module, zend_mir_core_instruction *instructions,
-	uint32_t *instruction_count, uint32_t site_index,
-	zend_mir_block_id block_id)
+/* Fills the call instruction of a site; its id is assigned on composition. */
+static bool zend_mir_core_build_call_instruction(
+	zend_mir_module *module, zend_mir_core_instruction *instruction,
+	uint32_t site_index, zend_mir_block_id block_id)
 {
 	zend_mir_core_call_staging *staging = &module->call_staging;
 	zend_mir_call_site_ref *site = &staging->sites[site_index];
-	zend_mir_core_instruction *instruction =
-		&instructions[*instruction_count];
 	zend_mir_core_value *values;
 	zend_mir_value_id *operands = NULL;
 	uint32_t result_index;
@@ -1397,7 +1400,7 @@ static bool zend_mir_core_append_call_instruction(
 		}
 	}
 	memset(instruction, 0, sizeof(*instruction));
-	instruction->record.id = *instruction_count;
+	instruction->record.id = ZEND_MIR_ID_INVALID;
 	instruction->record.block_id = block_id;
 	instruction->record.opcode = staging->targets[site->target_id].kind
 		== ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL
@@ -1421,10 +1424,7 @@ static bool zend_mir_core_append_call_instruction(
 	}
 	instruction->record.frame_state_id =
 		site->caller_frame.frame_state_id;
-	/*
-	 * During staging, instruction_id carries the source DO opline. It is
-	 * replaced below with the persistent MIR instruction ID.
-	 */
+	/* During staging, instruction_id carries the source DO opline. */
 	instruction->record.source_position_id = site->instruction_id;
 	instruction->record.effects = site->effects;
 	instruction->record.reads = site->reads;
@@ -1438,8 +1438,6 @@ static bool zend_mir_core_append_call_instruction(
 	instruction->operands = operands;
 	instruction->operand_count = operands != NULL ? site->arguments.count : 0;
 	instruction->operand_capacity = instruction->operand_count;
-	site->instruction_id = *instruction_count;
-	(*instruction_count)++;
 	return true;
 }
 
@@ -1448,13 +1446,6 @@ typedef struct _zend_mir_core_ordered_call {
 	zend_mir_source_position_id source_position;
 	uint32_t site_index;
 } zend_mir_core_ordered_call;
-
-typedef struct _zend_mir_core_call_block_range {
-	zend_mir_block_id block_id;
-	uint32_t begin;
-	uint32_t end;
-	uint32_t cursor;
-} zend_mir_core_call_block_range;
 
 static int zend_mir_core_compare_ordered_calls(const void *left_ptr,
 	const void *right_ptr)
@@ -1474,75 +1465,380 @@ static int zend_mir_core_compare_ordered_calls(const void *left_ptr,
 	return 0;
 }
 
-static zend_mir_core_call_block_range *zend_mir_core_find_call_block_range(
-	zend_mir_core_call_block_range *ranges, uint32_t range_count,
-	zend_mir_block_id block_id)
+/*
+ * Places a call instruction before the first instruction of its block whose
+ * source position follows the call's DO opline. Calls of one block stay in
+ * (source position, site) order; zend_mir_module_compose_instructions places
+ * them, together with the executable value operations, in one pass.
+ */
+static bool zend_mir_core_stage_call_instructions(zend_mir_module *module)
 {
-	uint32_t begin = 0;
-	uint32_t end = range_count;
+	zend_mir_core_call_staging *staging = &module->call_staging;
+	zend_mir_core_pending_calls *pending = &module->pending_calls;
+	zend_mir_core_ordered_call *ordered;
+	uint32_t index;
 
-	while (begin < end) {
-		const uint32_t middle = begin + (end - begin) / 2;
-		if (ranges[middle].block_id < block_id) {
-			begin = middle + 1;
-		} else {
-			end = middle;
-		}
+	ordered = malloc((size_t) staging->site_count * sizeof(*ordered));
+	pending->instructions = zend_mir_arena_allocate(&module->arena,
+		(size_t) staging->site_count * sizeof(*pending->instructions),
+		alignof(zend_mir_core_instruction));
+	pending->sites = zend_mir_arena_allocate(&module->arena,
+		(size_t) staging->site_count * sizeof(*pending->sites),
+		alignof(uint32_t));
+	if (ordered == NULL || pending->instructions == NULL
+			|| pending->sites == NULL) {
+		free(ordered);
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"call instruction publication failed");
 	}
-	return begin < range_count && ranges[begin].block_id == block_id
-		? &ranges[begin] : NULL;
-}
-
-static bool zend_mir_core_append_calls_before(
-	zend_mir_module *module, zend_mir_core_instruction *instructions,
-	uint32_t *instruction_count, zend_mir_block_id block_id,
-	zend_mir_source_position_id source_position, bool flush_block,
-	const zend_mir_core_ordered_call *ordered_calls,
-	zend_mir_core_call_block_range *block_ranges, uint32_t block_range_count,
-	bool *inserted)
-{
-	zend_mir_core_call_block_range *range =
-		zend_mir_core_find_call_block_range(
-			block_ranges, block_range_count, block_id);
-
-	if (range == NULL) {
-		return true;
+	for (index = 0; index < staging->site_count; index++) {
+		zend_mir_block_id block_id;
+		(void) zend_mir_core_call_site_block(staging, index, &block_id);
+		ordered[index].block_id = block_id;
+		ordered[index].source_position = staging->sites[index].instruction_id;
+		ordered[index].site_index = index;
 	}
-	while (range->cursor < range->end) {
-		const zend_mir_core_ordered_call *call =
-			&ordered_calls[range->cursor];
-		if (!flush_block && call->source_position > source_position) {
-			break;
-		}
-		if (!zend_mir_core_append_call_instruction(
-				module, instructions, instruction_count,
-				call->site_index, block_id)) {
+	qsort(ordered, staging->site_count, sizeof(*ordered),
+		zend_mir_core_compare_ordered_calls);
+	for (index = 0; index < staging->site_count; index++) {
+		if (!zend_mir_core_build_call_instruction(module,
+				&pending->instructions[index], ordered[index].site_index,
+				ordered[index].block_id)) {
+			free(ordered);
 			return false;
 		}
-		inserted[call->site_index] = true;
-		range->cursor++;
+		pending->sites[index] = ordered[index].site_index;
 	}
+	free(ordered);
+	pending->count = staging->site_count;
+	pending->pending = true;
 	return true;
+}
+
+/* Emits the value operations of a block up to a source position. */
+static bool zend_mir_core_flush_value_operations(
+	zend_mir_module *module, zend_mir_core_instruction *instructions,
+	uint32_t *next_index, zend_mir_executable_value_ref *operations,
+	uint32_t *block_operation_head, const uint32_t *next_block_operation,
+	zend_mir_block_id block_id, zend_mir_source_position_id source_position,
+	uint32_t *emitted_count, zend_mir_core_value_emitter emit)
+{
+	uint32_t operation_index = block_operation_head[block_id];
+
+	while (operation_index != ZEND_MIR_ID_INVALID) {
+		zend_mir_executable_value_ref *operation =
+			&operations[operation_index];
+
+		if (operation->source_position_id > source_position) {
+			break;
+		}
+		if (!emit(module, &instructions[*next_index], operation,
+				*next_index)) {
+			return false;
+		}
+		operation->id = *next_index;
+		(*emitted_count)++;
+		(*next_index)++;
+		operation_index = next_block_operation[operation_index];
+	}
+	block_operation_head[block_id] = operation_index;
+	return true;
+}
+
+bool zend_mir_module_compose_instructions(zend_mir_module *module,
+	zend_mir_executable_value_ref *operations, uint32_t operation_count,
+	zend_mir_core_value_emitter emit)
+{
+	zend_mir_core_pending_calls *pending = &module->pending_calls;
+	const uint32_t call_count = pending->pending ? pending->count : 0;
+	const uint32_t old_count = module->instructions.count;
+	const uint32_t block_count = module->blocks.count;
+	zend_mir_core_instruction *old_instructions;
+	zend_mir_core_instruction *new_instructions;
+	zend_mir_call_site_ref *call_sites;
+	uint32_t *attached_operation_by_instruction = NULL;
+	uint32_t *block_operation_head = NULL;
+	uint32_t *block_operation_tail = NULL;
+	uint32_t *next_block_operation = NULL;
+	uint8_t *block_has_terminator = NULL;
+	uint32_t *call_begin = NULL;
+	uint32_t *call_end = NULL;
+	bool *inserted = NULL;
+	size_t instruction_bytes;
+	uint32_t materialized_count = 0;
+	uint32_t emitted_count = 0;
+	uint32_t new_index = 0;
+	uint32_t total_count;
+	uint32_t index;
+	bool success = false;
+
+	if (call_count == 0 && operation_count == 0) {
+		pending->pending = false;
+		return true;
+	}
+	for (index = 0; index < operation_count; index++) {
+		if (!zend_mir_id_is_valid(operations[index].id)) {
+			materialized_count++;
+		}
+	}
+	if (old_count > UINT32_MAX - call_count
+			|| (operation_count != 0
+				&& (old_count + call_count > module->limits.instructions
+					|| materialized_count > module->limits.instructions
+						- old_count - call_count))) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"executable value instruction count overflow");
+	}
+	total_count = old_count + call_count + materialized_count;
+	if (!zend_mir_checked_multiply_size(
+			total_count, sizeof(*new_instructions), &instruction_bytes)) {
+		return zend_mir_module_fail(module,
+			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
+			"executable value composition size overflow");
+	}
+	new_instructions = zend_mir_arena_allocate(
+		&module->arena, instruction_bytes, alignof(zend_mir_core_instruction));
+	if (operation_count != 0) {
+		attached_operation_by_instruction = malloc(
+			(old_count == 0 ? 1 : (size_t) old_count)
+				* sizeof(*attached_operation_by_instruction));
+		block_operation_head = malloc(
+			(block_count == 0 ? 1 : (size_t) block_count)
+				* sizeof(*block_operation_head));
+		block_operation_tail = malloc(
+			(block_count == 0 ? 1 : (size_t) block_count)
+				* sizeof(*block_operation_tail));
+		next_block_operation = malloc(
+			(size_t) operation_count * sizeof(*next_block_operation));
+	}
+	block_has_terminator = calloc(block_count == 0 ? 1 : block_count,
+		sizeof(*block_has_terminator));
+	if (call_count != 0) {
+		call_begin = malloc(
+			(block_count == 0 ? 1 : (size_t) block_count) * sizeof(*call_begin));
+		call_end = malloc(
+			(block_count == 0 ? 1 : (size_t) block_count) * sizeof(*call_end));
+		/* By call site. */
+		inserted = calloc(call_count, sizeof(*inserted));
+	}
+	if ((total_count != 0 && new_instructions == NULL)
+			|| (operation_count != 0
+				&& (attached_operation_by_instruction == NULL
+					|| block_operation_head == NULL
+					|| block_operation_tail == NULL
+					|| next_block_operation == NULL))
+			|| block_has_terminator == NULL
+			|| (call_count != 0
+				&& (call_begin == NULL || call_end == NULL
+					|| inserted == NULL))) {
+		zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
+			"instruction composition allocation failed");
+		goto done;
+	}
+	if (operation_count != 0) {
+		memset(attached_operation_by_instruction, 0xff,
+			(size_t) old_count * sizeof(*attached_operation_by_instruction));
+		memset(block_operation_head, 0xff,
+			(size_t) block_count * sizeof(*block_operation_head));
+		memset(block_operation_tail, 0xff,
+			(size_t) block_count * sizeof(*block_operation_tail));
+		memset(next_block_operation, 0xff,
+			(size_t) operation_count * sizeof(*next_block_operation));
+	}
+	for (index = 0; index < operation_count; index++) {
+		const zend_mir_executable_value_ref *operation = &operations[index];
+
+		if (operation->block_id >= block_count) {
+			zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+				"executable value operation references an unknown block");
+			goto done;
+		}
+		if (zend_mir_id_is_valid(operation->id)) {
+			if (operation->id >= old_count
+					|| attached_operation_by_instruction[operation->id]
+						!= ZEND_MIR_ID_INVALID) {
+				zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_ID,
+					"executable value operation references an invalid instruction");
+				goto done;
+			}
+			attached_operation_by_instruction[operation->id] = index;
+			continue;
+		}
+		if (block_operation_tail[operation->block_id] == ZEND_MIR_ID_INVALID) {
+			block_operation_head[operation->block_id] = index;
+		} else {
+			next_block_operation[block_operation_tail[operation->block_id]] =
+				index;
+		}
+		block_operation_tail[operation->block_id] = index;
+	}
+	if (call_count != 0) {
+		/* The pending calls are grouped by block in block order. */
+		memset(call_begin, 0xff, (size_t) block_count * sizeof(*call_begin));
+		for (index = 0; index < call_count; index++) {
+			const zend_mir_block_id block_id =
+				pending->instructions[index].record.block_id;
+
+			if (call_begin[block_id] == ZEND_MIR_ID_INVALID) {
+				call_begin[block_id] = index;
+			}
+			call_end[block_id] = index + 1;
+		}
+	}
+	call_sites = ZEND_MIR_CORE_ITEMS(module, call_sites, zend_mir_call_site_ref);
+	old_instructions = ZEND_MIR_CORE_ITEMS(
+		module, instructions, zend_mir_core_instruction);
+
+	/*
+	 * One pass places both streams where splicing them one after the other
+	 * would. A call goes before the first instruction of its block that is a
+	 * terminator or has a later source position; calls a block never reaches
+	 * that way follow the table in the order of their first site. A value
+	 * operation goes before the first instruction of its block other than a
+	 * PHI or FINALLY_ENTER, calls included, that is a terminator or has a
+	 * later source position; the rest follow every instruction. CFG lowering
+	 * emits every block's PHIs before the block bodies, so the table is not
+	 * block-sorted and each block keeps its own cursors.
+	 */
+#define ZEND_MIR_PLACE_CALL(position) \
+	do { \
+		zend_mir_core_instruction *call = &pending->instructions[position]; \
+		const uint32_t site = pending->sites[position]; \
+		if (operation_count != 0 \
+				&& !zend_mir_core_flush_value_operations(module, \
+					new_instructions, &new_index, operations, \
+					block_operation_head, next_block_operation, \
+					call->record.block_id, call->record.source_position_id, \
+					&emitted_count, emit)) { \
+			goto done; \
+		} \
+		new_instructions[new_index] = *call; \
+		new_instructions[new_index].record.id = new_index; \
+		module->call_staging.sites[site].instruction_id = new_index; \
+		call_sites[site].instruction_id = new_index; \
+		inserted[site] = true; \
+		new_index++; \
+	} while (0)
+
+	for (index = 0; index < old_count; index++) {
+		const zend_mir_instruction_record *old = &old_instructions[index].record;
+		const bool terminator = zend_mir_opcode_is_terminator(old->opcode);
+		uint32_t attached_operation;
+
+		if (call_count != 0
+				&& (terminator || zend_mir_id_is_valid(old->source_position_id))
+				&& call_begin[old->block_id] != ZEND_MIR_ID_INVALID) {
+			while (call_begin[old->block_id] < call_end[old->block_id]) {
+				const uint32_t position = call_begin[old->block_id];
+
+				if (!terminator
+						&& pending->instructions[position]
+							.record.source_position_id
+							> old->source_position_id) {
+					break;
+				}
+				ZEND_MIR_PLACE_CALL(position);
+				call_begin[old->block_id]++;
+			}
+		}
+		if (operation_count != 0
+				&& old->opcode != ZEND_MIR_OPCODE_PHI
+				&& old->opcode != ZEND_MIR_OPCODE_FINALLY_ENTER
+				&& (zend_mir_id_is_valid(old->source_position_id)
+					|| terminator)
+				&& !zend_mir_core_flush_value_operations(module,
+					new_instructions, &new_index, operations,
+					block_operation_head, next_block_operation,
+					old->block_id, old->source_position_id,
+					&emitted_count, emit)) {
+			goto done;
+		}
+		if (terminator) {
+			block_has_terminator[old->block_id] = 1;
+		}
+		new_instructions[new_index] = old_instructions[index];
+		new_instructions[new_index].record.id = new_index;
+		if (operation_count != 0) {
+			attached_operation = attached_operation_by_instruction[index];
+			if (attached_operation != ZEND_MIR_ID_INVALID) {
+				operations[attached_operation].id = new_index;
+				emitted_count++;
+			}
+		}
+		new_index++;
+	}
+	for (index = 0; index < call_count; index++) {
+		zend_mir_block_id block_id;
+
+		if (inserted[index]) {
+			continue;
+		}
+		(void) zend_mir_core_call_site_block(
+			&module->call_staging, index, &block_id);
+		while (call_begin[block_id] < call_end[block_id]) {
+			ZEND_MIR_PLACE_CALL(call_begin[block_id]);
+			call_begin[block_id]++;
+		}
+	}
+#undef ZEND_MIR_PLACE_CALL
+	/*
+	 * Suspendable functions may end a reachable block at a source-level
+	 * suspension without a conventional MIR terminator. Such a block still
+	 * owns executable operations (GENERATOR_CREATE/YIELD/RETURN), and their
+	 * only correct insertion point is after the block's existing instruction
+	 * stream. An operation after a block's terminator would be malformed.
+	 */
+	for (index = 0; index < operation_count; index++) {
+		zend_mir_executable_value_ref *operation = &operations[index];
+
+		if (zend_mir_id_is_valid(operation->id)) {
+			continue;
+		}
+		if (block_has_terminator[operation->block_id]
+				|| !emit(module, &new_instructions[new_index],
+					operation, new_index)) {
+			zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+				"executable value operation follows an owning block terminator");
+			goto done;
+		}
+		operation->id = new_index;
+		emitted_count++;
+		new_index++;
+	}
+	if (emitted_count != operation_count || new_index != total_count) {
+		zend_mir_module_fail(module, ZEND_MIR_DIAGNOSTIC_INVALID_CFG,
+			"executable value operation has no ordered owning block instruction");
+		goto done;
+	}
+	module->instructions.items = new_instructions;
+	module->instructions.count = total_count;
+	module->instructions.capacity = total_count;
+	pending->pending = false;
+	success = true;
+
+done:
+	free(inserted);
+	free(call_end);
+	free(call_begin);
+	free(block_has_terminator);
+	free(next_block_operation);
+	free(block_operation_tail);
+	free(block_operation_head);
+	free(attached_operation_by_instruction);
+	return success;
 }
 
 static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 {
 	zend_mir_core_call_staging *staging = &module->call_staging;
-	zend_mir_core_instruction *old_instructions;
-	zend_mir_core_instruction *new_instructions;
 	zend_mir_frame_slot_ref *slots;
 	zend_mir_frame_state_ref *frames;
-	zend_mir_core_ordered_call *ordered_calls;
-	zend_mir_core_call_block_range *call_block_ranges;
-	bool *inserted;
-	size_t new_instruction_bytes;
 	uint32_t total_slots = module->frame_slots.count;
 	uint32_t total_call_operands = 0;
 	uint32_t total_frames;
-	uint32_t total_instructions;
 	uint32_t next_slot_id = 0;
-	uint32_t new_instruction_count = 0;
-	uint32_t call_block_range_count = 0;
 	uint32_t site_index;
 	uint32_t index;
 
@@ -1618,19 +1914,9 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		}
 	}
 	total_frames = module->frame_states.count + staging->site_count;
-	if (module->instructions.count > UINT32_MAX - staging->site_count) {
-		return zend_mir_module_fail(module,
-			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
-			"call instruction count overflow");
-	}
-	total_instructions = module->instructions.count
-		+ staging->site_count;
 	if (module->operand_count > module->limits.operands
 			|| total_call_operands
 				> module->limits.operands - module->operand_count
-			|| !zend_mir_checked_multiply_size(
-				total_instructions, sizeof(*new_instructions),
-				&new_instruction_bytes)
 			|| !zend_mir_core_reserve_table(
 				module, &module->frame_slots, total_slots,
 				sizeof(zend_mir_frame_slot_ref),
@@ -1658,51 +1944,6 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 				alignof(zend_mir_call_site_ref), UINT32_MAX)) {
 		return false;
 	}
-	new_instructions = zend_mir_arena_allocate(
-		&module->arena, new_instruction_bytes,
-		alignof(zend_mir_core_instruction));
-	inserted = calloc(staging->site_count, sizeof(*inserted));
-	ordered_calls = malloc(
-		(size_t) staging->site_count * sizeof(*ordered_calls));
-	call_block_ranges = malloc(
-		(size_t) staging->site_count * sizeof(*call_block_ranges));
-	if (new_instructions == NULL || inserted == NULL
-			|| ordered_calls == NULL || call_block_ranges == NULL) {
-		free(inserted);
-		free(ordered_calls);
-		free(call_block_ranges);
-		return zend_mir_module_fail(module,
-			ZEND_MIR_DIAGNOSTIC_ALLOCATION_FAILED,
-			"call instruction publication failed");
-	}
-	for (site_index = 0; site_index < staging->site_count; site_index++) {
-		zend_mir_block_id block_id;
-		(void) zend_mir_core_call_site_block(
-			staging, site_index, &block_id);
-		ordered_calls[site_index].block_id = block_id;
-		ordered_calls[site_index].source_position =
-			staging->sites[site_index].instruction_id;
-		ordered_calls[site_index].site_index = site_index;
-	}
-	qsort(ordered_calls, staging->site_count, sizeof(*ordered_calls),
-		zend_mir_core_compare_ordered_calls);
-	for (site_index = 0; site_index < staging->site_count; site_index++) {
-		if (call_block_range_count == 0
-				|| call_block_ranges[call_block_range_count - 1].block_id
-					!= ordered_calls[site_index].block_id) {
-			zend_mir_core_call_block_range *range =
-				&call_block_ranges[call_block_range_count++];
-			range->block_id = ordered_calls[site_index].block_id;
-			range->begin = site_index;
-			range->end = site_index + 1;
-			range->cursor = site_index;
-		} else {
-			call_block_ranges[call_block_range_count - 1].end =
-				site_index + 1;
-		}
-	}
-	old_instructions = ZEND_MIR_CORE_ITEMS(
-		module, instructions, zend_mir_core_instruction);
 	slots = ZEND_MIR_CORE_ITEMS(
 		module, frame_slots, zend_mir_frame_slot_ref);
 	frames = ZEND_MIR_CORE_ITEMS(
@@ -1710,9 +1951,6 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	for (index = 0; index < module->frame_slots.count; index++) {
 		if (slots[index].slot_id >= next_slot_id) {
 			if (slots[index].slot_id == ZEND_MIR_ID_MAX) {
-				free(inserted);
-				free(ordered_calls);
-				free(call_block_ranges);
 				return zend_mir_module_fail(module,
 					ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 					"call frame slot ID overflow");
@@ -1722,9 +1960,6 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 	}
 	if (total_slots - module->frame_slots.count
 			> (ZEND_MIR_ID_MAX - next_slot_id) + 1) {
-		free(inserted);
-		free(ordered_calls);
-		free(call_block_ranges);
 		return zend_mir_module_fail(module,
 			ZEND_MIR_DIAGNOSTIC_CAPACITY_EXCEEDED,
 			"call frame slot ID overflow");
@@ -1822,51 +2057,11 @@ static bool zend_mir_core_commit_call_model(zend_mir_module *module)
 		site->callee_entry_frame.pending_call_slot_id =
 			ZEND_MIR_ID_INVALID;
 	}
-	for (index = 0; index < module->instructions.count; index++) {
-		bool terminator = zend_mir_opcode_is_terminator(
-			old_instructions[index].record.opcode);
-		if ((terminator
-				|| zend_mir_id_is_valid(
-					old_instructions[index].record.source_position_id))
-				&& !zend_mir_core_append_calls_before(
-					module, new_instructions, &new_instruction_count,
-					old_instructions[index].record.block_id,
-					old_instructions[index].record.source_position_id,
-					terminator, ordered_calls, call_block_ranges,
-					call_block_range_count, inserted)) {
-			free(inserted);
-			free(ordered_calls);
-			free(call_block_ranges);
-			return false;
-		}
-		new_instructions[new_instruction_count] = old_instructions[index];
-		new_instructions[new_instruction_count].record.id =
-			new_instruction_count;
-		new_instruction_count++;
+	/* The call instructions are placed when the instruction table is
+	 * composed: with the value operations, or at finalization. */
+	if (!zend_mir_core_stage_call_instructions(module)) {
+		return false;
 	}
-	for (site_index = 0; site_index < staging->site_count; site_index++) {
-		zend_mir_block_id block_id;
-		if (!inserted[site_index]) {
-			(void) zend_mir_core_call_site_block(
-				staging, site_index, &block_id);
-			if (!zend_mir_core_append_calls_before(
-					module, new_instructions, &new_instruction_count,
-					block_id, ZEND_MIR_ID_INVALID, true,
-					ordered_calls, call_block_ranges,
-					call_block_range_count, inserted)) {
-				free(inserted);
-				free(ordered_calls);
-				free(call_block_ranges);
-				return false;
-			}
-		}
-	}
-	free(inserted);
-	free(ordered_calls);
-	free(call_block_ranges);
-	module->instructions.items = new_instructions;
-	module->instructions.count = total_instructions;
-	module->instructions.capacity = total_instructions;
 	module->operand_count += total_call_operands;
 	if (staging->target_count != 0) {
 		memcpy(module->call_targets.items, staging->targets,
@@ -1974,7 +2169,10 @@ bool zend_mir_module_finalize(zend_mir_module *module)
 				"all functions must be sealed before finalization");
 		}
 	}
-	if (!zend_mir_module_prepare_edge_index(module)) {
+	if ((module->pending_calls.pending
+				&& !zend_mir_module_compose_instructions(
+					module, NULL, 0, NULL))
+			|| !zend_mir_module_prepare_edge_index(module)) {
 		return false;
 	}
 	module->state = ZEND_MIR_MODULE_FINALIZED;

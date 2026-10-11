@@ -64,6 +64,17 @@ typedef struct _zend_mir_core_call_staging {
 	bool committed;
 } zend_mir_core_call_staging;
 
+/*
+ * Call instructions of a committed call model that are not yet in the
+ * instruction table, ordered by block, DO opline and site.
+ */
+typedef struct _zend_mir_core_pending_calls {
+	zend_mir_core_instruction *instructions;
+	uint32_t *sites;
+	uint32_t count;
+	bool pending;
+} zend_mir_core_pending_calls;
+
 typedef struct _zend_mir_core_value_staging {
 	zend_mir_storage_ref *storages;
 	zend_mir_payload_ref *payloads;
@@ -133,6 +144,7 @@ struct _zend_mir_module {
 	zend_mir_core_table call_continuations;
 	zend_mir_core_table call_sites;
 	zend_mir_core_call_staging call_staging;
+	zend_mir_core_pending_calls pending_calls;
 	zend_mir_core_table value_storages;
 	zend_mir_core_table value_payloads;
 	zend_mir_core_table value_reference_cells;
@@ -190,6 +202,25 @@ zend_mir_call_mutator *zend_mir_module_get_call_mutator(
 const zend_mir_call_view *zend_mir_module_get_call_view(
 	const zend_mir_module *module);
 bool zend_mir_module_commit_empty_call_model(zend_mir_module *module);
+
+/* Fills target as the instruction of an executable value operation. */
+typedef bool (*zend_mir_core_value_emitter)(zend_mir_module *module,
+	zend_mir_core_instruction *target,
+	const zend_mir_executable_value_ref *operation,
+	zend_mir_instruction_id id);
+
+/*
+ * Places the pending call instructions and the executable value operations
+ * into the instruction table in one pass and renumbers it. An operation
+ * with a valid id is attached to that instruction of the table; the others
+ * become instructions of their own. Every operation receives its final
+ * instruction id, as does every call site. Until it runs, the instruction
+ * table holds no call instructions; finalization and add_instruction run
+ * it for the pending calls alone.
+ */
+bool zend_mir_module_compose_instructions(zend_mir_module *module,
+	zend_mir_executable_value_ref *operations, uint32_t operation_count,
+	zend_mir_core_value_emitter emit);
 static inline const zend_mir_call_view *
 zend_mir_module_call_view_from_view(const zend_mir_view *view)
 {
