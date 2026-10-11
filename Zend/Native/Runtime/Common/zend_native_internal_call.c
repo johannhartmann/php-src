@@ -827,11 +827,22 @@ static zval *zend_native_direct_internal_argument_target(
 		uint8_t auxiliary_type;
 		zval *name = zend_native_source_op2(
 			caller, argument, &auxiliary_type);
-		void *cache_slot[2] = {NULL, NULL};
+		void *local_cache_slot[2] = {NULL, NULL};
+		void **cache_slot = local_cache_slot;
 
 		if (name == NULL || auxiliary_type != IS_CONST
 				|| Z_TYPE_P(name) != IS_STRING) {
 			return NULL;
+		}
+		/* The SEND's run-time cache slot keeps the parameter offset, as
+		 * the VM's CACHE_ADDR(opline->result.num). */
+		if (caller->run_time_cache != NULL
+				&& argument->result_payload
+					<= caller->func->op_array.cache_size
+				&& 2 * sizeof(void *) <= caller->func->op_array.cache_size
+					- argument->result_payload) {
+			cache_slot = (void **) ((char *) caller->run_time_cache
+				+ argument->result_payload);
 		}
 		target = zend_handle_named_arg(
 			&call, Z_STR_P(name), argument_number, cache_slot);
@@ -879,9 +890,9 @@ zend_result zend_native_call_set_explicit_argument(
 	call = caller->call;
 	/*
 	 * A positional by-value SEND_VAL/SEND_VAR(_EX) of a defined CV, a plain
-	 * temporary or a literal to a parameter that takes no reference copies
-	 * or moves the value, as the general path below does, without decoding
-	 * the operand.
+	 * temporary or VAR (a call result) or a literal to a parameter that
+	 * takes no reference copies or moves the value, as the general path
+	 * below does, without decoding the operand.
 	 */
 	if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 			&& argument->auxiliary_operand.kind
@@ -921,7 +932,8 @@ zend_result zend_native_call_set_explicit_argument(
 							fast_target, fast_value);
 						return SUCCESS;
 					}
-				} else if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP) {
+				} else if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+						|| source->slot_kind == ZEND_MIR_SOURCE_SLOT_VAR) {
 					ZEND_ASSERT(source->index < op_array->T);
 					fast_value = ZEND_CALL_VAR_NUM(caller,
 						(uint32_t) op_array->last_var + source->index);
@@ -2062,7 +2074,8 @@ zend_native_direct_call_result zend_native_internal_call_direct(
 /*
  * zend_native_internal_call_direct() for a site whose descriptor the
  * compiler found plain (zend_native_internal_call_descriptor_plain()): only
- * what can change at run time is checked before the call.
+ * what can change at run time is checked before the call, and a failed
+ * check takes the general call, as the static checks would hold again.
  */
 zend_native_direct_call_result zend_native_internal_call_direct_plain(
 	zend_execute_data *caller,
@@ -2074,7 +2087,7 @@ zend_native_direct_call_result zend_native_internal_call_direct_plain(
 		return zend_native_internal_call_direct_execute(
 			caller, cell, descriptor);
 	}
-	return zend_native_internal_call_direct(caller, cell, descriptor);
+	return zend_native_internal_call_direct_general(caller, cell, descriptor);
 }
 
 static zend_never_inline zend_native_direct_call_result
@@ -2473,31 +2486,27 @@ zend_native_status zend_native_return_source_zval(
 	uint32_t source_opcode,
 	uint32_t extended_value)
 {
-	zend_mir_source_operand_ref operand;
-	bool mutable_value;
-	uint8_t operand_type;
+	const uint8_t operand_type = ZEND_NATIVE_OPERAND_TYPE(encoded_operand);
 	zval *source;
 	zval *source_slot;
 	zval *return_value;
 
-	if (execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| source_position >= execute_data->func->op_array.last
-			|| (source_opcode != ZEND_RETURN
-				&& source_opcode != ZEND_RETURN_BY_REF)) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	if (!zend_native_decode_source_operand(
-			execute_data, encoded_operand, &operand)) {
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	source_slot = zend_native_explicit_operand(
-		execute_data, &operand, true, &mutable_value, &operand_type);
-	if (source_slot == NULL
-			|| (operand_type != IS_CONST && operand_type != IS_CV
-				&& operand_type != IS_TMP_VAR
-				&& operand_type != IS_VAR)) {
-		return ZEND_NATIVE_EXCEPTION;
+	/* The compiler encodes the RETURN's operand from the executing op
+	 * array. */
+	ZEND_ASSERT(execute_data != NULL && execute_data->func != NULL
+		&& ZEND_USER_CODE(execute_data->func->type)
+		&& source_position < execute_data->func->op_array.last
+		&& (source_opcode == ZEND_RETURN
+			|| source_opcode == ZEND_RETURN_BY_REF)
+		&& (operand_type == IS_CONST || operand_type == IS_CV
+			|| operand_type == IS_TMP_VAR || operand_type == IS_VAR));
+	if (operand_type == IS_CONST) {
+		ZEND_ASSERT(ZEND_NATIVE_OPERAND_VALUE(encoded_operand)
+			< execute_data->func->op_array.last_literal);
+		source_slot = &execute_data->func->op_array.literals[
+			ZEND_NATIVE_OPERAND_VALUE(encoded_operand)];
+	} else {
+		source_slot = ZEND_NATIVE_OPERAND_VAR(execute_data, encoded_operand);
 	}
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position];
@@ -2583,11 +2592,9 @@ zend_native_status zend_native_return_source_zval(
 		return ZEND_NATIVE_RETURNED;
 	}
 	if (operand_type == IS_CV && Z_ISUNDEF_P(source)) {
-		if (operand.index >= execute_data->func->op_array.last_var) {
-			return ZEND_NATIVE_EXCEPTION;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[operand.index]));
+		zend_error_unchecked(E_WARNING, "Undefined variable $%S",
+			execute_data->func->op_array.vars[EX_VAR_TO_NUM(
+				ZEND_NATIVE_OPERAND_VALUE(encoded_operand))]);
 		if (UNEXPECTED(EG(exception) != NULL)) {
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -2814,9 +2821,18 @@ uint32_t zend_native_catch_explicit(
 		zend_throw_error(NULL, "Invalid native CATCH operands");
 		return ZEND_NATIVE_CATCH_EXCEPTION;
 	}
-	catch_ce = zend_fetch_class_by_name(
-		Z_STR_P(class_name), Z_STR_P(class_name + 1),
-		ZEND_FETCH_CLASS_NO_AUTOLOAD | ZEND_FETCH_CLASS_SILENT);
+	/* The class in the CATCH's run-time cache slot, as ZEND_CATCH keeps
+	 * it. */
+	catch_ce = execute_data->run_time_cache != NULL
+		? CACHED_PTR(extended_value & ~ZEND_LAST_CATCH) : NULL;
+	if (catch_ce == NULL) {
+		catch_ce = zend_fetch_class_by_name(
+			Z_STR_P(class_name), Z_STR_P(class_name + 1),
+			ZEND_FETCH_CLASS_NO_AUTOLOAD | ZEND_FETCH_CLASS_SILENT);
+		if (execute_data->run_time_cache != NULL) {
+			CACHE_PTR(extended_value & ~ZEND_LAST_CATCH, catch_ce);
+		}
+	}
 	exception_ce = EG(exception)->ce;
 	if (exception_ce != catch_ce
 			&& (catch_ce == NULL
@@ -2871,11 +2887,19 @@ zend_native_status zend_native_finally_enter(
 		return ZEND_NATIVE_BAILOUT;
 	}
 	op_array = &execute_data->func->op_array;
+	/* The normal entry needs no region: only an exception is kept in the
+	 * FAST_CALL variable. */
+	if (EG(exception) == NULL) {
+		ZEND_ASSERT(zend_native_finally_region(
+			op_array, finally_opline_index) != NULL);
+		execute_data->opline = &op_array->opcodes[finally_opline_index];
+		return ZEND_NATIVE_RETURNED;
+	}
 	region = zend_native_finally_region(op_array, finally_opline_index);
 	if (region == NULL) {
 		return ZEND_NATIVE_BAILOUT;
 	}
-	if (EG(exception) != NULL && zend_is_unwind_exit(EG(exception))) {
+	if (zend_is_unwind_exit(EG(exception))) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	throw_opline = execute_data->opline;
@@ -2883,8 +2907,7 @@ zend_native_status zend_native_finally_enter(
 			&& EG(opline_before_exception) != NULL) {
 		throw_opline = EG(opline_before_exception);
 	}
-	if (EG(exception) != NULL
-			&& throw_opline >= op_array->opcodes
+	if (throw_opline >= op_array->opcodes
 			&& throw_opline < op_array->opcodes + op_array->last
 			&& throw_opline != &op_array->opcodes[finally_opline_index]) {
 		zend_native_cleanup_unfinished_exception(execute_data,
