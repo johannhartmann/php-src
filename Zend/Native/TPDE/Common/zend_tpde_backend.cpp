@@ -8015,6 +8015,10 @@ bool initialize_plan(
 		}
 		return false;
 	};
+	bool interrupt_frames_read = false;
+	std::vector<zend_mir_frame_state_ref> interrupt_frames;
+	std::vector<zend_tpde_id_index_entry> interrupt_frame_index;
+	uint32_t interrupt_frame_index_capacity = 0;
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		zend_mir_instruction_record record;
 		if (!view->instruction_at(view->context, i, &record)
@@ -8919,22 +8923,43 @@ bool initialize_plan(
 		if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				&& (record.effects & ZEND_MIR_EFFECT_MASK(
 					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
-			zend_mir_frame_state_ref frame{};
-			bool found_frame = false;
-			for (uint32_t n = 0; n < view->frame_state_count(view->context); ++n) {
-				zend_mir_frame_state_ref candidate{};
-				if (!view->frame_state_at(view->context, n, &candidate)) {
-					zend_tpde_set_diagnostic(diag,
-						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-						"MIR frame-state table is unreadable");
-					return false;
-				}
-				if (candidate.id == record.frame_state_id) {
-					frame = candidate;
-					found_frame = true;
-					break;
+			if (!interrupt_frames_read) {
+				/* The frame states by ID, read once; the first of an ID. */
+				interrupt_frames_read = true;
+				const uint32_t frame_count =
+					view->frame_state_count(view->context);
+				interrupt_frames.resize(frame_count);
+				interrupt_frame_index_capacity =
+					frame_count == 0 ? 0 : id_index_capacity(frame_count);
+				interrupt_frame_index.assign(interrupt_frame_index_capacity,
+					{ZEND_MIR_ID_INVALID, 0});
+				for (uint32_t n = 0; n < frame_count; ++n) {
+					if (!view->frame_state_at(
+							view->context, n, &interrupt_frames[n])) {
+						zend_tpde_set_diagnostic(diag,
+							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+							"MIR frame-state table is unreadable");
+						return false;
+					}
+					if (zend_mir_id_is_valid(interrupt_frames[n].id)
+							&& id_index_find(interrupt_frame_index.data(),
+								interrupt_frame_index_capacity,
+								interrupt_frames[n].id) < 0) {
+						id_index_insert(interrupt_frame_index.data(),
+							interrupt_frame_index_capacity,
+							interrupt_frames[n].id, n);
+					}
 				}
 			}
+			const int32_t frame_position = zend_mir_id_is_valid(
+					record.frame_state_id)
+				? id_index_find(interrupt_frame_index.data(),
+					interrupt_frame_index_capacity, record.frame_state_id)
+				: -1;
+			const bool found_frame = frame_position >= 0;
+			const zend_mir_frame_state_ref frame = found_frame
+				? interrupt_frames[static_cast<uint32_t>(frame_position)]
+				: zend_mir_frame_state_ref{};
 			if (!found_frame || frame.function_id != plan->function.id) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
