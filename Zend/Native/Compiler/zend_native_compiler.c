@@ -526,8 +526,8 @@ static zend_native_compiler *zend_native_compiler_request_companion(
 		return NULL;
 	}
 	if (session->request_compiler != NULL) {
-		session->request_script.function_table = *EG(function_table);
-		session->request_script.class_table = *EG(class_table);
+		/* zend_native_compiler_compile_dynamic_component() refreshes its
+		 * borrowed tables. */
 		return session->request_compiler;
 	}
 	memset(&session->request_script, 0, sizeof(session->request_script));
@@ -575,8 +575,10 @@ static void zend_native_compiler_free(
 static zend_op_array *zend_native_compiler_find_source(
 	zend_native_compiler *compiler, const zend_op_array *op_array);
 
+#ifdef HAVE_NATIVE_MIR_TEST
 static uint64_t zend_native_compiler_dynamic_codeunit_count(
 	uint32_t first_function_bucket, uint32_t first_class_bucket);
+#endif
 
 static void zend_native_compiler_set_diagnostic(
 	zend_native_compiler *compiler,
@@ -777,10 +779,12 @@ static zend_native_compiled_function *zend_native_compiler_find_function(
 	if (compiler == NULL || op_array == NULL) {
 		return NULL;
 	}
+	/* Keyed by function->op_array; the identity tells a reused address. */
 	function = zend_hash_index_find_ptr(
 		&compiler->functions_by_op_array,
 		(zend_ulong) (uintptr_t) op_array);
-	return function != NULL && function->op_array == op_array
+	ZEND_ASSERT(function == NULL || function->op_array == op_array);
+	return function != NULL
 			&& zend_native_op_array_identity_matches(
 				&function->op_array_identity, op_array)
 		? function : NULL;
@@ -2795,16 +2799,10 @@ static bool zend_native_compiler_index_source_op_array(
 		return false;
 	}
 	if (op_array->opcodes != NULL) {
-		zend_ulong key = (zend_ulong) (uintptr_t) op_array->opcodes;
-		zend_op_array *indexed = zend_hash_index_find_ptr(
-			&compiler->source_op_arrays_by_opcodes, key);
-
-		if (indexed == NULL
-				&& zend_hash_index_add_ptr(
-					&compiler->source_op_arrays_by_opcodes,
-					key, op_array) == NULL) {
-			return false;
-		}
+		/* The first op array of shared opcodes stays canonical. */
+		(void) zend_hash_index_add_ptr(
+			&compiler->source_op_arrays_by_opcodes,
+			(zend_ulong) (uintptr_t) op_array->opcodes, op_array);
 	}
 	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
 		if (!zend_native_compiler_index_source_op_array(
@@ -4465,7 +4463,18 @@ zend_native_entry_cell *zend_native_compiler_prepare_function(
 	zend_native_compiler_mutation_lock(compiler);
 	source_op_array = zend_native_compiler_canonical_reentry_op_array(
 		compiler, &function->op_array);
-	if (source_op_array == NULL) {
+	if (source_op_array != NULL) {
+		/* Compiled code: the compile and the canonical lookup below would
+		 * find the same function again. */
+		zend_native_compiled_function *compiled =
+			zend_native_compiler_find_function(compiler, source_op_array);
+
+		if (compiled != NULL
+				&& compiled->entry_cell.state == ZEND_NATIVE_ENTRY_READY) {
+			zend_native_compiler_mutation_unlock(compiler);
+			return &compiled->entry_cell;
+		}
+	} else {
 		source_op_array = &function->op_array;
 	}
 	entry_cell = zend_native_compiler_prepare_op_array_locked(
@@ -4753,7 +4762,9 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	zend_native_compile_diagnostic *diagnostic)
 {
 	zend_native_compiled_function *compiled_root;
+#ifdef HAVE_NATIVE_MIR_TEST
 	uint64_t registered_codeunits;
+#endif
 
 	if (root_entry != NULL) {
 		*root_entry = NULL;
@@ -4804,8 +4815,11 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	if (first_compiled_function != NULL) {
 		*first_compiled_function = compiler->function_count;
 	}
+#ifdef HAVE_NATIVE_MIR_TEST
+	/* Only native_mir_test reads the count. */
 	registered_codeunits = zend_native_compiler_dynamic_codeunit_count(
 		first_function_bucket, first_class_bucket);
+#endif
 	if (zend_native_compiler_compile(
 			compiler, root, NULL, 0, diagnostic) == FAILURE) {
 		return FAILURE;
@@ -4825,7 +4839,9 @@ zend_result zend_native_compiler_compile_dynamic_component(
 	if (root_entry != NULL) {
 		*root_entry = &compiled_root->entry_cell;
 	}
+#ifdef HAVE_NATIVE_MIR_TEST
 	compiler->stats.registered_codeunits += registered_codeunits;
+#endif
 	return SUCCESS;
 
 failure:
@@ -5050,6 +5066,7 @@ void zend_native_compiler_get_stats(
 	stats->published_components = compiler->published_component_count;
 }
 
+#ifdef HAVE_NATIVE_MIR_TEST
 static uint64_t zend_native_compiler_dynamic_codeunit_count(
 	uint32_t first_function_bucket, uint32_t first_class_bucket)
 {
@@ -5090,6 +5107,7 @@ static uint64_t zend_native_compiler_dynamic_codeunit_count(
 	}
 	return count;
 }
+#endif
 
 static zend_result zend_native_compiler_enter(
 	zend_native_compiler *compiler)
@@ -5485,71 +5503,84 @@ typedef struct _zend_native_bundle_reference {
 	const zend_string *scope_name;
 } zend_native_bundle_reference;
 
+typedef struct _zend_native_bundle_sources zend_native_bundle_sources;
+
 typedef struct _zend_native_bundle_builder {
 	zend_native_compiler *compiler;
+	zend_native_bundle_sources *sources;
 	zend_native_bundle_reference *references;
 	uint32_t reference_count;
 	uint32_t reference_capacity;
 } zend_native_bundle_builder;
 
+/* Reference kinds 1-3 (zend_native_image_reference_kind). */
+#define ZEND_NATIVE_BUNDLE_REFERENCE_KINDS 3
+
 typedef struct _zend_native_bundle_decoder {
 	zend_native_compiler *compiler;
+	const zend_native_bundle_sources *sources;
 	const unsigned char *bytes;
 	size_t size;
 	const zend_native_bundle_reference_record *references;
 	uint32_t reference_count;
+	/* Decoded addresses by token and kind: many bindings share one. */
+	const void **addresses;
 } zend_native_bundle_decoder;
 
-static bool zend_native_bundle_source_ordinal_op_array(
-	zend_op_array *op_array, const zend_op_array *target,
-	uint32_t *cursor, uint32_t *ordinal, uint32_t depth)
+/*
+ * Source ordinals number a script's op arrays in one fixed walk: the main
+ * op array and its closures, then the functions, then each class's methods
+ * and property hooks, every op array before its closures. Op arrays nested
+ * deeper than 64 closures take no ordinal.
+ */
+typedef struct _zend_native_bundle_sources {
+	zend_op_array **op_arrays;
+	uint32_t count;
+	uint32_t capacity;
+	/* Op array -> first ordinal, built for serialization. */
+	HashTable ordinals;
+	bool ordinals_built;
+} zend_native_bundle_sources;
+
+static void zend_native_bundle_sources_add(
+	zend_native_bundle_sources *sources, zend_op_array *op_array,
+	uint32_t depth)
 {
 	uint32_t index;
 
-	if (op_array == NULL || target == NULL || cursor == NULL
-			|| ordinal == NULL || depth > 64) {
-		return false;
+	if (op_array == NULL || depth > 64 || sources->count == UINT32_MAX) {
+		return;
 	}
-	if (op_array == target) {
-		*ordinal = *cursor;
-		return true;
+	if (sources->count == sources->capacity) {
+		sources->capacity = sources->capacity != 0
+			? sources->capacity * 2 : 32;
+		sources->op_arrays = safe_erealloc(sources->op_arrays,
+			sources->capacity, sizeof(*sources->op_arrays), 0);
 	}
-	if (*cursor == UINT32_MAX) {
-		return false;
-	}
-	(*cursor)++;
+	sources->op_arrays[sources->count++] = op_array;
 	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
-		if (zend_native_bundle_source_ordinal_op_array(
-				op_array->dynamic_func_defs[index], target,
-				cursor, ordinal, depth + 1)) {
-			return true;
-		}
+		zend_native_bundle_sources_add(
+			sources, op_array->dynamic_func_defs[index], depth + 1);
 	}
-	return false;
 }
 
-static bool zend_native_bundle_source_ordinal(
-	zend_script *script, const zend_op_array *target, uint32_t *ordinal)
+static void zend_native_bundle_sources_init(
+	zend_native_bundle_sources *sources, zend_script *script)
 {
 	zend_function *function;
 	zend_class_entry *class_entry;
 	zend_property_info *property_info;
 	uint32_t hook_index;
-	uint32_t cursor = 0;
 
-	if (script == NULL || target == NULL || ordinal == NULL) {
-		return false;
+	memset(sources, 0, sizeof(*sources));
+	if (script == NULL) {
+		return;
 	}
-	if (zend_native_bundle_source_ordinal_op_array(
-			&script->main_op_array, target, &cursor, ordinal, 0)) {
-		return true;
-	}
+	zend_native_bundle_sources_add(sources, &script->main_op_array, 0);
 	ZEND_HASH_FOREACH_PTR(&script->function_table, function) {
-		if (function != NULL && function->type == ZEND_USER_FUNCTION
-				&& zend_native_bundle_source_ordinal_op_array(
-					&function->op_array, target,
-					&cursor, ordinal, 0)) {
-			return true;
+		if (function != NULL && function->type == ZEND_USER_FUNCTION) {
+			zend_native_bundle_sources_add(
+				sources, &function->op_array, 0);
 		}
 	} ZEND_HASH_FOREACH_END();
 	ZEND_HASH_FOREACH_PTR(&script->class_table, class_entry) {
@@ -5557,11 +5588,9 @@ static bool zend_native_bundle_source_ordinal(
 			continue;
 		}
 		ZEND_HASH_FOREACH_PTR(&class_entry->function_table, function) {
-			if (function != NULL && function->type == ZEND_USER_FUNCTION
-					&& zend_native_bundle_source_ordinal_op_array(
-						&function->op_array, target,
-						&cursor, ordinal, 0)) {
-				return true;
+			if (function != NULL && function->type == ZEND_USER_FUNCTION) {
+				zend_native_bundle_sources_add(
+					sources, &function->op_array, 0);
 			}
 		} ZEND_HASH_FOREACH_END();
 		if (class_entry->num_hooked_props == 0) {
@@ -5577,113 +5606,69 @@ static bool zend_native_bundle_source_ordinal(
 					hook_index < ZEND_PROPERTY_HOOK_COUNT; hook_index++) {
 				function = property_info->hooks[hook_index];
 				if (function != NULL
-						&& function->type == ZEND_USER_FUNCTION
-						&& zend_native_bundle_source_ordinal_op_array(
-							&function->op_array, target,
-							&cursor, ordinal, 0)) {
-					return true;
+						&& function->type == ZEND_USER_FUNCTION) {
+					zend_native_bundle_sources_add(
+						sources, &function->op_array, 0);
 				}
 			}
 		} ZEND_HASH_FOREACH_END();
 	} ZEND_HASH_FOREACH_END();
-	return false;
 }
 
-static zend_op_array *zend_native_bundle_source_at_op_array(
-	zend_op_array *op_array, uint32_t wanted,
-	uint32_t *cursor, uint32_t depth)
+static void zend_native_bundle_sources_destroy(
+	zend_native_bundle_sources *sources)
 {
-	uint32_t index;
-	zend_op_array *found;
+	if (sources->ordinals_built) {
+		zend_hash_destroy(&sources->ordinals);
+	}
+	if (sources->op_arrays != NULL) {
+		efree(sources->op_arrays);
+	}
+}
 
-	if (op_array == NULL || cursor == NULL || depth > 64) {
-		return NULL;
+static zend_always_inline zend_ulong zend_native_bundle_source_key(
+	const zend_op_array *op_array)
+{
+	/* Op arrays do not overlap; the key drops the alignment bits. */
+	return (zend_ulong) ((uintptr_t) op_array / sizeof(void *));
+}
+
+static bool zend_native_bundle_source_ordinal(
+	zend_native_bundle_sources *sources, const zend_op_array *target,
+	uint32_t *ordinal)
+{
+	zval *found;
+
+	if (target == NULL || ordinal == NULL) {
+		return false;
 	}
-	if (*cursor == wanted) {
-		return op_array;
-	}
-	if (*cursor == UINT32_MAX) {
-		return NULL;
-	}
-	(*cursor)++;
-	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
-		found = zend_native_bundle_source_at_op_array(
-			op_array->dynamic_func_defs[index], wanted,
-			cursor, depth + 1);
-		if (found != NULL) {
-			return found;
+	if (!sources->ordinals_built) {
+		zval value;
+
+		zend_hash_init(&sources->ordinals, sources->count, NULL, NULL,
+			false);
+		sources->ordinals_built = true;
+		for (uint32_t index = 0; index < sources->count; index++) {
+			ZVAL_LONG(&value, index);
+			/* An op array met twice keeps its first ordinal. */
+			(void) zend_hash_index_add(&sources->ordinals,
+				zend_native_bundle_source_key(sources->op_arrays[index]),
+				&value);
 		}
 	}
-	return NULL;
+	found = zend_hash_index_find(
+		&sources->ordinals, zend_native_bundle_source_key(target));
+	if (found == NULL) {
+		return false;
+	}
+	*ordinal = (uint32_t) Z_LVAL_P(found);
+	return true;
 }
 
 static zend_op_array *zend_native_bundle_source_at(
-	zend_script *script, uint32_t wanted)
+	const zend_native_bundle_sources *sources, uint32_t wanted)
 {
-	zend_function *function;
-	zend_class_entry *class_entry;
-	zend_property_info *property_info;
-	uint32_t hook_index;
-	uint32_t cursor = 0;
-	zend_op_array *found;
-
-	if (script == NULL) {
-		return NULL;
-	}
-	found = zend_native_bundle_source_at_op_array(
-		&script->main_op_array, wanted, &cursor, 0);
-	if (found != NULL) {
-		return found;
-	}
-	ZEND_HASH_FOREACH_PTR(&script->function_table, function) {
-		if (function == NULL || function->type != ZEND_USER_FUNCTION) {
-			continue;
-		}
-		found = zend_native_bundle_source_at_op_array(
-			&function->op_array, wanted, &cursor, 0);
-		if (found != NULL) {
-			return found;
-		}
-	} ZEND_HASH_FOREACH_END();
-	ZEND_HASH_FOREACH_PTR(&script->class_table, class_entry) {
-		if (class_entry == NULL) {
-			continue;
-		}
-		ZEND_HASH_FOREACH_PTR(&class_entry->function_table, function) {
-			if (function == NULL || function->type != ZEND_USER_FUNCTION) {
-				continue;
-			}
-			found = zend_native_bundle_source_at_op_array(
-				&function->op_array, wanted, &cursor, 0);
-			if (found != NULL) {
-				return found;
-			}
-		} ZEND_HASH_FOREACH_END();
-		if (class_entry->num_hooked_props == 0) {
-			continue;
-		}
-		ZEND_HASH_MAP_FOREACH_PTR(
-				&class_entry->properties_info, property_info) {
-			if (property_info->ce != class_entry
-					|| property_info->hooks == NULL) {
-				continue;
-			}
-			for (hook_index = 0;
-					hook_index < ZEND_PROPERTY_HOOK_COUNT; hook_index++) {
-				function = property_info->hooks[hook_index];
-				if (function == NULL
-						|| function->type != ZEND_USER_FUNCTION) {
-					continue;
-				}
-				found = zend_native_bundle_source_at_op_array(
-					&function->op_array, wanted, &cursor, 0);
-				if (found != NULL) {
-					return found;
-				}
-			}
-		} ZEND_HASH_FOREACH_END();
-	} ZEND_HASH_FOREACH_END();
-	return NULL;
+	return wanted < sources->count ? sources->op_arrays[wanted] : NULL;
 }
 
 /* A word at a time: a bundle attached again every request (a cache file
@@ -5802,7 +5787,7 @@ static bool zend_native_bundle_encode_reference(
 	}
 	if (function->type == ZEND_USER_FUNCTION) {
 		if (!zend_native_bundle_source_ordinal(
-				builder->compiler->script, &function->op_array,
+				builder->sources, &function->op_array,
 				&source_ordinal)) {
 			return false;
 		}
@@ -5828,18 +5813,6 @@ static bool zend_native_bundle_span(
 	return offset <= size && length <= size - (size_t) offset;
 }
 
-static zend_string *zend_native_bundle_string(
-	const zend_native_bundle_decoder *decoder,
-	uint64_t offset, uint32_t length)
-{
-	if (length == 0
-			|| !zend_native_bundle_span(decoder->size, offset, length)) {
-		return NULL;
-	}
-	return zend_string_init(
-		(const char *) decoder->bytes + offset, length, false);
-}
-
 static bool zend_native_bundle_decode_reference(
 	void *context,
 	zend_native_image_reference_kind kind,
@@ -5848,22 +5821,26 @@ static bool zend_native_bundle_decode_reference(
 {
 	zend_native_bundle_decoder *decoder = context;
 	const zend_native_bundle_reference_record *reference;
+	const void **decoded;
 	zend_function *function = NULL;
 	zend_class_entry *class_entry = NULL;
-	zend_string *name = NULL;
-	zend_string *lower_name = NULL;
-	zend_string *scope_name = NULL;
-	zend_string *lower_scope = NULL;
 
 	if (decoder == NULL || address == NULL || token == 0
-			|| token > decoder->reference_count) {
+			|| token > decoder->reference_count
+			|| kind < ZEND_NATIVE_IMAGE_REFERENCE_ENTRY_CELL
+			|| kind > ZEND_NATIVE_IMAGE_REFERENCE_CLASS) {
 		return false;
 	}
-	*address = NULL;
+	decoded = &decoder->addresses[(token - 1)
+		* ZEND_NATIVE_BUNDLE_REFERENCE_KINDS + (kind - 1)];
+	*address = *decoded;
+	if (*address != NULL) {
+		return true;
+	}
 	reference = &decoder->references[token - 1];
 	if (reference->type == ZEND_NATIVE_BUNDLE_REFERENCE_USER_FUNCTION) {
 		zend_op_array *op_array = zend_native_bundle_source_at(
-			decoder->compiler->script, reference->source_ordinal);
+			decoder->sources, reference->source_ordinal);
 		zend_native_compiled_function *compiled =
 			zend_native_compiler_find_function(
 				decoder->compiler, op_array);
@@ -5875,56 +5852,42 @@ static bool zend_native_bundle_decode_reference(
 		*address = kind == ZEND_NATIVE_IMAGE_REFERENCE_ENTRY_CELL
 			? (const void *) &compiled->entry_cell
 			: (const void *) op_array;
+		*decoded = *address;
 		return true;
 	}
-	name = zend_native_bundle_string(
-		decoder, reference->name_offset, reference->name_length);
-	if (name == NULL) {
+	/* The import checked that names lie inside the bundle. */
+	if (reference->name_length == 0) {
 		return false;
 	}
-	lower_name = zend_string_tolower(name);
 	if (reference->type == ZEND_NATIVE_BUNDLE_REFERENCE_CLASS) {
-		class_entry = zend_hash_find_ptr(EG(class_table), lower_name);
-		if (kind == ZEND_NATIVE_IMAGE_REFERENCE_CLASS
-				&& class_entry != NULL) {
-			*address = class_entry;
+		if (kind == ZEND_NATIVE_IMAGE_REFERENCE_CLASS) {
+			*address = zend_hash_str_find_ptr_lc(EG(class_table),
+				(const char *) decoder->bytes + reference->name_offset,
+				reference->name_length);
 		}
-		goto done;
-	}
-	if (reference->type
-			!= ZEND_NATIVE_BUNDLE_REFERENCE_INTERNAL_FUNCTION
-			|| kind != ZEND_NATIVE_IMAGE_REFERENCE_FUNCTION) {
-		goto done;
-	}
-	if (reference->scope_length == 0) {
-		function = zend_hash_find_ptr(EG(function_table), lower_name);
-	} else {
-		scope_name = zend_native_bundle_string(
-			decoder, reference->scope_offset,
-			reference->scope_length);
-		if (scope_name != NULL) {
-			lower_scope = zend_string_tolower(scope_name);
-			class_entry = zend_hash_find_ptr(
-				EG(class_table), lower_scope);
+	} else if (reference->type
+				== ZEND_NATIVE_BUNDLE_REFERENCE_INTERNAL_FUNCTION
+			&& kind == ZEND_NATIVE_IMAGE_REFERENCE_FUNCTION) {
+		if (reference->scope_length == 0) {
+			function = zend_hash_str_find_ptr_lc(EG(function_table),
+				(const char *) decoder->bytes + reference->name_offset,
+				reference->name_length);
+		} else {
+			class_entry = zend_hash_str_find_ptr_lc(EG(class_table),
+				(const char *) decoder->bytes + reference->scope_offset,
+				reference->scope_length);
 			if (class_entry != NULL) {
-				function = zend_hash_find_ptr(
-					&class_entry->function_table, lower_name);
+				function = zend_hash_str_find_ptr_lc(
+					&class_entry->function_table,
+					(const char *) decoder->bytes + reference->name_offset,
+					reference->name_length);
 			}
 		}
+		if (function != NULL && function->type == ZEND_INTERNAL_FUNCTION) {
+			*address = function;
+		}
 	}
-	if (function != NULL && function->type == ZEND_INTERNAL_FUNCTION) {
-		*address = function;
-	}
-
-done:
-	if (lower_scope != NULL) {
-		zend_string_release(lower_scope);
-	}
-	if (scope_name != NULL) {
-		zend_string_release(scope_name);
-	}
-	zend_string_release(lower_name);
-	zend_string_release(name);
+	*decoded = *address;
 	return *address != NULL;
 }
 
@@ -5946,6 +5909,7 @@ zend_result zend_native_compiler_serialize_bundle(
 	uint32_t *record_by_function = NULL;
 	uint32_t record_count = 0;
 	zend_native_diagnostic image_diagnostic;
+	zend_native_bundle_sources sources;
 
 	if (out_bytes != NULL) {
 		*out_bytes = NULL;
@@ -5965,6 +5929,8 @@ zend_result zend_native_compiler_serialize_bundle(
 	memset(&builder, 0, sizeof(builder));
 	memset(&header, 0, sizeof(header));
 	builder.compiler = compiler;
+	zend_native_bundle_sources_init(&sources, compiler->script);
+	builder.sources = &sources;
 	images = ecalloc(compiler->function_count, sizeof(*images));
 	image_sizes = ecalloc(
 		compiler->function_count, sizeof(*image_sizes));
@@ -6001,7 +5967,7 @@ zend_result zend_native_compiler_serialize_bundle(
 					&& (function->image_owner_index == index
 						|| function->image != NULL))
 				|| !zend_native_bundle_source_ordinal(
-					compiler->script, function->op_array,
+					&sources, function->op_array,
 					&function_records[index].source_ordinal)) {
 			goto malformed;
 		}
@@ -6166,6 +6132,7 @@ success:
 	efree(image_sizes);
 	efree(images);
 	efree(builder.references);
+	zend_native_bundle_sources_destroy(&sources);
 	return *out_bytes != NULL ? SUCCESS : FAILURE;
 }
 
@@ -6216,8 +6183,33 @@ zend_result zend_native_compiler_import_bundle(
 	return result;
 }
 
+static zend_result zend_native_compiler_import_bundle_sources(
+	zend_native_compiler *compiler,
+	const zend_native_bundle_sources *sources,
+	const unsigned char *bytes,
+	size_t size,
+	zend_native_compile_diagnostic *diagnostic);
+
 static zend_result zend_native_compiler_import_bundle_impl(
 	zend_native_compiler *compiler,
+	const unsigned char *bytes,
+	size_t size,
+	zend_native_compile_diagnostic *diagnostic)
+{
+	zend_native_bundle_sources sources;
+	zend_result result;
+
+	zend_native_bundle_sources_init(
+		&sources, compiler != NULL ? compiler->script : NULL);
+	result = zend_native_compiler_import_bundle_sources(
+		compiler, &sources, bytes, size, diagnostic);
+	zend_native_bundle_sources_destroy(&sources);
+	return result;
+}
+
+static zend_result zend_native_compiler_import_bundle_sources(
+	zend_native_compiler *compiler,
+	const zend_native_bundle_sources *sources,
 	const unsigned char *bytes,
 	size_t size,
 	zend_native_compile_diagnostic *diagnostic)
@@ -6297,7 +6289,7 @@ static zend_result zend_native_compiler_import_bundle_impl(
 			&functions[index];
 		const uint32_t owner = record->image_owner_index;
 		zend_op_array *op_array = zend_native_bundle_source_at(
-			compiler->script, record->source_ordinal);
+			sources, record->source_ordinal);
 		if (op_array == NULL
 				|| owner >= header.function_count
 				|| record->image_component_index
@@ -6337,10 +6329,20 @@ static zend_result zend_native_compiler_import_bundle_impl(
 	}
 	memset(&decoder, 0, sizeof(decoder));
 	decoder.compiler = compiler;
+	decoder.sources = sources;
 	decoder.bytes = bytes;
 	decoder.size = size;
 	decoder.references = references;
 	decoder.reference_count = header.reference_count;
+	decoder.addresses = header.reference_count != 0
+		? safe_emalloc(header.reference_count,
+			ZEND_NATIVE_BUNDLE_REFERENCE_KINDS * sizeof(*decoder.addresses),
+			0)
+		: NULL;
+	if (decoder.addresses != NULL) {
+		memset(decoder.addresses, 0, (size_t) header.reference_count
+			* ZEND_NATIVE_BUNDLE_REFERENCE_KINDS * sizeof(*decoder.addresses));
+	}
 	for (index = 0; index < header.function_count; index++) {
 		zend_native_compiled_function *function =
 			compiler->functions[index];
@@ -6354,6 +6356,9 @@ static zend_result zend_native_compiler_import_bundle_impl(
 				(size_t) functions[index].image_size,
 				zend_native_bundle_decode_reference, &decoder,
 				&function->image, &image_diagnostic) == FAILURE) {
+			if (decoder.addresses != NULL) {
+				efree(decoder.addresses);
+			}
 			zend_native_compiler_backend_failure(
 				compiler, diagnostic,
 				ZEND_NATIVE_COMPILE_PHASE_PUBLISH,
@@ -6361,6 +6366,9 @@ static zend_result zend_native_compiler_import_bundle_impl(
 			goto failure;
 		}
 		function->publish_pending = true;
+	}
+	if (decoder.addresses != NULL) {
+		efree(decoder.addresses);
 	}
 	for (index = 0; index < header.function_count; index++) {
 		zend_native_compiled_function *function =
@@ -6581,6 +6589,22 @@ static void zend_native_compiler_release_runtime_source(
 	}
 }
 
+/* One lookup for "delete the entry if it holds value". */
+static void zend_native_compiler_index_del_value(
+	HashTable *table, zend_ulong key, const void *value)
+{
+	zval *entry = zend_hash_index_find(table, key);
+
+	if (entry == NULL || Z_PTR_P(entry) != value) {
+		return;
+	}
+	if (HT_IS_PACKED(table)) {
+		zend_hash_index_del(table, key);
+	} else {
+		zend_hash_del_bucket(table, (Bucket *) entry);
+	}
+}
+
 bool zend_native_compiler_retire_dynamic_component(
 	zend_native_compiler *compiler, uint32_t first_function_index,
 	const zend_op_array *root)
@@ -6646,15 +6670,10 @@ bool zend_native_compiler_retire_dynamic_component(
 	for (index = compiler->function_count;
 			index-- > first_function_index;) {
 		zend_native_compiled_function *function = compiler->functions[index];
-		zend_native_compiled_function *indexed = zend_hash_index_find_ptr(
-			&compiler->functions_by_op_array,
-			(zend_ulong) (uintptr_t) function->op_array);
 
-		if (indexed == function) {
-			zend_hash_index_del(
-				&compiler->functions_by_op_array,
-				(zend_ulong) (uintptr_t) function->op_array);
-		}
+		zend_native_compiler_index_del_value(
+			&compiler->functions_by_op_array,
+			(zend_ulong) (uintptr_t) function->op_array, function);
 		(void) zend_native_entry_cell_reset(&function->entry_cell);
 		if (function->code != NULL) {
 			zend_native_code_destroy(function->code);
@@ -6669,13 +6688,9 @@ bool zend_native_compiler_retire_dynamic_component(
 	}
 	compiler->function_count = first_function_index;
 	compiler->publication_count = publication_start;
-	if (zend_hash_index_find_ptr(
-			&compiler->source_op_arrays_by_opcodes,
-			(zend_ulong) (uintptr_t) root->opcodes) == root_source) {
-		zend_hash_index_del(
-			&compiler->source_op_arrays_by_opcodes,
-			(zend_ulong) (uintptr_t) root->opcodes);
-	}
+	zend_native_compiler_index_del_value(
+		&compiler->source_op_arrays_by_opcodes,
+		(zend_ulong) (uintptr_t) root->opcodes, root_source);
 	zend_native_compiler_release_runtime_source(compiler, root_source);
 	zend_native_compiler_mutation_unlock(compiler);
 	return true;
@@ -6903,9 +6918,17 @@ bool zend_native_compiler_is_quiescent(
 	if (compiler == NULL) {
 		return true;
 	}
+	quiescent = true;
 	zend_native_compiler_mutation_lock(compiler);
-	quiescent = zend_native_compiler_active_call_count(compiler) == 0
-		&& zend_native_compiler_suspended_frame_count(compiler) == 0;
+	for (uint32_t index = 0; index < compiler->function_count; index++) {
+		const zend_native_entry_cell *cell =
+			&compiler->functions[index]->entry_cell;
+
+		if (cell->active_calls != 0 || cell->suspended_frames != 0) {
+			quiescent = false;
+			break;
+		}
+	}
 	zend_native_compiler_mutation_unlock(compiler);
 	return quiescent;
 }
