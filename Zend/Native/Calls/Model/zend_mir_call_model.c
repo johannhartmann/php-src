@@ -774,7 +774,6 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 	for (index = 0; index < plan->site_count; index++) {
 		zend_mir_source_call_site_ref *site = &plan->sites[index];
 		zend_mir_call_plan_entry *entry = &plan->entries[index];
-		bool site_borrows_scalars;
 		uint32_t argument_index;
 		if (!calls->call_site_at(calls->context, index, site)
 				|| site->id != index || site->target_id >= plan->target_count
@@ -799,41 +798,6 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 			}
 		}
 #endif
-		/*
-		 * A call instruction either carries every argument as a machine
-		 * operand or carries none of them and lets the source-backed runtime
-		 * consume the canonical zval slots.  Do not create a mixed ownership
-		 * model: there is no operand-to-argument map for such an instruction.
-		 */
-		site_borrows_scalars = plan->targets[site->target_id].kind
-				== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER;
-		for (argument_index = 0;
-			site_borrows_scalars
-				&& argument_index < site->argument_span.count;
-			argument_index++) {
-			const uint32_t plan_argument_index =
-				site->argument_span.offset + argument_index;
-			const zend_mir_source_call_argument_ref *argument =
-				&plan->arguments[plan_argument_index];
-			const zend_mir_source_call_target_ref *target =
-				&plan->targets[site->target_id];
-			zend_mir_source_parameter_mode parameter_mode;
-			bool value_source_mode = argument->mode
-					== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
-				|| argument->mode
-					== ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED;
-
-			if (argument_index >= target->num_args && !target->variadic) {
-				parameter_mode = ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
-			} else if (!zend_mir_target_parameter_mode_at(
-					calls, target, argument_index, &parameter_mode)) {
-				return ZEND_MIRL_UNSUPPORTED_ARGUMENT;
-			}
-			site_borrows_scalars =
-				parameter_mode == ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
-				&& value_source_mode
-				&& zend_mir_id_is_valid(plan->values[plan_argument_index]);
-		}
 		if (plan->targets[site->target_id].kind
 				== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL) {
 			uint32_t result_flags = site->flags
@@ -950,7 +914,7 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 						== ZEND_MIR_SOURCE_CALL_ARGUMENT_BY_VALUE
 					|| argument->mode
 						== ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED;
-				bool borrowed_scalar;
+				zend_mir_value_id value;
 
 				if (plan->targets[site->target_id].kind
 						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER) {
@@ -973,43 +937,28 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 						return ZEND_MIRL_UNSUPPORTED_ARGUMENT;
 					}
 				}
-				borrowed_scalar =
-					site_borrows_scalars
-					&& plan->targets[site->target_id].kind
-						== ZEND_MIR_SOURCE_CALL_TARGET_DIRECT_USER
-					&& parameter_mode
-						== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
-					&& value_source_mode
-					&& zend_mir_id_is_valid(
-						plan->values[plan_argument_index]);
-				plan->ownerships[plan_argument_index] = borrowed_scalar
-					? ZEND_MIR_CALL_ARGUMENT_BORROWED_SCALAR
-					: parameter_mode
-							== ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
-						? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
-						: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
-				if (!borrowed_scalar) {
-					zend_mir_value_id value =
-						zend_mir_id_is_valid(
-							argument->value_ssa_variable_id)
-						? zend_mir_value_from_original_ssa(
-							argument->value_ssa_variable_id)
-						: ZEND_MIR_ID_INVALID;
-					/*
-					 * A nested direct call is the first arbitrary boxed
-					 * producer whose machine definition is guaranteed here.
-					 * Other source zvals remain frame-backed until their own
-					 * lowering operation proves a register definition.
-					 */
-					plan->values[plan_argument_index] =
-						parameter_mode
-								== ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
-							&& value_source_mode
-							&& zend_mir_id_is_valid(value)
-							&& zend_mir_prior_call_result(
-								plan, index, value)
-						? value : ZEND_MIR_ID_INVALID;
-				}
+				/* User calls consume every argument from its canonical
+				 * source zval slot. */
+				plan->ownerships[plan_argument_index] = parameter_mode
+						== ZEND_MIR_SOURCE_PARAMETER_BY_REFERENCE
+					? ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE
+					: ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_VALUE;
+				value = zend_mir_id_is_valid(argument->value_ssa_variable_id)
+					? zend_mir_value_from_original_ssa(
+						argument->value_ssa_variable_id)
+					: ZEND_MIR_ID_INVALID;
+				/*
+				 * A nested direct call is the first arbitrary boxed
+				 * producer whose machine definition is guaranteed here.
+				 * Other source zvals remain frame-backed until their own
+				 * lowering operation proves a register definition.
+				 */
+				plan->values[plan_argument_index] =
+					parameter_mode == ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
+						&& value_source_mode
+						&& zend_mir_id_is_valid(value)
+						&& zend_mir_prior_call_result(plan, index, value)
+					? value : ZEND_MIR_ID_INVALID;
 			}
 		}
 		if (!zend_mir_source_block_to_mir(
