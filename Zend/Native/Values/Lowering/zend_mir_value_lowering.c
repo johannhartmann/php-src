@@ -815,6 +815,59 @@ static bool zend_mir_operation_semantics(
 	return true;
 }
 
+/* The effect summary of an operation depends only on its opcode. */
+typedef struct _zend_mir_operation_semantics_entry {
+	zend_mir_effect_mask effects;
+	zend_mir_memory_domain_mask reads;
+	zend_mir_memory_domain_mask writes;
+	zend_mir_barrier_mask barriers;
+	zend_mir_ownership_action_mask ownership_actions;
+	zend_mir_safepoint_class frame_class;
+} zend_mir_operation_semantics_entry;
+
+typedef struct _zend_mir_operation_semantics_memo {
+	/* 0: not computed, 1: computed, 2: no semantics. */
+	uint8_t state[ZEND_MIR_OPCODE_COUNT];
+	zend_mir_operation_semantics_entry entries[ZEND_MIR_OPCODE_COUNT];
+} zend_mir_operation_semantics_memo;
+
+static bool zend_mir_memoized_operation_semantics(
+	zend_mir_operation_semantics_memo *memo, zend_mir_opcode opcode,
+	zend_mir_executable_value_ref *operation,
+	zend_mir_safepoint_class *frame_class)
+{
+	zend_mir_operation_semantics_entry *entry;
+
+	if ((uint32_t) opcode >= ZEND_MIR_OPCODE_COUNT) {
+		return zend_mir_operation_semantics(opcode, operation, frame_class);
+	}
+	entry = &memo->entries[opcode];
+	if (memo->state[opcode] == 0) {
+		if (!zend_mir_operation_semantics(opcode, operation, frame_class)) {
+			memo->state[opcode] = 2;
+			return false;
+		}
+		entry->effects = operation->effects;
+		entry->reads = operation->reads;
+		entry->writes = operation->writes;
+		entry->barriers = operation->barriers;
+		entry->ownership_actions = operation->ownership_actions;
+		entry->frame_class = *frame_class;
+		memo->state[opcode] = 1;
+		return true;
+	}
+	if (memo->state[opcode] != 1) {
+		return false;
+	}
+	operation->effects = entry->effects;
+	operation->reads = entry->reads;
+	operation->writes = entry->writes;
+	operation->barriers = entry->barriers;
+	operation->ownership_actions = entry->ownership_actions;
+	*frame_class = entry->frame_class;
+	return true;
+}
+
 static bool zend_mir_value_source_block(
 	const zend_mir_lowering_source_view *source,
 	zend_mir_source_block_id id, zend_mir_source_block_ref *out)
@@ -1580,8 +1633,10 @@ bool zend_mir_emit_executable_values(
 	uint32_t storage_count;
 	uint32_t value_count;
 	uint32_t index;
+	zend_mir_operation_semantics_memo semantics_memo;
 	bool success = false;
 
+	memset(semantics_memo.state, 0, sizeof(semantics_memo.state));
 	if (op_array == NULL || lowering_context == NULL || module == NULL
 			|| control_flow_map == NULL || frame_context == NULL
 			|| op_array->last > ZEND_MIR_LIMIT
@@ -1927,8 +1982,8 @@ bool zend_mir_emit_executable_values(
 		operation->frame_state_id = ZEND_MIR_ID_INVALID;
 		operation->block_id = mir_block_by_source[source_opcode.block_id];
 		if (!zend_mir_id_is_valid(operation->block_id)
-				|| !zend_mir_operation_semantics(
-					opcode, operation, &frame_class)) {
+				|| !zend_mir_memoized_operation_semantics(
+					&semantics_memo, opcode, operation, &frame_class)) {
 			goto done;
 		}
 		if ((opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
