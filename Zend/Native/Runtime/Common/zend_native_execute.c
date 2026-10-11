@@ -741,6 +741,7 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 
 static zend_always_inline zend_native_status zend_native_execute_frame_impl(
 	const zend_native_code *code,
+	zend_native_frame_entry_t known_entry,
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diagnostic,
 	bool observer_already_started)
@@ -757,7 +758,8 @@ static zend_always_inline zend_native_status zend_native_execute_frame_impl(
 #ifdef HAVE_DTRACE
 			&& !zend_dtrace_enabled
 #endif
-			&& (entry = zend_native_code_executable_entry(code)) != NULL)) {
+			&& (entry = known_entry != NULL ? known_entry
+				: zend_native_code_executable_entry(code)) != NULL)) {
 		return zend_native_execute_frame_lean(entry, execute_data,
 			observer_already_started, &state);
 	}
@@ -771,7 +773,17 @@ zend_native_status zend_native_execute_frame(
 	zend_native_diagnostic *diagnostic)
 {
 	return zend_native_execute_frame_impl(
-		code, execute_data, diagnostic, false);
+		code, NULL, execute_data, diagnostic, false);
+}
+
+zend_native_status zend_native_execute_frame_with_entry(
+	const zend_native_code *code,
+	zend_native_frame_entry_t entry,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diagnostic)
+{
+	return zend_native_execute_frame_impl(
+		code, entry, execute_data, diagnostic, false);
 }
 
 /*
@@ -920,5 +932,5 @@ zend_native_status zend_native_execute_observed_frame(
 	zend_native_diagnostic *diagnostic)
 {
 	return zend_native_execute_frame_impl(
-		code, execute_data, diagnostic, true);
+		code, NULL, execute_data, diagnostic, true);
 }

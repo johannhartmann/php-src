@@ -323,6 +323,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	zend_execute_data *call;
 	zend_execute_data *previous;
 	zend_native_entry_cell *entry_cell;
+	zend_native_frame_entry_t known_entry = NULL;
 	const zend_native_code *code;
 	zval *filename;
 	zval *result = NULL;
@@ -511,7 +512,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	if (compiler->product_compiler != NULL
 			&& extended_value != ZEND_EVAL
 			&& ((entry_cell = zend_native_executor_resolve_cached_include(
-					new_op_array)) != NULL
+					new_op_array, &known_entry)) != NULL
 				|| EG(exception) != NULL)) {
 		/* The persistent generation of the cached script serves the code;
 		 * the include itself still executes on this frame below. */
@@ -562,8 +563,10 @@ zend_native_status zend_native_execute_include_or_eval(
 		zend_native_entry_cell_retain_active(entry_cell);
 	}
 	EG(current_execute_data) = call;
-	status = zend_native_execute_frame(
-		code, call, &diagnostic);
+	status = known_entry != NULL
+		? zend_native_execute_frame_with_entry(
+			code, known_entry, call, &diagnostic)
+		: zend_native_execute_frame(code, call, &diagnostic);
 	EG(current_execute_data) = previous;
 	if (cached_include) {
 		zend_native_entry_cell_release_active(entry_cell);
@@ -585,6 +588,13 @@ zend_native_status zend_native_execute_include_or_eval(
 			zend_native_compiler_release_ready_transients(
 				component_compiler, first_compiled_function);
 		}
+	} else if (cached_include
+			&& zend_native_dynamic_compiler_can_retire_last(
+				compiler, new_op_array, entry_cell)) {
+		/* The persistent generation keeps the code: as in the VM, the
+		 * include's op array goes when the include returns, while it is
+		 * still in the caches. */
+		zend_native_dynamic_compiler_retire_last(compiler, new_op_array);
 	}
 	if ((call_info & ZEND_CALL_NEEDS_REATTACH) != 0) {
 		if (execute_data->func->op_array.last_var > 0) {

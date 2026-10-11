@@ -85,10 +85,13 @@ typedef struct _zend_native_executor_request {
 	uint64_t lease_serial;
 	zend_native_executor_epoch_ref *epoch;
 	HashTable dispatch;
-	HashTable owners;
-	/* Cached scripts by their interned filename, for functions and methods
-	 * whose op arrays do not share the main op array's opcodes. */
+	/* The cached scripts this request loaded, by their interned filename:
+	 * a main op array's owner shares its opcodes, a function or method
+	 * shares its filename. */
 	HashTable owners_by_file;
+	/* How many scripts the previous request loaded: the table starts that
+	 * large instead of growing through every size. */
+	uint32_t owner_capacity;
 	/* Entry cells that persistent generations resolved for functions this
 	 * request called; their generations stay leased until the request ends. */
 	HashTable external_entries;
@@ -136,10 +139,16 @@ static uint64_t zend_native_executor_epoch = 1;
  */
 # define ZEND_NATIVE_EXECUTOR_INCLUDE_CACHE 16384
 typedef struct _zend_native_executor_include_entry {
-	const zend_op *opcodes;
+	/* One cache line each. */
+	_Alignas(64) const zend_op *opcodes;
 	zend_native_entry_cell *entry_cell;
 	uint64_t epoch;
 	uint64_t serial;
+	/* The cell's code when stored and its executable entry: an include
+	 * that finds the cell holding that code enters it without reading the
+	 * code, one cache line fewer. */
+	const zend_native_code *code;
+	zend_native_frame_entry_t entry;
 	uint32_t last;
 } zend_native_executor_include_entry;
 static zend_native_executor_include_entry
@@ -780,11 +789,13 @@ static const zend_script *zend_native_executor_script_owner(
 	if (op_array == NULL || op_array->opcodes == NULL) {
 		return NULL;
 	}
-	if (zend_native_executor_request_state.dispatch_active) {
+	if (zend_native_executor_request_state.dispatch_active
+			&& op_array->filename != NULL) {
 		owner = zend_hash_index_find_ptr(
-			&zend_native_executor_request_state.owners,
-			(zend_ulong) (uintptr_t) op_array->opcodes);
-		if (owner != NULL) {
+			&zend_native_executor_request_state.owners_by_file,
+			(zend_ulong) (uintptr_t) op_array->filename);
+		if (owner != NULL
+				&& owner->main_op_array.opcodes == op_array->opcodes) {
 			return owner;
 		}
 	}
@@ -2127,7 +2138,7 @@ zend_native_executor_resolve_external_reentry(
 }
 
 zend_native_entry_cell *zend_native_executor_resolve_cached_include(
-	zend_op_array *op_array)
+	zend_op_array *op_array, zend_native_frame_entry_t *entry)
 {
 	zend_native_executor_generation *generation;
 	zend_native_compile_diagnostic diagnostic;
@@ -2139,6 +2150,7 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 	zend_native_executor_include_entry *cached = NULL;
 #endif
 
+	*entry = NULL;
 	if (op_array == NULL || !zend_native_executor_request_state.active) {
 		return NULL;
 	}
@@ -2153,6 +2165,10 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 				&& cached->serial
 					== zend_native_executor_include_cache_serial
 				&& cached->entry_cell->state == ZEND_NATIVE_ENTRY_READY) {
+			if (zend_native_entry_cell_load(cached->entry_cell)
+					== cached->code) {
+				*entry = cached->entry;
+			}
 			return cached->entry_cell;
 		}
 	}
@@ -2178,11 +2194,16 @@ zend_native_entry_cell *zend_native_executor_resolve_cached_include(
 			&& entry_cell->function->op_array.last == op_array->last) {
 #ifndef ZTS
 		if (cached != NULL && generation->settled) {
+			const zend_native_code *code =
+				zend_native_entry_cell_load(entry_cell);
+
 			*cached = (zend_native_executor_include_entry) {
 				.opcodes = op_array->opcodes,
 				.entry_cell = entry_cell,
 				.epoch = zend_native_executor_request_state.observed_epoch,
 				.serial = zend_native_executor_include_cache_serial,
+				.code = code,
+				.entry = zend_native_code_executable_entry(code),
 				.last = op_array->last
 			};
 		}
@@ -2334,9 +2355,8 @@ void zend_native_executor_activate(void)
 		&zend_native_executor_request_state.dispatch, 32, NULL,
 		zend_native_executor_dispatch_dtor, false);
 	zend_hash_init(
-		&zend_native_executor_request_state.owners, 8, NULL, NULL, false);
-	zend_hash_init(
-		&zend_native_executor_request_state.owners_by_file, 8, NULL, NULL,
+		&zend_native_executor_request_state.owners_by_file,
+		MAX(8, zend_native_executor_request_state.owner_capacity), NULL, NULL,
 		false);
 	zend_hash_init(
 		&zend_native_executor_request_state.external_entries, 64, NULL, NULL,
@@ -2477,8 +2497,9 @@ void zend_native_executor_deactivate(void)
 	zend_native_executor_request_state.pending_dispatch = NULL;
 	zend_native_executor_deactivate_compiler();
 	if (zend_native_executor_request_state.dispatch_active) {
-		zend_hash_destroy(
-			&zend_native_executor_request_state.owners);
+		zend_native_executor_request_state.owner_capacity =
+			MIN(zend_hash_num_elements(
+				&zend_native_executor_request_state.owners_by_file), 8192);
 		zend_hash_destroy(
 			&zend_native_executor_request_state.owners_by_file);
 		zend_hash_destroy(
@@ -3299,16 +3320,19 @@ zend_result zend_native_executor_register_script_owner(
 	if (op_array == NULL || script == NULL
 			|| op_array->opcodes == NULL
 			|| !zend_native_executor_request_state.dispatch_active
-			|| zend_hash_index_update_ptr(
-				&zend_native_executor_request_state.owners,
-				(zend_ulong) (uintptr_t) op_array->opcodes,
-				(void *) script) == NULL
 			|| (op_array->filename != NULL
 				&& zend_hash_index_update_ptr(
 					&zend_native_executor_request_state.owners_by_file,
 					(zend_ulong) (uintptr_t) op_array->filename,
 					(void *) script) == NULL)) {
 		return FAILURE;
+	}
+	/* An include from running code finds its code itself
+	 * (zend_native_executor_resolve_cached_include()): the dispatch below
+	 * serves a script executed from the top, which also activates its
+	 * generation. */
+	if (zend_native_executor_request_state.execution_depth != 0) {
+		return SUCCESS;
 	}
 	dispatch = zend_native_executor_dispatch_load(op_array);
 	if (dispatch == NULL) {

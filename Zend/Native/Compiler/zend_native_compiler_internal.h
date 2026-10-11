@@ -111,10 +111,11 @@ bool zend_native_executor_op_array_is_cache_owned(
  * The entry of an included OPcache script from its persistent generation,
  * which imports the script's native bundle once per process and serves every
  * later request. NULL without an exception when the script has no registered
- * owner, so the caller compiles it request-locally.
+ * owner, so the caller compiles it request-locally. *entry is the cell's
+ * executable entry when known without reading its code, else NULL.
  */
 zend_native_entry_cell *zend_native_executor_resolve_cached_include(
-	zend_op_array *op_array);
+	zend_op_array *op_array, zend_native_frame_entry_t *entry);
 
 /*
  * Snapshot the append-only READY-publication log beginning at first_index.

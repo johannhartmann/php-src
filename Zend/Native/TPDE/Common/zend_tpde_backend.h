@@ -281,6 +281,13 @@ zend_native_status zend_native_execute_frame(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
 	zend_native_diagnostic *diag);
+/* zend_native_execute_frame() with the code's executable entry known
+ * (zend_native_code_executable_entry()), so the code is not read. */
+zend_native_status zend_native_execute_frame_with_entry(
+	const zend_native_code *code,
+	zend_native_frame_entry_t entry,
+	zend_execute_data *execute_data,
+	zend_native_diagnostic *diag);
 
 /*
  * zend_call_function() has already emitted the begin notification before it
