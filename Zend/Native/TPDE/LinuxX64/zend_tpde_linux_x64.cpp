@@ -1957,6 +1957,57 @@ public:
 			return false;
 		}
 		const uint32_t opcode = compare->value_operation.source_opcode;
+		/*
+		 * Zend's type inference and the literal table fix most operand
+		 * types of a loop bound or an equality test: a known long needs no
+		 * type or reference test, and an integer literal is an immediate.
+		 */
+		const zend_tpde_plan *plan = adaptor->plan();
+		const uint32_t position = compare->value_operation.source_position_id;
+		const zend_tpde_source_opcode *source = plan->source_opcodes != nullptr
+				&& position < plan->source_opcode_count
+				&& plan->source_opcodes[position].opcode == opcode
+			? &plan->source_opcodes[position] : nullptr;
+		struct OperandFacts {
+			bool known_long = false;
+			bool immediate = false;
+			bool may_be_reference = true;
+			int64_t value = 0;
+		};
+		auto facts_of = [&](const zend_tpde_fused_operand &operand,
+				bool first) {
+			OperandFacts facts;
+			if (operand.literal) {
+				facts.may_be_reference = false;
+				const uint32_t index = operand.offset / sizeof(zval);
+				if (plan->source_literals != nullptr
+						&& index < plan->source_literal_count
+						&& Z_TYPE(plan->source_literals[index]) == IS_LONG) {
+					facts.known_long = true;
+					facts.immediate = true;
+					facts.value = Z_LVAL(plan->source_literals[index]);
+				}
+				return facts;
+			}
+			if (source != nullptr) {
+				const uint32_t may_be =
+					first ? source->op1_may_be : source->op2_may_be;
+				facts.known_long = (first ? source->op1_known_type
+					: source->op2_known_type) == IS_LONG;
+				facts.may_be_reference = !facts.known_long
+					&& (may_be == UINT32_MAX || (may_be & MAY_BE_REF) != 0);
+			}
+			return facts;
+		};
+		OperandFacts left_facts = facts_of(layout.left, true);
+		OperandFacts right_facts = facts_of(layout.right, false);
+		auto fits_int32 = [](int64_t value) {
+			return value == static_cast<int64_t>(static_cast<int32_t>(value));
+		};
+		/* One immediate compare: the other operand is in a register. */
+		if (left_facts.immediate && right_facts.immediate) {
+			left_facts.immediate = false;
+		}
 		ScratchReg literals{this};
 		ScratchReg right_type_scratch{this};
 		ScratchReg right_value_scratch{this};
@@ -1965,7 +2016,8 @@ public:
 		const AsmReg right_type = right_type_scratch.alloc_gp();
 		const AsmReg right_value = right_value_scratch.alloc_gp();
 		AsmReg literals_reg = frame_reg;
-		if (layout.left.literal || layout.right.literal) {
+		if ((layout.left.literal && !left_facts.known_long)
+				|| (layout.right.literal && !right_facts.known_long)) {
 			literals_reg = literals.alloc_gp();
 			ASM(MOV64rm, literals_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
@@ -1975,15 +2027,25 @@ public:
 					static_cast<int32_t>(offsetof(zend_op_array, literals))));
 		}
 		auto load = [&](const zend_tpde_fused_operand &operand,
-				AsmReg type_reg, AsmReg value_reg) {
+				const OperandFacts &facts, AsmReg type_reg,
+				AsmReg value_reg) {
+			if (facts.immediate) {
+				if (!fits_int32(facts.value)) {
+					ASM(MOV64ri, value_reg, facts.value);
+				}
+				return;
+			}
 			const AsmReg base = operand.literal ? literals_reg : frame_reg;
 			const int32_t offset = static_cast<int32_t>(operand.offset);
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(base, 0, FE_NOREG,
-					offset + static_cast<int32_t>(
-						offsetof(zval, u1.type_info))));
+			if (!facts.known_long) {
+				ASM(MOVZXr32m8, type_reg,
+					FE_MEM(base, 0, FE_NOREG,
+						offset + static_cast<int32_t>(
+							offsetof(zval, u1.type_info))));
+			}
 			ASM(MOV64rm, value_reg, FE_MEM(base, 0, FE_NOREG, offset));
-			if (!operand.literal && !operand.temporary) {
+			if (!operand.literal && !operand.temporary
+					&& facts.may_be_reference) {
 				auto plain = text_writer.label_create();
 				ASM(CMP32ri, type_reg, IS_REFERENCE);
 				emit_cold_branch(Jump::je, plain, [&] {
@@ -1998,20 +2060,36 @@ public:
 				});
 			}
 		};
-		load(layout.left, left_type, left_value);
-		load(layout.right, right_type, right_value);
+		load(layout.left, left_facts, left_type, left_value);
+		load(layout.right, right_facts, right_type, right_value);
 		auto not_longs = text_writer.label_create();
-		ASM(CMP32ri, left_type, IS_LONG);
-		generate_raw_jump(Jump::jne, not_longs);
-		ASM(CMP32ri, right_type, IS_LONG);
-		generate_raw_jump(Jump::jne, not_longs);
-		ASM(CMP64rr, left_value, right_value);
+		if (!left_facts.known_long) {
+			ASM(CMP32ri, left_type, IS_LONG);
+			generate_raw_jump(Jump::jne, not_longs);
+		}
+		if (!right_facts.known_long) {
+			ASM(CMP32ri, right_type, IS_LONG);
+			generate_raw_jump(Jump::jne, not_longs);
+		}
+		/* With the literal on the left, compare the right operand to it
+		 * and swap the condition. */
+		bool swapped = false;
+		if (right_facts.immediate && fits_int32(right_facts.value)) {
+			ASM(CMP64ri, left_value,
+				static_cast<int32_t>(right_facts.value));
+		} else if (left_facts.immediate && fits_int32(left_facts.value)) {
+			ASM(CMP64ri, right_value,
+				static_cast<int32_t>(left_facts.value));
+			swapped = true;
+		} else {
+			ASM(CMP64rr, left_value, right_value);
+		}
 		switch (opcode) {
 			case ZEND_IS_SMALLER:
-				generate_raw_jump(Jump::jl, truthy);
+				generate_raw_jump(swapped ? Jump::jg : Jump::jl, truthy);
 				break;
 			case ZEND_IS_SMALLER_OR_EQUAL:
-				generate_raw_jump(Jump::jle, truthy);
+				generate_raw_jump(swapped ? Jump::jge : Jump::jle, truthy);
 				break;
 			case ZEND_IS_EQUAL:
 				generate_raw_jump(Jump::je, truthy);
@@ -2021,6 +2099,9 @@ public:
 				break;
 		}
 		generate_raw_jump(Jump::jmp, falsey);
+		if (left_facts.known_long && right_facts.known_long) {
+			return true;
+		}
 
 		/* long or double, at least one double: out of the hot code */
 		const bool cold_doubles = !text_writer.in_cold_area();
@@ -2032,7 +2113,15 @@ public:
 			left_double.alloc(tpde::x64::PlatformConfig::FP_BANK);
 		const auto right_fp =
 			right_double.alloc(tpde::x64::PlatformConfig::FP_BANK);
-		auto to_double = [&](AsmReg type_reg, AsmReg value_reg, AsmReg fp) {
+		auto to_double = [&](AsmReg type_reg, AsmReg value_reg, AsmReg fp,
+				const OperandFacts &facts) {
+			if (facts.known_long) {
+				if (facts.immediate) {
+					ASM(MOV64ri, value_reg, facts.value);
+				}
+				ASM(SSE_CVTSI2SD64rr, fp, value_reg);
+				return;
+			}
 			auto is_long = text_writer.label_create();
 			auto converted = text_writer.label_create();
 			ASM(CMP32ri, type_reg, IS_LONG);
@@ -2045,8 +2134,8 @@ public:
 			ASM(SSE_CVTSI2SD64rr, fp, value_reg);
 			label_place(converted);
 		};
-		to_double(left_type, left_value, left_fp);
-		to_double(right_type, right_value, right_fp);
+		to_double(left_type, left_value, left_fp, left_facts);
+		to_double(right_type, right_value, right_fp, right_facts);
 		/* Unordered (NaN) operands compare false, except !=. */
 		switch (opcode) {
 			case ZEND_IS_SMALLER:
