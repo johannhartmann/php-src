@@ -542,7 +542,6 @@ private:
 			const zend_mir_source_operand_ref &operand) const {
 		zend_mir_value_id value_id;
 		const auto &source_overrides = active_source_ssa_overrides();
-		const auto &value_overrides = active_value_overrides();
 
 		switch (operand.kind) {
 			case ZEND_MIR_SOURCE_OPERAND_LITERAL:
@@ -568,19 +567,8 @@ private:
 			default:
 				return INVALID_VALUE_REF;
 		}
-		const IRValueRef value = value_ref(value_id);
-		const uint32_t index = static_cast<uint32_t>(value);
-		if (value != INVALID_VALUE_REF
-				&& index >= MIR_VALUE_BASE
-				&& index - MIR_VALUE_BASE
-					< value_overrides.size()) {
-			const IRValueRef override =
-				value_overrides[index - MIR_VALUE_BASE];
-			if (override != INVALID_VALUE_REF) {
-				return override;
-			}
-		}
-		return value;
+		/* value_ref() already follows the value overrides to their end. */
+		return value_ref(value_id);
 	}
 
 	zend_mir_storage_id source_operand_storage_id(
@@ -6457,39 +6445,29 @@ public:
 						|| source_opcode == ZEND_IS_NOT_EQUAL
 						|| source_opcode == ZEND_IS_SMALLER
 						|| source_opcode == ZEND_IS_SMALLER_OR_EQUAL;
-					if (boolean_result
-							|| source_opcode == ZEND_ADD
-							|| source_opcode == ZEND_SUB
-							|| source_opcode == ZEND_BW_OR
-							|| source_opcode == ZEND_BW_AND
-							|| source_opcode == ZEND_BW_XOR
-							|| source_opcode == ZEND_SPACESHIP) {
-						auto &source_overrides =
-							active_source_ssa_overrides();
-						auto &instruction_results =
-							active_instruction_results();
-						const IRValueRef canonical_result =
-							source_operand_value_ref(
-								instruction.value_operation.result);
-						const zend_mir_value_id result_ssa =
-							instruction.value_operation.result
-								.ssa_variable_id;
-						result = add_derived_value(
-							ZEND_MIR_REPRESENTATION_ZVAL,
-							boolean_result
-								? ZEND_MIR_SCALAR_TYPE_I1
-								: ZEND_MIR_SCALAR_TYPE_I64,
-							instruction.value_operation
-								.result_storage_id,
-							false, 0,
-							ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
-						set_instruction_result(i, result);
-						if (result_ssa < source_overrides.size()) {
-							source_overrides[result_ssa] = result;
-						} else if (canonical_result
-								== INVALID_VALUE_REF) {
-							valid_ = false;
-						}
+					auto &source_overrides =
+						active_source_ssa_overrides();
+					const IRValueRef canonical_result =
+						source_operand_value_ref(
+							instruction.value_operation.result);
+					const zend_mir_value_id result_ssa =
+						instruction.value_operation.result
+							.ssa_variable_id;
+					result = add_derived_value(
+						ZEND_MIR_REPRESENTATION_ZVAL,
+						boolean_result
+							? ZEND_MIR_SCALAR_TYPE_I1
+							: ZEND_MIR_SCALAR_TYPE_I64,
+						instruction.value_operation
+							.result_storage_id,
+						false, 0,
+						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
+					set_instruction_result(i, result);
+					if (result_ssa < source_overrides.size()) {
+						source_overrides[result_ssa] = result;
+					} else if (canonical_result
+							== INVALID_VALUE_REF) {
+						valid_ = false;
 					}
 				}
 			}
@@ -6863,7 +6841,6 @@ public:
 					&& !machine_value_has_result_representation(result)) {
 				auto &value_overrides = active_value_overrides();
 				auto &source_overrides = active_source_ssa_overrides();
-				auto &instruction_results = active_instruction_results();
 				const IRValueRef canonical_result =
 					source_binding_value_ref(
 						instruction.source_result_binding);
@@ -7102,8 +7079,6 @@ public:
 				auto &value_overrides = active_value_overrides();
 				auto &source_overrides =
 					active_source_ssa_overrides();
-				auto &instruction_results =
-					active_instruction_results();
 				const IRValueRef canonical_result = canonical_source_result;
 				const uint32_t canonical_index =
 					static_cast<uint32_t>(canonical_result);
@@ -10092,8 +10067,6 @@ public:
 							active_value_overrides();
 						auto &source_overrides =
 							active_source_ssa_overrides();
-						auto &instruction_results =
-							active_instruction_results();
 						set_instruction_result(i, pointer);
 						value_overrides[
 							static_cast<uint32_t>(
@@ -10269,8 +10242,6 @@ public:
 				auto &value_overrides = active_value_overrides();
 				auto &source_overrides =
 					active_source_ssa_overrides();
-				auto &instruction_results =
-					active_instruction_results();
 				const IRValueRef canonical_result =
 					source_binding_value_ref(
 						instruction.source_result_binding);

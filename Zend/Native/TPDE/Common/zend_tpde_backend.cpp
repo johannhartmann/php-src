@@ -2813,15 +2813,9 @@ static bool machine_short_circuit_boolean_phi_consumer(
 	}
 	int32_t producer = plan->value_definition_instructions == nullptr
 		? -1 : plan->value_definition_instructions[edge_value];
-	if (producer < 0) {
-		for (uint32_t candidate = 0;
-				candidate < plan->instruction_count; ++candidate) {
-			if (plan->instructions[candidate]
-					.source_result_binding.value_index == edge_value) {
-				producer = static_cast<int32_t>(candidate);
-				break;
-			}
-		}
+	if (producer < 0 && plan->source_value_definition_instructions != nullptr) {
+		/* The first instruction whose source result is the value. */
+		producer = plan->source_value_definition_instructions[edge_value];
 	}
 	if (producer < 0
 			|| static_cast<uint32_t>(producer) >= plan->instruction_count) {
@@ -3091,26 +3085,19 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 	if (plan->value_consumer_offsets == nullptr) {
 		return;
 	}
-	std::vector<int32_t> value_definitions(plan->value_count, -1);
-	if (plan->value_definition_instructions != nullptr) {
-		std::copy_n(plan->value_definition_instructions, plan->value_count,
-			value_definitions.begin());
-	}
-	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
-		const int32_t value_index =
-			plan->instructions[index].source_result_binding.value_index;
-		if (value_index >= 0
-				&& static_cast<uint32_t>(value_index) < plan->value_count
-				&& value_definitions[static_cast<uint32_t>(value_index)] < 0) {
-			value_definitions[static_cast<uint32_t>(value_index)] =
-				static_cast<int32_t>(index);
-		}
-	}
+	/* The MIR definition, else the first instruction whose source result
+	 * is the value. */
 	auto value_definition = [&](int32_t value_index) {
-		return value_index < 0
-				|| static_cast<uint32_t>(value_index) >= plan->value_count
-			? int32_t{-1}
-			: value_definitions[static_cast<uint32_t>(value_index)];
+		if (value_index < 0
+				|| static_cast<uint32_t>(value_index) >= plan->value_count) {
+			return int32_t{-1};
+		}
+		const int32_t definition = plan->value_definition_instructions != nullptr
+			? plan->value_definition_instructions[value_index] : -1;
+		return definition >= 0 || plan->source_value_definition_instructions
+				== nullptr
+			? definition
+			: plan->source_value_definition_instructions[value_index];
 	};
 	std::vector<uint8_t> register_boolean_results(
 		plan->instruction_count);
@@ -6244,36 +6231,6 @@ void destroy_plan(zend_tpde_plan *plan) {
 }
 
 /*
- * An inline call frame copies a SEND_VAL temporary when the call starts at
- * DO, while the VM copies it at SEND. The optimizer may reuse the slot in
- * between, for example for a nested call. Only a temporary whose slot no
- * opline after the SEND and before the DO writes can move at DO; the x64
- * frame copies arguments before it clears the DO result slot.
- */
-static bool temporary_argument_slot_is_stable(
-		const zend_op_array *op_array, uint32_t send_opline,
-		uint32_t do_opline, uint32_t temporary_index) {
-	if (op_array == nullptr || send_opline >= do_opline
-			|| do_opline >= op_array->last) {
-		return false;
-	}
-	const uint32_t var = EX_NUM_TO_VAR(
-		static_cast<uint32_t>(op_array->last_var) + temporary_index);
-	for (uint32_t index = send_opline + 1; index < do_opline; ++index) {
-		const zend_op &opline = op_array->opcodes[index];
-		if (((opline.result_type & (IS_TMP_VAR | IS_VAR)) != 0
-					&& opline.result.var == var)
-				|| ((opline.op2_type & (IS_TMP_VAR | IS_VAR)) != 0
-					&& opline.op2.var == var
-					&& (opline.opcode == ZEND_FE_FETCH_R
-						|| opline.opcode == ZEND_FE_FETCH_RW))) {
-			return false;
-		}
-	}
-	return true;
-}
-
-/*
  * The numeric type of a source operand when a literal or Zend's type
  * inference fixes it: IS_LONG or IS_DOUBLE, otherwise IS_UNDEF.
  */
@@ -6693,32 +6650,33 @@ bool initialize_plan(
 			plan->compiled_variable_count);
 		if (source_ssa != nullptr && source_ssa->vars != nullptr
 				&& source_ssa->vars_count >= 0) {
+			/* A CV is unused when it has SSA variables and none of them is
+			 * defined or used. */
+			std::vector<uint8_t> found(plan->compiled_variable_count, 0);
+			std::vector<uint8_t> used(plan->compiled_variable_count, 0);
+			for (int index = 0; index < source_ssa->vars_count; ++index) {
+				const zend_ssa_var &variable = source_ssa->vars[index];
+				if (variable.var < 0
+						|| static_cast<uint32_t>(variable.var)
+							>= plan->compiled_variable_count) {
+					continue;
+				}
+				const uint32_t variable_index =
+					static_cast<uint32_t>(variable.var);
+				found[variable_index] = 1;
+				if (variable.definition >= 0
+						|| variable.definition_phi != nullptr
+						|| variable.use_chain >= 0
+						|| variable.phi_use_chain != nullptr
+						|| variable.sym_use_chain != nullptr) {
+					used[variable_index] = 1;
+				}
+			}
 			for (uint32_t variable_index = 0;
 					variable_index < plan->compiled_variable_count;
 					++variable_index) {
-				bool found = false;
-				bool used = false;
-				for (int index = 0;
-						index < source_ssa->vars_count; ++index) {
-					const zend_ssa_var &variable =
-						source_ssa->vars[index];
-					if (variable.var < 0
-							|| static_cast<uint32_t>(variable.var)
-								!= variable_index) {
-						continue;
-					}
-					found = true;
-					if (variable.definition >= 0
-							|| variable.definition_phi != nullptr
-							|| variable.use_chain >= 0
-							|| variable.phi_use_chain != nullptr
-							|| variable.sym_use_chain != nullptr) {
-						used = true;
-						break;
-					}
-				}
 				plan->compiled_variables_used[variable_index] =
-					!found || used;
+					found[variable_index] == 0 || used[variable_index] != 0;
 			}
 		}
 	}
@@ -9511,39 +9469,14 @@ bool initialize_plan(
 					for (uint32_t n = 0; n < site.arguments.count; ++n) {
 						const zend_mir_call_argument_ref &argument =
 							plan->call_arguments[site.arguments.offset + n];
+						/* The direct descriptor already resolved every named
+						 * argument to a parameter of this callee. */
 						uint32_t parameter_ordinal = argument.ordinal;
-						if (argument.source_mode
-								== ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED) {
-							const zend_op *send = source_op_array != nullptr
-									&& argument.send_opline_index
-										< source_op_array->last
-								? &source_op_array->opcodes[
-									argument.send_opline_index]
-								: nullptr;
-							const zval *name = send != nullptr
-									&& send->op2_type == IS_CONST
-								? RT_CONSTANT(send, send->op2) : nullptr;
-							bool found = false;
-							if (name != nullptr
-									&& Z_TYPE_P(name) == IS_STRING
-									&& callee->common.arg_info != nullptr) {
-								for (uint32_t parameter = 0;
-										parameter < callee->common.num_args;
-										++parameter) {
-									const zend_string *parameter_name =
-										callee->common.arg_info[parameter].name;
-									if (parameter_name != nullptr
-											&& zend_string_equals(
-												parameter_name, Z_STR_P(name))) {
-										parameter_ordinal = parameter;
-										found = true;
-										break;
-									}
-								}
-							}
-							/* Unknown named parameters require a variadic-name map. */
-							trivial_frame = trivial_frame && found;
-						}
+						const bool named_parameter_found =
+							direct_call_parameter_ordinal(source_op_array,
+								callee, argument, &parameter_ordinal);
+						ZEND_ASSERT(named_parameter_found);
+						(void) named_parameter_found;
 						descriptor->arguments[n].ordinal = parameter_ordinal;
 						if (parameter_ordinal < supplied_parameters.size()) {
 							trivial_frame = trivial_frame
@@ -9737,8 +9670,11 @@ bool initialize_plan(
 									/* A temporary, or a call result that is
 									 * a plain value, moves into the callee
 									 * frame; it never holds a reference.
-									 * The frame reads it at DO, so no later
-									 * opline may reuse its slot first. */
+									 * The frame reads it at DO: the direct
+									 * descriptor already required that no
+									 * opline between SEND and DO names its
+									 * slot (the x64 frame copies arguments
+									 * before it clears the DO result slot). */
 									|| (zend_tpde_linux_inline_forms
 										&& (argument.source_operand.kind
 												== ZEND_MIR_SOURCE_OPERAND_SLOT
@@ -9752,12 +9688,7 @@ bool initialize_plan(
 													argument)))
 										&& descriptor->arguments[n]
 											.source_frame_offset
-											!= UINT32_MAX
-										&& temporary_argument_slot_is_stable(
-											source_op_array,
-											argument.send_opline_index,
-											site.source_do_opline_index,
-											argument.source_operand.index))))
+											!= UINT32_MAX)))
 							|| (descriptor->arguments[n].mode
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 								&& (argument.source_operand.kind
@@ -10319,9 +10250,6 @@ bool initialize_plan(
 					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				&& candidate.value_operation.opcode
 					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH;
-			if (candidate_record.source_position_id != effect.source_position_id) {
-				continue;
-			}
 			source_opcode = candidate_record.opcode;
 			if (effect.kind == ZEND_NATIVE_SOURCE_EFFECT_EXCEPTION_ROUTE) {
 				if (candidate_record.opcode
@@ -12479,30 +12407,17 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 				const bool machine_definition =
 					scalar_machine_definition(input);
 				if (!machine_definition) {
-					const int32_t input_definition =
-						plan->value_definition_instructions == nullptr
-							? -1
-							: plan->value_definition_instructions[input_index];
-					const zend_mir_instruction_record input_record =
-						input_definition >= 0
-								&& static_cast<uint32_t>(input_definition)
-									< plan->instruction_count
-							? zend_tpde_instruction_record_at(
-								plan, &plan->instructions[
-									static_cast<uint32_t>(input_definition)])
-							: zend_mir_instruction_record{};
 					/*
 					 * A loop-carried ZVAL component can be cyclic, so one incoming
 					 * COPY/PHI may not have been selected yet.  Defer that edge when
 					 * it names the same private canonical slot; an arbitrary boxed
 					 * argument or value-operation result remains a hard boundary.
+					 * Only COPY/PHI definitions are candidates.
 					 */
 					if (input.representation == ZEND_MIR_REPRESENTATION_ZVAL
 							&& !input.canonical_alias_observable
 							&& input.canonical_storage_id
 								== result.canonical_storage_id
-							&& (input_record.opcode == ZEND_MIR_OPCODE_COPY
-								|| input_record.opcode == ZEND_MIR_OPCODE_PHI)
 							&& scalar_copy_phi_candidates[
 								static_cast<uint32_t>(input_index)] != 0) {
 						continue;
