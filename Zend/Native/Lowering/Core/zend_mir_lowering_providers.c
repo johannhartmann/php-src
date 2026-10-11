@@ -54,13 +54,6 @@ typedef enum _zend_mir_fact_mode {
 } zend_mir_fact_mode;
 
 struct _zend_mir_integration {
-	zend_op_array projected_op_array;
-	zend_ssa projected_ssa;
-	zend_op *projected_opcodes;
-	zval *projected_literals;
-	zend_ssa_op *projected_ssa_ops;
-	zend_ssa_var *projected_ssa_vars;
-	zend_ssa_var_info *projected_ssa_var_info;
 	zend_mir_zend_source source;
 	zend_mir_lowering_source_view base_source_view;
 	zend_mir_lowering_source_view source_view;
@@ -5238,10 +5231,6 @@ static void zend_mir_release(zend_mir_integration *integration)
 	free(integration->overlay_elided_boxed_opcodes);
 	free(integration->overlay_scalarized_opcodes);
 	free(integration->overlay_suppressed_opcodes);
-	free(integration->projected_ssa_var_info);
-	free(integration->projected_ssa_vars);
-	free(integration->projected_ssa_ops);
-	free(integration->projected_opcodes);
 }
 
 static bool zend_mir_post_call_composition(
