@@ -2567,26 +2567,35 @@ static zend_class_entry *zend_native_call_source_class(
 /*
  * The run-time cache slot of the caller's INIT opline, which the VM uses
  * for the same call site (one pointer for a function name, the class and
- * method pair for a method name), or NULL without a run-time cache.
+ * method pair for a method name), or NULL without a run-time cache. The
+ * INIT's unused result holds its offset; the descriptor carries it as
+ * init_result_payload.
  */
-static void **zend_native_call_init_cache_slot(
+static zend_always_inline void **zend_native_call_init_cache_slot(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor, uint32_t slots)
 {
-	const zend_op_array *op_array = &caller->func->op_array;
-	const zend_op *init;
-
+	/* The compiler built the descriptor from the caller's op array. */
+	ZEND_ASSERT(descriptor->init_source_position
+			< caller->func->op_array.last
+		&& caller->func->op_array.opcodes[
+				descriptor->init_source_position].opcode
+			== descriptor->init_opcode
+		&& caller->func->op_array.opcodes[
+				descriptor->init_source_position].result_type == IS_UNUSED
+		&& caller->func->op_array.opcodes[
+				descriptor->init_source_position].result.num
+			== descriptor->init_result_payload);
+	/* A site without a cache slot, such as a constructor call through
+	 * parent::__construct(), has an offset beyond the cache. */
 	if (caller->run_time_cache == NULL
-			|| descriptor->init_source_position >= op_array->last) {
+			|| (uint64_t) descriptor->init_result_payload
+					+ slots * sizeof(void *)
+				> (uint32_t) caller->func->op_array.cache_size) {
 		return NULL;
 	}
-	init = &op_array->opcodes[descriptor->init_source_position];
-	if (init->opcode != descriptor->init_opcode
-			|| init->result.num + slots * sizeof(void *)
-				> (uint32_t) op_array->cache_size) {
-		return NULL;
-	}
-	return (void **) ((char *) caller->run_time_cache + init->result.num);
+	return (void **) ((char *) caller->run_time_cache
+		+ descriptor->init_result_payload);
 }
 
 static zend_function *zend_native_call_object_method(
@@ -4090,7 +4099,6 @@ static void zend_native_call_resolution_cache_bind_lookup(
 	const zend_native_user_call_resolution *resolution)
 {
 	const zend_op_array *op_array = &caller->func->op_array;
-	const zend_op *init = &op_array->opcodes[descriptor->init_source_position];
 	void **slot;
 
 	if (resolution->target_kind != ZEND_NATIVE_USER_CALL_TARGET_NATIVE_USER
@@ -4213,7 +4221,7 @@ static void zend_native_call_resolution_cache_bind_lookup(
 		default:
 			return;
 	}
-	entry->cache_slot_offset = init->result.num;
+	entry->cache_slot_offset = descriptor->init_result_payload;
 }
 
 /* The class a static call looks its method up in, as the VM fetches it. */
