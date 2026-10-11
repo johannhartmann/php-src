@@ -143,6 +143,7 @@ static zend_always_inline void zend_fiber_capture_vm_state(
 	zend_fiber_context *context = EG(current_fiber_context);
 	int native_rid = zend_native_executor_op_array_handle();
 
+	/* The executor started (zend_post_startup()) before any fiber ran. */
 	ZEND_ASSERT(native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES);
 	/* A dead fiber's records went with its unwound frames. */
 	state->native_bailout_records = zend_native_bailout_records_suspend();
@@ -489,9 +490,10 @@ ZEND_API zend_result zend_fiber_init_context(zend_fiber_context *context, void *
 	context->function = coroutine;
 #ifdef HAVE_NATIVE_ENGINE
 	{
+		/* zend_get_resource_handle() returns -1 or a valid slot. */
 		int native_rid = zend_native_executor_op_array_handle();
 
-		if (native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES) {
+		if (native_rid >= 0) {
 			context->reserved[native_rid] = NULL;
 		}
 	}
@@ -510,8 +512,7 @@ ZEND_API void zend_fiber_destroy_context(zend_fiber_context *context)
 #ifdef HAVE_NATIVE_ENGINE
 	int native_rid = zend_native_executor_op_array_handle();
 
-	if (native_rid >= 0 && native_rid < ZEND_MAX_RESERVED_RESOURCES
-			&& context->reserved[native_rid] != NULL) {
+	if (native_rid >= 0 && context->reserved[native_rid] != NULL) {
 		zend_native_call_fiber_abandon(context->reserved[native_rid]);
 		context->reserved[native_rid] = NULL;
 	}

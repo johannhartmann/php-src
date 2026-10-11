@@ -1111,8 +1111,20 @@ extern ZEND_EXT_TLS zend_native_bailout_record *zend_native_bailout_records;
 void zend_native_bailout_unwind(const void *target);
 /* A fiber switch takes the leaving context's chain and gives back the
  * resumed one's (a new fiber starts with none). */
-void *zend_native_bailout_records_suspend(void);
-void zend_native_bailout_records_resume(void *records);
+static zend_always_inline void *zend_native_bailout_records_suspend(void)
+{
+	zend_native_bailout_record *records = zend_native_bailout_records;
+
+	zend_native_bailout_records = NULL;
+	return records;
+}
+
+static zend_always_inline void zend_native_bailout_records_resume(
+	void *records)
+{
+	ZEND_ASSERT(zend_native_bailout_records == NULL);
+	zend_native_bailout_records = (zend_native_bailout_record *) records;
+}
 void zend_native_bailout_records_reset(void);
 
 void *zend_native_call_fiber_suspend(void);

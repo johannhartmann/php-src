@@ -4515,7 +4515,10 @@ static zend_always_inline void init_func_run_time_cache_i(zend_op_array *op_arra
 	run_time_cache = zend_arena_alloc(&CG(arena), op_array->cache_size);
 	memset(run_time_cache, 0, op_array->cache_size);
 #ifdef HAVE_NATIVE_ENGINE
-	if (op_array->fn_flags & ZEND_ACC_IMMUTABLE) {
+	/* A closure may be bound to another scope. */
+	if ((op_array->fn_flags
+			& (ZEND_ACC_IMMUTABLE | ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE))
+			== ZEND_ACC_IMMUTABLE) {
 		zend_native_property_cache_prime(op_array, run_time_cache);
 	}
 #endif

@@ -144,20 +144,6 @@ void zend_native_bailout_unwind(const void *target)
 	}
 }
 
-void *zend_native_bailout_records_suspend(void)
-{
-	zend_native_bailout_record *records = zend_native_bailout_records;
-
-	zend_native_bailout_records = NULL;
-	return records;
-}
-
-void zend_native_bailout_records_resume(void *records)
-{
-	ZEND_ASSERT(zend_native_bailout_records == NULL);
-	zend_native_bailout_records = records;
-}
-
 void zend_native_bailout_records_reset(void)
 {
 	zend_native_bailout_records = NULL;

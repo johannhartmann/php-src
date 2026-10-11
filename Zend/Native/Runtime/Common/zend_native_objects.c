@@ -3852,12 +3852,12 @@ void zend_native_property_cache_prime(
 	size_t index;
 	uint32_t i;
 
-	/* A closure may be bound to another scope; a slot of a request-local
-	 * op array is reused by the next request. */
-	if ((op_array->fn_flags & ZEND_ACC_IMMUTABLE) == 0
-			|| (op_array->fn_flags
-				& (ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE)) != 0
-			|| !ZEND_MAP_PTR_IS_OFFSET(op_array->run_time_cache)
+	/* The caller passes immutable op arrays that are not closures; a slot
+	 * of a request-local op array is reused by the next request. */
+	ZEND_ASSERT((op_array->fn_flags
+		& (ZEND_ACC_IMMUTABLE | ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE))
+		== ZEND_ACC_IMMUTABLE);
+	if (!ZEND_MAP_PTR_IS_OFFSET(op_array->run_time_cache)
 			|| (intptr_t) slot <= 0) {
 		return;
 	}

@@ -112,7 +112,8 @@ zend_native_status zend_native_throw_source_zval(
  * Property resolutions that outlive the request (ADR 0025 section 3): the
  * run-time cache of an immutable op array starts with the declared
  * properties an earlier request resolved on immutable classes.
- * zend_native_property_cache_prime() fills a new run-time cache,
+ * zend_native_property_cache_prime() fills a new run-time cache of an
+ * immutable op array that is not a closure,
  * zend_native_property_cache_learn() takes the resolutions at request
  * shutdown and zend_native_property_cache_forget() drops them all when a
  * new native generation begins.

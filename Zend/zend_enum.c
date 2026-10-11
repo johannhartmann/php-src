@@ -447,6 +447,10 @@ void zend_enum_init_cached_funcs(zend_class_entry *ce)
 {
 	zend_function *func;
 
+	/* Only observers reserve internal run-time cache slots. */
+	if (zend_internal_run_time_cache_reserved_size() == 0) {
+		return;
+	}
 	ZEND_HASH_MAP_FOREACH_PTR(&ce->function_table, func) {
 		if (func->type == ZEND_INTERNAL_FUNCTION
 				&& (func->common.fn_flags & ZEND_ACC_ARENA_ALLOCATED)
