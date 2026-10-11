@@ -17,6 +17,22 @@ extern "C" {
  */
 void zend_native_zval_copy_deref_or_dup(zval *target, const zval *source);
 
+/* The binary operation of a binary opcode or of a compound assignment's
+ * extended_value, as get_binary_op() selects it. */
+zend_result zend_native_binary_op(
+	uint32_t opcode, zval *result, zval *op1, zval *op2);
+
+/*
+ * variable op= value as the VM's compound assignments compute it: in place,
+ * so that .= extends an owned string, except for a typed reference or the
+ * typed property property_info, which check a copy and keep the old value
+ * when the check fails.
+ */
+void zend_native_binary_assign_op(zval *variable,
+	const struct _zend_property_info *property_info, zval *value,
+	uint32_t opcode,
+	bool strict);
+
 zend_native_status zend_native_value_make_ref(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,

@@ -743,6 +743,25 @@ static bool zend_native_object_apply_fetch_flags(
 	return true;
 }
 
+/*
+ * The run-time cache slot of a write access, as zend_fetch_property_address()
+ * prepares it: a literal name's slot, cleared when it holds another class
+ * because a custom get_property_ptr_ptr() may leave it untouched, or the
+ * caller's zeroed local slot. Afterwards its third entry holds the info of a
+ * typed property.
+ */
+static zend_always_inline void **zend_native_object_write_cache_slot(
+	void **cache_slot, void **local_cache_slot, const zend_object *object)
+{
+	if (cache_slot == NULL) {
+		return local_cache_slot;
+	}
+	if (cache_slot[0] != object->ce) {
+		cache_slot[0] = cache_slot[1] = cache_slot[2] = NULL;
+	}
+	return cache_slot;
+}
+
 static zend_native_status zend_native_object_fetch_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation, int fetch_type)
@@ -825,11 +844,11 @@ static zend_native_status zend_native_object_fetch_explicit(
 			zend_unwrap_reference(result);
 		}
 	} else {
+		void *local_cache_slot[3] = {NULL, NULL, NULL};
 		bool have_property_address = true;
 
-		/* Only the write fetch flags need the declared property. */
-		property_info = zend_get_property_info(
-			Z_OBJCE_P(receiver), name, 1);
+		cache_slot = zend_native_object_write_cache_slot(
+			cache_slot, local_cache_slot, Z_OBJ_P(receiver));
 		value = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
 			Z_OBJ_P(receiver), name, fetch_type, cache_slot);
 		if (value == NULL) {
@@ -853,6 +872,8 @@ static zend_native_status zend_native_object_fetch_explicit(
 		}
 		if (have_property_address) {
 			ZVAL_INDIRECT(result, value);
+			/* The handler cached the info of a typed property. */
+			property_info = (zend_property_info *) cache_slot[2];
 			if (!zend_native_object_apply_fetch_flags(
 					result, property_info, operation->extended_value)) {
 				if (temporary != NULL) {
@@ -994,6 +1015,7 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 	zval fallback;
 	zend_string *temporary = NULL;
 	zend_string *name;
+	void *local_cache_slot[3] = {NULL, NULL, NULL};
 	void **cache_slot = NULL;
 	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
 
@@ -1053,6 +1075,8 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 			(char *) execute_data->run_time_cache + cache_offset);
 	}
 	ZVAL_UNDEF(&fallback);
+	cache_slot = zend_native_object_write_cache_slot(
+		cache_slot, local_cache_slot, Z_OBJ_P(receiver));
 	assigned = Z_OBJ_HT_P(receiver)->get_property_ptr_ptr(
 		Z_OBJ_P(receiver), name, BP_VAR_W, cache_slot);
 	if (assigned == NULL) {
@@ -1075,18 +1099,8 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 		if (Z_TYPE_P(assigned) == IS_INDIRECT) {
 			assigned = Z_INDIRECT_P(assigned);
 		}
-		if (cache_slot != NULL
-				&& CACHED_PTR_EX(cache_slot) == Z_OBJCE_P(receiver)) {
-			property_info = (zend_property_info *)
-				CACHED_PTR_EX(cache_slot + 2);
-		}
-		if (property_info == NULL) {
-			property_info =
-				zend_get_property_info(Z_OBJCE_P(receiver), name, 1);
-			if (property_info == ZEND_WRONG_PROPERTY_INFO) {
-				property_info = NULL;
-			}
-		}
+		/* The handler cached the info of a typed property. */
+		property_info = (zend_property_info *) CACHED_PTR_EX(cache_slot + 2);
 		if (operation->auxiliary_type == IS_VAR
 				&& (operation->extended_value & ZEND_RETURNS_FUNCTION)
 				&& !Z_ISREF_P(value)) {
@@ -1161,12 +1175,14 @@ static zend_native_status zend_native_object_assign_op_explicit(
 		zend_native_object_receiver_explicit(execute_data, operation);
 	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
-	zval *right = zend_native_object_read_explicit(
-		execute_data, operation->auxiliary_type, operation->auxiliary);
+	/* The OP_DATA reads as GET_OP_DATA_ZVAL_PTR(BP_VAR_R): an undefined
+	 * CV warns after the property name. */
+	zval *right = property == NULL || EG(exception) != NULL ? NULL
+		: zend_native_object_read_r_explicit(
+			execute_data, operation->auxiliary_type, operation->auxiliary);
 	zval current;
 	zval updated;
 	zval *address;
-	zval *target;
 	zval *read;
 	zend_object *object;
 	zval *result = operation->result_type == IS_UNUSED ? NULL
@@ -1176,20 +1192,16 @@ static zend_native_status zend_native_object_assign_op_explicit(
 	zend_string *name;
 	void *local_cache_storage[3] = {NULL, NULL, NULL};
 	void **cache_storage = local_cache_storage;
-	zend_property_info *property_info;
-	binary_op_type binary_operation;
-	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
-	bool valid;
 
 	ZVAL_UNDEF(&current);
 	ZVAL_UNDEF(&updated);
+	if (EG(exception) != NULL) {
+		return ZEND_NATIVE_EXCEPTION;
+	}
 	if (receiver == NULL || property == NULL || right == NULL
 			|| (result == NULL && operation->result_type != IS_UNUSED)) {
 		zend_throw_error(NULL,
 			"Malformed native object compound assignment operands");
-		return ZEND_NATIVE_EXCEPTION;
-	}
-	if (EG(exception) != NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (operation->op1_type == IS_CV
@@ -1219,8 +1231,7 @@ static zend_native_status zend_native_object_assign_op_explicit(
 	}
 	name = zend_native_object_name_explicit(
 		execute_data, operation, property, &temporary);
-	binary_operation = get_binary_op(operation->extended_value);
-	if (name == NULL || binary_operation == NULL) {
+	if (name == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	/* A literal name uses the VM run-time cache slot of the OP_DATA, as
@@ -1250,34 +1261,14 @@ static zend_native_status zend_native_object_assign_op_explicit(
 			}
 			goto done;
 		}
-		target = address;
-		property_info = (zend_property_info *) cache_storage[2];
-		if (Z_ISREF_P(target)) {
-			target = Z_REFVAL_P(target);
-		}
-		ZVAL_COPY(&current, target);
-		if (EG(exception) != NULL
-				|| binary_operation(&updated, target, right) != SUCCESS) {
-			goto done;
-		}
-		if (Z_ISREF_P(address)
-				&& ZEND_REF_HAS_TYPE_SOURCES(Z_REF_P(address))) {
-			valid = zend_verify_ref_assignable_zval(
-				Z_REF_P(address), &updated, strict);
-		} else if (property_info != NULL
-				&& ZEND_TYPE_IS_SET(property_info->type)) {
-			valid = zend_verify_property_type(
-				property_info, &updated, strict);
-		} else {
-			valid = true;
-		}
-		if (valid) {
-			zval_ptr_dtor(target);
-			ZVAL_COPY_VALUE(target, &updated);
-			ZVAL_UNDEF(&updated);
-			if (result != NULL) {
-				zend_native_object_replace(result, target);
-			}
+		/* In place, as ZEND_ASSIGN_OBJ_OP computes it, with the cache
+		 * slot's info of a typed property. */
+		zend_native_binary_assign_op(address,
+			(const zend_property_info *) cache_storage[2], right,
+			operation->extended_value,
+			ZEND_CALL_USES_STRICT_TYPES(execute_data));
+		if (result != NULL && EG(exception) == NULL) {
+			zend_native_object_replace(result, address);
 		}
 		goto done;
 	}
@@ -1292,7 +1283,8 @@ static zend_native_status zend_native_object_assign_op_explicit(
 		OBJ_RELEASE(object);
 		goto done;
 	}
-	if (binary_operation(&updated, read, right) == SUCCESS) {
+	if (zend_native_binary_op(operation->extended_value,
+			&updated, read, right) == SUCCESS) {
 		object->handlers->write_property(
 			object, name, &updated, cache_storage);
 	}
@@ -2074,23 +2066,12 @@ static zend_native_status zend_native_static_update_explicit(
 	zend_string *temporary = NULL;
 	zval *property = zend_native_static_property_explicit(
 		execute_data, operation, BP_VAR_RW, &property_info, &temporary);
-	zval *target = property;
-	zval *right = assign_op
-		? zend_native_object_read_explicit(
-			execute_data, operation->auxiliary_type, operation->auxiliary)
-		: NULL;
-	zval updated;
-	zval original;
+	zval *right;
 	zval *result = operation->result_type == IS_UNUSED ? NULL
 		: zend_native_object_slot(
 			execute_data, operation->result_type, operation->result);
-	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
-	bool valid = false;
 
-	ZVAL_UNDEF(&updated);
-	ZVAL_UNDEF(&original);
-	if (property == NULL || property_info == NULL
-			|| (assign_op && right == NULL)) {
+	if (property == NULL || property_info == NULL) {
 		if (temporary != NULL) {
 			zend_tmp_string_release(temporary);
 		}
@@ -2121,48 +2102,21 @@ static zend_native_status zend_native_static_update_explicit(
 			result, post, !decrement);
 		goto done;
 	}
-	if (Z_ISREF_P(target)) {
-		target = Z_REFVAL_P(target);
+	/* The OP_DATA reads as GET_OP_DATA_ZVAL_PTR(BP_VAR_R) after the
+	 * property fetch, and the operation runs in place, as
+	 * ZEND_ASSIGN_STATIC_PROP_OP computes it. */
+	right = zend_native_object_read_r_explicit(
+		execute_data, operation->auxiliary_type, operation->auxiliary);
+	if (right == NULL || EG(exception) != NULL) {
+		goto done;
 	}
-	ZVAL_COPY(&original, target);
-	if (assign_op) {
-		binary_op_type binary_operation =
-			get_binary_op(operation->extended_value);
-		if (binary_operation == NULL
-				|| binary_operation(&updated, target, right) != SUCCESS) {
-			goto done;
-		}
-	} else {
-		ZVAL_COPY(&updated, target);
-		if ((decrement ? decrement_function(&updated)
-				: increment_function(&updated)) != SUCCESS) {
-			goto done;
-		}
-	}
-	if (Z_ISREF_P(property) && ZEND_REF_HAS_TYPE_SOURCES(Z_REF_P(property))) {
-		valid = zend_verify_ref_assignable_zval(
-			Z_REF_P(property), &updated, strict);
-	} else if (ZEND_TYPE_IS_SET(property_info->type)) {
-		valid = zend_verify_property_type(property_info, &updated, strict);
-	} else {
-		valid = true;
-	}
-	if (valid) {
-		zval_ptr_dtor(target);
-		ZVAL_COPY_VALUE(target, &updated);
-		ZVAL_UNDEF(&updated);
-		if (result != NULL) {
-			zend_native_object_replace(result, post ? &original : target);
-		}
+	zend_native_binary_assign_op(property, property_info, right,
+		operation->extended_value, ZEND_CALL_USES_STRICT_TYPES(execute_data));
+	if (result != NULL && EG(exception) == NULL) {
+		zend_native_object_replace(result, property);
 	}
 
 done:
-	if (!Z_ISUNDEF(updated)) {
-		zval_ptr_dtor(&updated);
-	}
-	if (!Z_ISUNDEF(original)) {
-		zval_ptr_dtor(&original);
-	}
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
@@ -2274,16 +2228,51 @@ static zend_native_status zend_native_class_constant_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zend_class_entry *class_entry = zend_native_class_operand_explicit(
-		execute_data, operation->op1_type, operation->op1);
+	zend_class_entry *class_entry;
 	zval *name_value = NULL;
 	zend_string *name = NULL;
 	zval *result = zend_native_object_slot(
 		execute_data, operation->result_type, operation->result);
 	zval *value = NULL;
+	void **cache_slot = NULL;
 
 	if (result == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
+	}
+	/*
+	 * The run-time cache as ZEND_FETCH_CLASS_CONSTANT reads it: a literal
+	 * class keeps its class in the first slot, and a literal name the class
+	 * and the constant's value, which answers for a literal class, and for
+	 * self::, parent::, static:: or a fetched class when the class matches.
+	 */
+	if ((operation->op1_type == IS_CONST || operation->op2_type == IS_CONST)
+			&& execute_data->run_time_cache != NULL) {
+		ZEND_ASSERT((uint64_t) operation->extended_value + 2 * sizeof(void *)
+			<= (uint64_t) execute_data->func->op_array.cache_size);
+		cache_slot = (void **) ((char *) execute_data->run_time_cache
+			+ operation->extended_value);
+		if (operation->op1_type == IS_CONST
+				&& operation->op2_type == IS_CONST && cache_slot[1] != NULL) {
+			value = cache_slot[1];
+			goto cached;
+		}
+	}
+	if (operation->op1_type == IS_CONST && cache_slot != NULL
+			&& cache_slot[0] != NULL) {
+		class_entry = cache_slot[0];
+	} else {
+		class_entry = zend_native_class_operand_explicit(
+			execute_data, operation->op1_type, operation->op1);
+		if (class_entry != NULL && operation->op1_type == IS_CONST
+				&& cache_slot != NULL) {
+			cache_slot[0] = class_entry;
+		}
+	}
+	if (class_entry != NULL && operation->op1_type != IS_CONST
+			&& operation->op2_type == IS_CONST && cache_slot != NULL
+			&& cache_slot[0] == class_entry) {
+		value = cache_slot[1];
+		goto cached;
 	}
 	if (class_entry == NULL) {
 		ZVAL_UNDEF(result);
@@ -2309,6 +2298,7 @@ static zend_native_status zend_native_class_constant_explicit(
 	if (operation->op2_type != IS_CONST
 			&& zend_string_equals_literal_ci(name, "class")) {
 		ZVAL_STR_COPY(result, class_entry->name);
+		goto complete;
 	} else {
 		zend_class_constant *constant = zend_hash_find_ptr(
 			CE_CONSTANTS_TABLE(class_entry), name);
@@ -2365,21 +2355,17 @@ static zend_native_status zend_native_class_constant_explicit(
 				&& Z_TYPE_P(value) != IS_CONSTANT_AST
 				&& (ZEND_CLASS_CONST_FLAGS(constant) & ZEND_ACC_DEPRECATED)
 					== 0
-				&& execute_data->run_time_cache != NULL
-				&& (uint64_t) operation->extended_value + 2 * sizeof(void *)
-					<= execute_data->func->op_array.cache_size) {
-			void **slot = (void **) ((char *) execute_data->run_time_cache
-				+ operation->extended_value);
-
-			slot[0] = class_entry;
-			slot[1] = value;
+				&& cache_slot != NULL) {
+			cache_slot[0] = class_entry;
+			cache_slot[1] = value;
 		}
-		if (value != NULL) {
-			zend_native_object_replace(result, value);
-		} else {
+		if (value == NULL) {
 			ZVAL_UNDEF(result);
+			goto complete;
 		}
 	}
+cached:
+	ZVAL_COPY_OR_DUP(result, value);
 complete:
 	zend_native_object_consume(
 		execute_data, operation->op2_type, operation->op2, result);
