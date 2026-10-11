@@ -72,11 +72,17 @@ constexpr uint32_t layout_block_ordinal = UINT32_C(1) << 31;
  * over at least this many calls, goes to the cold area. */
 constexpr uint64_t layout_minimum_calls = 64;
 
+/* The count line of the number of requests trained: key 0 with this
+ * ordinal. */
+constexpr uint32_t layout_requests_ordinal = UINT32_MAX;
+
 struct LayoutProfile {
 	std::unordered_map<uint64_t, std::unordered_set<uint32_t>> jumps;
 	/* Per function key, the entries of each counted block. */
 	std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint64_t>>
 		blocks;
+	/* The requests the counts were taken over, 0 when unknown. */
+	uint64_t requests = 0;
 	/* "*" moves every eligible region, to test the transformation. */
 	bool all = false;
 	using Counts = std::unordered_map<uint64_t,
@@ -88,6 +94,10 @@ struct LayoutProfile {
 	void select(const Counts &counts) {
 		for (const auto &[key, ordinals] : counts) {
 			for (const auto &[ordinal, outcome] : ordinals) {
+				if (key == 0 && ordinal == layout_requests_ordinal) {
+					requests += outcome.first;
+					continue;
+				}
 				if ((ordinal & layout_block_ordinal) != 0) {
 					blocks[key][ordinal & ~layout_block_ordinal] +=
 						outcome.first;
@@ -104,6 +114,7 @@ struct LayoutProfile {
 	void load(const char *path) {
 		jumps.clear();
 		blocks.clear();
+		requests = 0;
 		all = false;
 		if (path == nullptr || path[0] == '\0') {
 			return;
@@ -149,6 +160,37 @@ struct LayoutProfile {
 	}
 };
 LayoutProfile layout_profile;
+
+/* At most this many calls per request make a function rare
+ * (zend_tpde_layout_rare_function()); ZEND_NATIVE_RARE_CALLS=0 disables
+ * it. Read when the binary loads, before FPM clears the environment. */
+const uint64_t layout_rare_calls = [] {
+	const char *value = std::getenv("ZEND_NATIVE_RARE_CALLS");
+	return value != nullptr && value[0] != '\0'
+		? std::strtoull(value, nullptr, 10) : uint64_t{12};
+}();
+
+/* A function's key in the profile: stable from one compilation of the same
+ * code to the next. */
+uint64_t layout_function_key(uint32_t index, bool typed_body,
+		const zend_tpde_plan *plan) {
+	uint64_t key = UINT64_C(14695981039346656037);
+	auto mix = [&](uint64_t value) {
+		key = (key ^ value) * UINT64_C(1099511628211);
+	};
+	mix(index);
+	mix(typed_body ? 1 : 0);
+	if (plan != nullptr) {
+		mix(plan->instruction_count);
+		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+			const zend_mir_instruction_record &record =
+				plan->instructions[i].record;
+			mix(record.opcode);
+			mix(record.source_position_id);
+		}
+	}
+	return key;
+}
 
 /*
  * Layout training (ZEND_NATIVE_LAYOUT_TRAIN=path): each eligible jump gets
@@ -249,8 +291,11 @@ struct LayoutTraining {
 			outcome.first += counter.taken;
 			outcome.second += counter.fallthrough;
 		}
+		counts[0][layout_requests_ordinal].first =
+			__atomic_load_n(&counters[0].ordinal, __ATOMIC_RELAXED);
 		profile.jumps.clear();
 		profile.blocks.clear();
+		profile.requests = 0;
 		profile.all = false;
 		profile.select(counts);
 	}
@@ -267,6 +312,9 @@ struct LayoutTraining {
 		if (file == nullptr) {
 			return;
 		}
+		std::fprintf(file, "0 %u %llu 0\n", layout_requests_ordinal,
+			static_cast<unsigned long long>(__atomic_load_n(
+				&counters[0].ordinal, __ATOMIC_RELAXED)));
 		for (uint64_t index = 1; index < used; ++index) {
 			const Counter &counter = counters[index];
 			if (counter.taken + counter.fallthrough != 0) {
@@ -3244,22 +3292,8 @@ public:
 		size_t cold_depth = 0;
 	} layout_region_;
 	void layout_start_function(uint32_t index) {
-		const zend_tpde_plan *plan = adaptor->plan();
-		uint64_t key = UINT64_C(14695981039346656037);
-		auto mix = [&](uint64_t value) {
-			key = (key ^ value) * UINT64_C(1099511628211);
-		};
-		mix(index);
-		mix(adaptor->typed_body() ? 1 : 0);
-		if (plan != nullptr) {
-			mix(plan->instruction_count);
-			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-				const zend_mir_instruction_record &record =
-					plan->instructions[i].record;
-				mix(record.opcode);
-				mix(record.source_position_id);
-			}
-		}
+		const uint64_t key = layout_function_key(
+			index, adaptor->typed_body(), adaptor->plan());
 		layout_function_key_ = key;
 		layout_jump_ordinal_ = 0;
 		layout_region_.active = false;
@@ -24710,6 +24744,35 @@ zend_result zend_tpde_emit_linux_x64(
 extern "C" bool zend_tpde_layout_training(void)
 {
 	return layout_training.active();
+}
+
+/*
+ * What of a member's code to keep small because the profile saw its
+ * generic body called rarely: at most layout_rare_calls times per request
+ * over the trained requests. A native call entry of its own then costs
+ * more in the bytes it brings into the caches than it saves on so few
+ * calls.
+ */
+uint32_t zend_tpde_layout_rare_function(
+	uint32_t index, const zend_tpde_plan *plan)
+{
+	if (layout_profile.all) {
+		/* "*" treats every other member as rare, to test it. */
+		return (index & 1) != 0 ? ZEND_TPDE_RARE_NO_CALL_ENTRY : 0;
+	}
+	if (layout_profile.requests < 16 || layout_rare_calls == 0) {
+		return 0;
+	}
+	const auto counted = layout_profile.blocks.find(
+		layout_function_key(index, false, plan));
+	if (counted == layout_profile.blocks.end()) {
+		return 0;
+	}
+	const auto calls = counted->second.find(static_cast<uint32_t>(
+		zend_tpde_block_index(plan, plan->function.entry_block_id)));
+	return calls != counted->second.end() && calls->second != 0
+			&& calls->second <= layout_rare_calls * layout_profile.requests
+		? ZEND_TPDE_RARE_NO_CALL_ENTRY : 0;
 }
 
 extern "C" uint64_t zend_tpde_layout_training_session(void)

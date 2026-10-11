@@ -2384,6 +2384,10 @@ struct zend_tpde_plan {
 	 * defaults are literals the runtime's inline receive takes too.
 	 */
 	bool fast_call_eligible;
+	/* The layout profile saw the member run rarely
+	 * (zend_tpde_layout_rare_function()): what of its code to keep small,
+	 * ZEND_TPDE_RARE_* bits. */
+	uint32_t rare;
 	/* The entry collects extra arguments into an untyped, by-value
 	 * variadic parameter (zend_native_call_receive_variadic()). */
 	bool fast_call_variadic;
@@ -2826,6 +2830,12 @@ int32_t zend_tpde_value_index(
 	const zend_tpde_plan *plan, zend_mir_value_id id);
 int32_t zend_tpde_block_index(
 	const zend_tpde_plan *plan, zend_mir_block_id id);
+/* What of a member's code the layout profile saw run rarely keeps small:
+ * no native call entry of its own. 0 when the profile (the host backend's;
+ * none on others) did not see the member's generic body run rarely. */
+#define ZEND_TPDE_RARE_NO_CALL_ENTRY (1u << 0)
+uint32_t zend_tpde_layout_rare_function(
+	uint32_t index, const zend_tpde_plan *plan);
 zend_mir_value_id zend_tpde_operand_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction,

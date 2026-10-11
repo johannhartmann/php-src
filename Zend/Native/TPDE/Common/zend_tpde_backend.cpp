@@ -13875,8 +13875,14 @@ extern "C" zend_result zend_tpde_compile_component(
 			member.entry_variant_long_mask;
 		plans[initialized].entry_variant_numeric =
 			member.entry_variant_numeric;
-		/* A generic copy is entered only by deoptimization. */
-		if (plans[initialized].deopt_landings) {
+		/* A generic copy is entered only by deoptimization. A member that
+		 * runs rarely is entered through the shared fast Do: its own native
+		 * call entry would only add bytes. */
+		plans[initialized].rare = zend_tpde_layout_rare_function(
+			initialized, &plans[initialized]);
+		if (plans[initialized].deopt_landings
+				|| (plans[initialized].rare
+					& ZEND_TPDE_RARE_NO_CALL_ENTRY) != 0) {
 			plans[initialized].fast_call_eligible = false;
 		}
 		plan_refs[initialized] = &plans[initialized];

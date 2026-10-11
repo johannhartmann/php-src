@@ -37,6 +37,11 @@ extern "C" uint64_t zend_tpde_layout_training_session(void)
 	return 0;
 }
 
+uint32_t zend_tpde_layout_rare_function(uint32_t, const zend_tpde_plan *)
+{
+	return 0;
+}
+
 extern "C" void zend_tpde_layout_training_flush(void)
 {
 }
