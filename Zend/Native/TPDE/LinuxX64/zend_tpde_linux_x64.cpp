@@ -4676,6 +4676,20 @@ public:
 		AsmReg payload_reg);
 	bool emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path = false);
+	void consume_materializations(IRInstRef instruction) {
+		const Adaptor::InstNode &node = adaptor->node(instruction);
+		if (adaptor->typed_body()
+				|| node.materialization_operand_index == UINT32_MAX) {
+			return;
+		}
+		for (uint32_t index = 0; index < node.materialization_count
+				&& node.materialization_operand_index + index
+					< node.liveness_operands.size(); ++index) {
+			auto value = val_ref(node.liveness_operands[
+				node.materialization_operand_index + index]);
+			(void) value;
+		}
+	}
 	bool compile_boxed_cond_guard(IRInstRef instruction);
 	bool compile_boxed_cond_cold(IRInstRef instruction);
 	bool compile_boxed_cond_cold_branch(IRInstRef instruction);
@@ -5168,10 +5182,13 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 	 * refcounted source value directly. Register-authoritative values have been
 	 * materialized above so the helper observes the canonical frame value.
 	 */
-	if (layout.has_result
-			&& (node.materialization_count != 0 || node.cold_phi_inputs)) {
-		/* The cold block alone materializes the condition into its slot
-		 * or defines the PHI inputs of the branch. */
+	if (layout.has_result && node.cold_phi_inputs) {
+		/* The cold block alone defines the PHI inputs of the branch. The
+		 * statepoint materializations ran at this node's start. */
+		generate_raw_jump(Jump::jmp, slow);
+	} else if (layout.has_result && register_string) {
+		/* The published string (or the reference holding it) is no null,
+		 * boolean or integer: the helper decides and consumes it. */
 		generate_raw_jump(Jump::jmp, slow);
 	} else if (layout.has_result) {
 		/* A null, boolean or integer owns nothing: its truth decides inline
@@ -5416,7 +5433,11 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 	 * paths reach the join with the same register state.
 	 */
 	zend_tpde_value_condition scalar_layout;
-	const bool scalar_inline = zend_tpde_value_condition_at(mir, &scalar_layout)
+	/* The guard reaches this block for a null, boolean or integer only
+	 * when the block defines the branch's PHI inputs (it has a decision
+	 * result); otherwise it already excluded them. */
+	const bool scalar_inline = node.has_result
+		&& zend_tpde_value_condition_at(mir, &scalar_layout)
 		&& scalar_layout.operand_offset <= INT32_MAX - sizeof(zval)
 		&& scalar_layout.result_offset <= INT32_MAX - sizeof(zval);
 	int32_t scalar_slot = 0;
@@ -5620,8 +5641,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& !emit_deopt_landing(node.deopt_landing)) {
 		return false;
 	}
-	if (!emit_materializations(instruction)
-			|| !emit_deopt_stores(instruction)) {
+	if (node.kind == Adaptor::InstKind::BoxedCondCold) {
+		/* The guard, this block's only predecessor, stored the same
+		 * materializations: only their uses end here. */
+		consume_materializations(instruction);
+	} else if (!emit_materializations(instruction)) {
+		return false;
+	}
+	if (!emit_deopt_stores(instruction)) {
 		return false;
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
@@ -18985,14 +19012,31 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(reset_layout.holder_offset
 								+ offsetof(zval, u2))),
 						0);
-					ASM(MOV32mi,
-						FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
-						ZEND_NATIVE_ITERATOR_NEXT);
-					generate_raw_jump(Jump::jmp, branch);
+					/* Without PHIs at either successor the inline reset
+					 * goes straight to the loop, and only the helper's
+					 * decision is tested, in the cold area. */
+					const auto &reset_successors = adaptor->block_succs(
+						IRBlockRef{node.control_block});
+					const bool direct_tails = reset_successors.size() >= 2
+						&& !branch_needs_split(reset_successors[0])
+						&& !branch_needs_split(reset_successors[1]);
+					auto next_tail = text_writer.label_create();
+					auto end_tail = text_writer.label_create();
+					if (direct_tails) {
+						generate_raw_jump(Jump::jmp, next_tail);
+					} else {
+						ASM(MOV32mi,
+							FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
+							ZEND_NATIVE_ITERATOR_NEXT);
+						generate_raw_jump(Jump::jmp, branch);
+					}
 					array.reset();
 					type_info.reset();
 					high_word.reset();
 					literal.reset();
+					if (direct_tails) {
+						cold_begin();
+					}
 					label_place(slow);
 
 					tpde::x64::CCAssignerSysV assigner{false};
@@ -19013,6 +19057,23 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto decision_reg = decision.cur_reg_or_load(this);
 					emit_decision_exception_check(decision_reg, mir.exception_block_id,
 						[&] { decision.reset(this); });
+					if (direct_tails) {
+						ASM(TEST32rr, decision_reg, decision_reg);
+						decision.reset(this);
+						generate_raw_jump(Jump::jne, next_tail);
+						const auto tails_spilled = spill_before_branch();
+						begin_branch_region();
+						label_place(end_tail);
+						generate_branch_to_block(Jump::jmp,
+							reset_successors[1], false, false);
+						cold_end();
+						label_place(next_tail);
+						generate_branch_to_block(Jump::jmp,
+							reset_successors[0], false, true);
+						end_branch_region();
+						release_spilled_regs(tails_spilled);
+						return true;
+					}
 					ASM(MOV32mr,
 						FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
 						decision_reg);
@@ -20058,6 +20119,64 @@ bool ZendCompilerX64::compile_inst_impl(
 					FE_MEM(cached_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
 							mir.value_operation.extended_value)));
+				const auto &branch_successors = adaptor->block_succs(
+					IRBlockRef{node.control_block});
+				/* Without PHIs at either successor each outcome jumps to
+				 * its block, and the helper's is decided in the cold area,
+				 * as for VALUE_COND_BRANCH. */
+				if (branch_successors.size() >= 2
+						&& !branch_needs_split(branch_successors[0])
+						&& !branch_needs_split(branch_successors[1])) {
+					auto hit = text_writer.label_create();
+					auto missed = text_writer.label_create();
+					ASM(CMP64ri, cached_reg, ZEND_JMP_FL_HIT);
+					generate_raw_jump(Jump::je, hit);
+					ASM(CMP64ri, cached_reg, ZEND_JMP_FL_MISS);
+					generate_raw_jump(Jump::jne, slow);
+					generate_raw_jump(Jump::jmp, missed);
+					cached.reset();
+					cold_begin();
+					label_place(slow);
+					{
+						tpde::x64::CCAssignerSysV assigner{false};
+						CallBuilder builder{*this, assigner};
+						ValuePart frame_argument{
+							tpde::x64::PlatformConfig::GP_BANK, 8};
+						frame_argument.set_value(
+							this, take_frame(frame_scratch));
+						builder.add_arg(std::move(frame_argument),
+							tpde::CCAssignment{});
+						call_value_operation(builder, mir.value_operation,
+							mir.runtime_helper);
+						ValuePart decision{
+							tpde::x64::PlatformConfig::GP_BANK, 4};
+						builder.add_ret(decision, tpde::CCAssignment{});
+						auto decision_reg = decision.cur_reg_or_load(this);
+						emit_decision_exception_check(decision_reg,
+							mir.exception_block_id,
+							[&] { decision.reset(this); });
+						ASM(TEST32rr, decision_reg, decision_reg);
+						decision.reset(this);
+					}
+					generate_raw_jump(Jump::jne, hit);
+					generate_raw_jump(Jump::jmp, missed);
+					const auto tails_spilled = spill_before_branch();
+					begin_branch_region();
+					const bool hit_next =
+						this->analyzer.block_idx(branch_successors[0])
+							== this->next_block();
+					const size_t cold_tail = hit_next ? 1 : 0;
+					label_place(hit_next ? missed : hit);
+					generate_branch_to_block(Jump::jmp,
+						branch_successors[cold_tail], false, false);
+					cold_end();
+					label_place(hit_next ? hit : missed);
+					generate_branch_to_block(Jump::jmp,
+						branch_successors[1 - cold_tail], false, true);
+					end_branch_region();
+					release_spilled_regs(tails_spilled);
+					return true;
+				}
 				ASM(CMP64ri, cached_reg, ZEND_JMP_FL_HIT);
 				generate_raw_jump(Jump::jne, miss);
 				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, decision_slot),
