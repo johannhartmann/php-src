@@ -695,7 +695,12 @@ static bool zend_native_object_apply_fetch_flags(
 		}
 		return true;
 	}
-	if (flags == ZEND_FETCH_DIM_WRITE && Z_TYPE_P(value) <= IS_FALSE
+	/* A false or null value, or a reference to one, promotes to an array,
+	 * as zend_handle_fetch_obj_flags() checks it. */
+	if (flags == ZEND_FETCH_DIM_WRITE
+			&& (Z_TYPE_P(value) <= IS_FALSE
+				|| (Z_ISREF_P(value)
+					&& Z_TYPE_P(Z_REFVAL_P(value)) <= IS_FALSE))
 			&& ZEND_TYPE_IS_SET(property_info->type)
 			&& (ZEND_TYPE_FULL_MASK(property_info->type) & MAY_BE_ARRAY) == 0) {
 		zend_string *type = zend_type_to_string(property_info->type);
@@ -2554,8 +2559,9 @@ zend_native_status zend_native_execute_object_fetch_this(
 /*
  * A declared property of a CV or $this receiver under a literal name whose
  * class and offset the VM run-time cache slot holds: R and IS copy the value,
- * W addresses it unless the property is typed (the slot then names its
- * property info). Everything else takes the general fetch.
+ * W, RW and UNSET address it, a typed one (the slot then names its property
+ * info) with the fetch flags applied as zend_fetch_property_address() does.
+ * Everything else takes the general fetch.
  */
 static zend_always_inline bool zend_native_object_fetch_cached(
 	zend_execute_data *execute_data, uint64_t op1, uint64_t op2,
@@ -2665,15 +2671,32 @@ static zend_always_inline bool zend_native_object_fetch_cached(
 	} else {
 		goto read_through_handler;
 	}
-	/* Write, read-write and unset fetches address an untyped property. */
+	/* Write, read-write and unset fetches address the property. */
 	const bool writes = fetch_type == BP_VAR_W || fetch_type == BP_VAR_RW
 		|| fetch_type == BP_VAR_UNSET;
-	if (Z_TYPE_P(property) == IS_UNDEF
-			|| (writes && cache_slot[2] != NULL)) {
+	if (Z_TYPE_P(property) == IS_UNDEF) {
 		goto read_through_handler;
 	}
 	if (writes) {
+		zend_property_info *property_info =
+			(zend_property_info *) cache_slot[2];
+
+		/* A readonly or asymmetric-visibility property is modifiable
+		 * only under conditions the handler decides. */
+		if (property_info != NULL
+				&& UNEXPECTED((property_info->flags
+					& (ZEND_ACC_READONLY | ZEND_ACC_PPP_SET_MASK)) != 0)) {
+			goto read_through_handler;
+		}
 		ZVAL_INDIRECT(target, property);
+		/* A failed flag check throws at the fetch's line and leaves an
+		 * error result. */
+		if (property_info != NULL
+				&& (extended_value & ZEND_FETCH_OBJ_FLAGS) != 0) {
+			execute_data->opline = &op_array->opcodes[source_position_id];
+			(void) zend_native_object_apply_fetch_flags(
+				target, property_info, extended_value);
+		}
 	} else {
 		ZVAL_COPY_DEREF(target, property);
 	}
