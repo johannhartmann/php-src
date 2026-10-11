@@ -1,4 +1,5 @@
 #include "zend_mir_zend_source_internal.h"
+#include "../zend_mir_dominator_forest.h"
 
 #include "../../../Optimizer/zend_dfg.h"
 #include "../../../zend_execute.h"
@@ -284,7 +285,6 @@ static bool zend_mir_frontend_build_block_loop_headers(
 	uint32_t *roots = NULL;
 	uint32_t *stack = NULL;
 	uint32_t *stack_cursor = NULL;
-	uint32_t time = 0;
 	uint32_t i;
 	bool result = false;
 
@@ -307,58 +307,12 @@ static bool zend_mir_frontend_build_block_loop_headers(
 	}
 	for (i = 0; i < block_count; i++) {
 		const int idom = ssa->cfg.blocks[i].idom;
-		preorder[i] = ZEND_MIR_ID_INVALID;
-		subtree_end[i] = ZEND_MIR_ID_INVALID;
-		roots[i] = ZEND_MIR_ID_INVALID;
-		if (idom >= 0 && (uint32_t) idom < block_count
-				&& (uint32_t) idom != i) {
-			child_offsets[(uint32_t) idom + 1]++;
-		}
-	}
-	for (i = 1; i <= block_count; i++) {
-		child_offsets[i] += child_offsets[i - 1];
-	}
-	memcpy(cursor, child_offsets,
-		(size_t) block_count * sizeof(*cursor));
-	for (i = 0; i < block_count; i++) {
-		const int idom = ssa->cfg.blocks[i].idom;
-		if (idom >= 0 && (uint32_t) idom < block_count
-				&& (uint32_t) idom != i) {
-			children[cursor[(uint32_t) idom]++] = i;
-		}
-	}
-	for (i = 0; i < block_count; i++) {
-		const int idom = ssa->cfg.blocks[i].idom;
-		uint32_t depth;
 
-		if (idom >= 0 && (uint32_t) idom < block_count
-				&& (uint32_t) idom != i) {
-			continue;
-		}
-		depth = 1;
-		stack[0] = i;
-		stack_cursor[0] = child_offsets[i];
-		preorder[i] = time++;
-		roots[i] = i;
-		while (depth != 0) {
-			const uint32_t block = stack[depth - 1];
-			uint32_t *next_child = &stack_cursor[depth - 1];
-			if (*next_child < child_offsets[block + 1]) {
-				const uint32_t child = children[(*next_child)++];
-				if (preorder[child] != ZEND_MIR_ID_INVALID) {
-					continue;
-				}
-				preorder[child] = time++;
-				roots[child] = i;
-				stack[depth] = child;
-				stack_cursor[depth] = child_offsets[child];
-				depth++;
-			} else {
-				subtree_end[block] = time;
-				depth--;
-			}
-		}
+		subtree_end[i] = idom < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) idom;
 	}
+	zend_mir_dominator_forest_number(block_count, subtree_end,
+		child_offsets, children, cursor, stack, stack_cursor,
+		preorder, subtree_end, roots);
 	for (i = 0; i < block_count; i++) {
 		const int loop_header = ssa->cfg.blocks[i].loop_header;
 		bool dominates = false;

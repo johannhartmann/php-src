@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "zend_mir_control_flow_internal.h"
+#include "../zend_mir_dominator_forest.h"
 
 static int zend_mir_compare_edge_pairs(
 	const void *left, const void *right)
@@ -556,7 +557,6 @@ static bool zend_mir_validate_phis(
 	uint32_t *stack = NULL;
 	uint32_t *stack_cursor = NULL;
 	uint8_t *block_has_pi = NULL;
-	uint32_t time = 0;
 	bool valid = false;
 	uint32_t i;
 
@@ -610,54 +610,11 @@ static bool zend_mir_validate_phis(
 			validation->diagnostic = ZEND_MIRL_MALFORMED_CFG;
 			goto done;
 		}
-		preorder[i] = ZEND_MIR_ID_INVALID;
-		subtree_end[i] = ZEND_MIR_ID_INVALID;
-		roots[i] = ZEND_MIR_ID_INVALID;
-		if (blocks[i].immediate_dominator < block_count
-				&& blocks[i].immediate_dominator != i) {
-			child_offsets[blocks[i].immediate_dominator + 1]++;
-		}
+		subtree_end[i] = blocks[i].immediate_dominator;
 	}
-	for (i = 1; i <= block_count; i++) {
-		child_offsets[i] += child_offsets[i - 1];
-	}
-	memcpy(work, child_offsets, (size_t) block_count * sizeof(*work));
-	for (i = 0; i < block_count; i++) {
-		if (blocks[i].immediate_dominator < block_count
-				&& blocks[i].immediate_dominator != i) {
-			children[work[blocks[i].immediate_dominator]++] = i;
-		}
-	}
-	for (i = 0; i < block_count; i++) {
-		uint32_t depth;
-		if (blocks[i].immediate_dominator < block_count
-				&& blocks[i].immediate_dominator != i) {
-			continue;
-		}
-		depth = 1;
-		stack[0] = i;
-		stack_cursor[0] = child_offsets[i];
-		preorder[i] = time++;
-		roots[i] = i;
-		while (depth != 0) {
-			const uint32_t block = stack[depth - 1];
-			uint32_t *next_child = &stack_cursor[depth - 1];
-			if (*next_child < child_offsets[block + 1]) {
-				const uint32_t child = children[(*next_child)++];
-				if (preorder[child] != ZEND_MIR_ID_INVALID) {
-					continue;
-				}
-				preorder[child] = time++;
-				roots[child] = i;
-				stack[depth] = child;
-				stack_cursor[depth] = child_offsets[child];
-				depth++;
-			} else {
-				subtree_end[block] = time;
-				depth--;
-			}
-		}
-	}
+	zend_mir_dominator_forest_number(block_count, subtree_end,
+		child_offsets, children, work, stack, stack_cursor,
+		preorder, subtree_end, roots);
 	for (i = 0; i < edge_count; i++) {
 		zend_mir_source_edge_ref edge;
 		if (!source->edge_at(source->context, i, &edge)
