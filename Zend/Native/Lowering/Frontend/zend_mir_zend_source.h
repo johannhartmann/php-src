@@ -62,6 +62,8 @@ typedef struct _zend_mir_zend_source {
 	void *value_fact_index;
 	void *block_region_flags;
 	void *block_loop_headers;
+	/* zend_mir_dominator_forest of the CFG's immediate dominators. */
+	void *dominator_forest;
 	zend_mir_op_array_id op_array_id;
 	zend_mir_symbol_id file_symbol_id;
 	uint32_t opcode_count;

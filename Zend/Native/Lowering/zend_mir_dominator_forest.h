@@ -1,10 +1,42 @@
 #ifndef ZEND_MIR_DOMINATOR_FOREST_H
 #define ZEND_MIR_DOMINATOR_FOREST_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "../MIR/zend_mir_ids.h"
+
+/*
+ * A dominator forest numbered by zend_mir_dominator_forest_number. The
+ * frontend numbers it once per compile from the Zend CFG's immediate
+ * dominators, which the source view reports unchanged, and every later
+ * dominance question reads it.
+ */
+typedef struct _zend_mir_dominator_forest {
+	uint32_t count;
+	uint32_t *preorder;
+	uint32_t *subtree_end;
+	uint32_t *roots;
+} zend_mir_dominator_forest;
+
+/*
+ * Whether dominator dominates block. For an acyclic immediate-dominator
+ * relation this is the answer of walking block's dominator chain until it
+ * reaches dominator or a root; a block on a cycle no root reaches is
+ * dominated by nothing.
+ */
+static inline bool zend_mir_dominator_forest_dominates(
+	const zend_mir_dominator_forest *forest,
+	uint32_t dominator, uint32_t block)
+{
+	return dominator < forest->count && block < forest->count
+		&& forest->preorder[dominator] != ZEND_MIR_ID_INVALID
+		&& forest->preorder[block] != ZEND_MIR_ID_INVALID
+		&& forest->roots[dominator] == forest->roots[block]
+		&& forest->preorder[dominator] <= forest->preorder[block]
+		&& forest->preorder[block] < forest->subtree_end[dominator];
+}
 
 /*
  * Numbers a dominator forest in preorder so that block a dominates block b

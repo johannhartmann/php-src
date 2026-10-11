@@ -211,12 +211,14 @@ static void zend_mir_frontend_release_source_indexes(
 	zend_mir_frontend_release_value_fact_index(source->value_fact_index);
 	free(source->block_region_flags);
 	free(source->block_loop_headers);
+	free(source->dominator_forest);
 	source->operand_index = NULL;
 	source->slot_index = NULL;
 	source->original_slot_index = NULL;
 	source->value_fact_index = NULL;
 	source->block_region_flags = NULL;
 	source->block_loop_headers = NULL;
+	source->dominator_forest = NULL;
 }
 
 static bool zend_mir_frontend_build_block_region_flags(
@@ -276,80 +278,64 @@ static bool zend_mir_frontend_build_block_loop_headers(
 	const zend_op_array *op_array = zend_mir_source_op_array(source);
 	const zend_ssa *ssa = zend_mir_source_ssa(source);
 	const uint32_t block_count = source->block_count;
+	zend_mir_dominator_forest *forest;
 	uint32_t *headers = NULL;
-	uint32_t *child_offsets = NULL;
-	uint32_t *children = NULL;
-	uint32_t *cursor = NULL;
-	uint32_t *preorder = NULL;
-	uint32_t *subtree_end = NULL;
-	uint32_t *roots = NULL;
-	uint32_t *stack = NULL;
-	uint32_t *stack_cursor = NULL;
+	uint32_t *scratch = NULL;
 	uint32_t i;
-	bool result = false;
 
 	if (block_count == 0 || ssa->cfg.blocks == NULL) {
 		return false;
 	}
+	/* The forest and its three arrays stay for the compile: the phi index
+	 * and the control-flow lowering answer dominance from them. */
+	forest = malloc(sizeof(*forest)
+		+ (size_t) block_count * 3 * sizeof(uint32_t));
 	headers = malloc((size_t) block_count * sizeof(*headers));
-	child_offsets = calloc((size_t) block_count + 1, sizeof(*child_offsets));
-	children = malloc((size_t) block_count * sizeof(*children));
-	cursor = malloc((size_t) block_count * sizeof(*cursor));
-	preorder = malloc((size_t) block_count * sizeof(*preorder));
-	subtree_end = malloc((size_t) block_count * sizeof(*subtree_end));
-	roots = malloc((size_t) block_count * sizeof(*roots));
-	stack = malloc((size_t) block_count * sizeof(*stack));
-	stack_cursor = malloc((size_t) block_count * sizeof(*stack_cursor));
-	if (headers == NULL || child_offsets == NULL || children == NULL
-			|| cursor == NULL || preorder == NULL || subtree_end == NULL
-			|| roots == NULL || stack == NULL || stack_cursor == NULL) {
-		goto done;
+	/* child_offsets (count + 1), children, cursor, stack, stack_cursor */
+	scratch = malloc(((size_t) block_count * 5 + 1) * sizeof(*scratch));
+	if (forest == NULL || headers == NULL || scratch == NULL) {
+		free(scratch);
+		free(headers);
+		free(forest);
+		return false;
 	}
+	forest->count = block_count;
+	forest->preorder = (uint32_t *) (forest + 1);
+	forest->subtree_end = forest->preorder + block_count;
+	forest->roots = forest->subtree_end + block_count;
 	for (i = 0; i < block_count; i++) {
 		const int idom = ssa->cfg.blocks[i].idom;
 
-		subtree_end[i] = idom < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) idom;
+		forest->subtree_end[i] =
+			idom < 0 ? ZEND_MIR_ID_INVALID : (uint32_t) idom;
 	}
-	zend_mir_dominator_forest_number(block_count, subtree_end,
-		child_offsets, children, cursor, stack, stack_cursor,
-		preorder, subtree_end, roots);
+	zend_mir_dominator_forest_number(block_count, forest->subtree_end,
+		scratch, scratch + block_count + 1,
+		scratch + (size_t) block_count * 2 + 1,
+		scratch + (size_t) block_count * 3 + 1,
+		scratch + (size_t) block_count * 4 + 1,
+		forest->preorder, forest->subtree_end, forest->roots);
+	free(scratch);
 	for (i = 0; i < block_count; i++) {
 		const int loop_header = ssa->cfg.blocks[i].loop_header;
-		bool dominates = false;
+		bool dominates;
 
 		if (loop_header < 0) {
 			headers[i] = ZEND_MIR_ID_INVALID;
 			continue;
 		}
-		if ((uint32_t) loop_header < block_count
-				&& preorder[(uint32_t) loop_header] != ZEND_MIR_ID_INVALID
-				&& preorder[i] != ZEND_MIR_ID_INVALID
-				&& roots[(uint32_t) loop_header] == roots[i]
-				&& preorder[(uint32_t) loop_header] <= preorder[i]
-				&& preorder[i] < subtree_end[(uint32_t) loop_header]) {
-			dominates = true;
-		}
+		dominates = zend_mir_dominator_forest_dominates(
+			forest, (uint32_t) loop_header, i);
 		headers[i] = op_array->last_try_catch != 0
-			&& roots[i] != ZEND_MIR_ID_INVALID && roots[i] != 0
+			&& forest->roots[i] != ZEND_MIR_ID_INVALID
+			&& forest->roots[i] != 0
 			&& !dominates
 			? ZEND_MIR_ID_INVALID
 			: (uint32_t) loop_header;
 	}
 	source->block_loop_headers = headers;
-	headers = NULL;
-	result = true;
-
-done:
-	free(stack_cursor);
-	free(stack);
-	free(roots);
-	free(subtree_end);
-	free(preorder);
-	free(cursor);
-	free(children);
-	free(child_offsets);
-	free(headers);
-	return result;
+	source->dominator_forest = forest;
+	return true;
 }
 
 /* Takes ownership of the slot index validated for the source's op_array. */
@@ -1330,9 +1316,11 @@ static bool zend_mir_frontend_build_phi_index(
 					record->flags |= ZEND_MIR_SOURCE_EDGE_EXPLICIT_JUMP;
 				}
 			}
+			/* validate_cfg proved the dominator chains acyclic, so the
+			 * forest answers what walking block_id's chain would. */
 			if ((ssa->cfg.blocks[to].flags & ZEND_BB_LOOP_HEADER) != 0
-					&& zend_mir_frontend_cfg_dominates(
-						&ssa->cfg, to, block_id)) {
+					&& zend_mir_dominator_forest_dominates(
+						source->dominator_forest, to, block_id)) {
 				record->flags |= ZEND_MIR_SOURCE_EDGE_BACKEDGE
 					| ZEND_MIR_SOURCE_EDGE_INTERRUPT_BOUNDARY;
 			}
