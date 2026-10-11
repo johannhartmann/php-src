@@ -796,6 +796,25 @@ class ZendCompilerX64 final
 	int32_t fast_entry_slot(uint32_t call_instruction) {
 		return site_slot(fast_entry_slots_, call_instruction, sizeof(void *));
 	}
+	/*
+	 * After a fast Init helper (dynamic callable or a method's second
+	 * level): the entry the Do calls into its slot, the callee's entry into
+	 * its slot, and the flags of a test of the callee's entry (zero: miss).
+	 */
+	void store_fast_init_entries(CallBuilder &builder, int32_t entry_slot,
+			int32_t do_entry_slot) {
+		ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
+		ValuePart do_entry{tpde::x64::PlatformConfig::GP_BANK, 8};
+		builder.add_ret(entry, tpde::CCAssignment{});
+		builder.add_ret(do_entry, tpde::CCAssignment{});
+		ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, do_entry_slot),
+			do_entry.cur_reg_or_load(this));
+		do_entry.reset(this);
+		auto entry_reg = entry.cur_reg_or_load(this);
+		ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot), entry_reg);
+		ASM(TEST64rr, entry_reg, entry_reg);
+		entry.reset(this);
+	}
 	/* A stack slot used only within one instruction's code: compile_inst()
 	 * frees it after the instruction. */
 	std::vector<std::pair<int32_t, uint32_t>> inst_stack_slots_;
@@ -4729,6 +4748,135 @@ public:
 		tpde::x64::AsmReg value_reg,
 		tpde::x64::AsmReg temp_reg,
 		tpde::Label default_label);
+	/*
+	 * The case dispatch of SWITCH_LONG, SWITCH_STRING and MATCH (opcode) on
+	 * the zval at slot_reg, whose type byte type_reg holds, inside the
+	 * caller's branch region: a reference is looked through, an integer
+	 * takes the integer dispatch, a string compares its length once and
+	 * its bytes in memory with immediates, case by case. A matched case
+	 * jumps to its label, an unmatched integer or string to default_label,
+	 * any other type to fallback_label. Returns false when a case string is
+	 * too long to address.
+	 */
+	bool emit_multi_branch_dispatch(uint32_t opcode,
+			const zend_tpde_multi_branch_case *cases, uint32_t case_count,
+			std::span<const tpde::Label> case_labels,
+			tpde::Label default_label, tpde::Label fallback_label,
+			AsmReg slot_reg, AsmReg type_reg, AsmReg value_reg,
+			AsmReg constant_reg) {
+		auto long_label = text_writer.label_create();
+		auto string_label = text_writer.label_create();
+		auto dereferenced = text_writer.label_create();
+		ASM(CMP32ri, type_reg, IS_REFERENCE);
+		emit_cold_branch(Jump::je, dereferenced, [&] {
+			ASM(MOV64rm, slot_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			ASM(ADD64ri, slot_reg,
+				static_cast<int32_t>(offsetof(zend_reference, val)));
+			ASM(MOVZXr32m8, type_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zval, u1.type_info))));
+		});
+		if (opcode != ZEND_SWITCH_STRING) {
+			ASM(CMP32ri, type_reg, IS_LONG);
+			generate_raw_jump(Jump::je, long_label);
+		}
+		if (opcode != ZEND_SWITCH_LONG) {
+			ASM(CMP32ri, type_reg, IS_STRING);
+			generate_raw_jump(Jump::je, string_label);
+		}
+		generate_raw_jump(Jump::jmp, fallback_label);
+
+		/* SWITCH_STRING never takes the integer dispatch, SWITCH_LONG
+		 * never the string one. */
+		if (opcode != ZEND_SWITCH_STRING) {
+			label_place(long_label);
+			ASM(MOV64rm, value_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			emit_integer_dispatch(cases, case_count, case_labels,
+				value_reg, constant_reg, default_label);
+		}
+
+		if (opcode != ZEND_SWITCH_LONG) {
+			label_place(string_label);
+			ASM(MOV64rm, value_reg,
+				FE_MEM(slot_reg, 0, FE_NOREG, 0));
+			/* The length once; the bytes compare in memory with
+			 * immediates where they fit. */
+			const AsmReg length_reg = type_reg;
+			ASM(MOV64rm, length_reg,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, len))));
+			for (uint32_t case_index = 0; case_index < case_count;
+					++case_index) {
+				const zend_tpde_multi_branch_case &branch_case =
+					cases[case_index];
+				if (branch_case.string_key != nullptr) {
+					auto next_case = text_writer.label_create();
+					const uint64_t length = branch_case.string_length;
+					if (length > INT32_MAX) {
+						return false;
+					}
+					ASM(CMP64ri, length_reg, static_cast<int32_t>(length));
+					generate_raw_jump(Jump::jne, next_case);
+					size_t offset = 0;
+					while (offset < branch_case.string_length) {
+						const uint32_t width =
+							branch_case.string_length - offset >= 8 ? 8
+							: branch_case.string_length - offset >= 4 ? 4
+							: branch_case.string_length - offset >= 2 ? 2 : 1;
+						const size_t byte_offset =
+							offsetof(zend_string, val) + offset;
+						if (byte_offset > INT32_MAX) {
+							return false;
+						}
+						uint64_t expected = 0;
+						memcpy(&expected, branch_case.string_key + offset,
+							width);
+						const auto bytes = FE_MEM(value_reg, 0, FE_NOREG,
+							static_cast<int32_t>(byte_offset));
+						switch (width) {
+							case 8:
+								if (static_cast<int64_t>(expected)
+										== static_cast<int64_t>(
+											static_cast<int32_t>(expected))) {
+									ASM(CMP64mi, bytes,
+										static_cast<int32_t>(expected));
+								} else {
+									materialize_constant(&expected,
+										tpde::x64::PlatformConfig::GP_BANK,
+										8, constant_reg);
+									ASM(CMP64rm, constant_reg, bytes);
+								}
+								break;
+							case 4:
+								ASM(CMP32mi, bytes,
+									static_cast<int32_t>(
+										static_cast<uint32_t>(expected)));
+								break;
+							case 2:
+								ASM(CMP16mi, bytes,
+									static_cast<int16_t>(
+										static_cast<uint16_t>(expected)));
+								break;
+							default:
+								ASM(CMP8mi, bytes,
+									static_cast<int8_t>(
+										static_cast<uint8_t>(expected)));
+								break;
+						}
+						generate_raw_jump(Jump::jne, next_case);
+						offset += width;
+					}
+					generate_raw_jump(Jump::jmp, case_labels[case_index]);
+					label_place(next_case);
+				}
+			}
+			generate_raw_jump(Jump::jmp, default_label);
+		}
+		return true;
+	}
 	bool emit_machine_zval_type_info(
 		zend_tpde_machine_value_kind kind,
 		AsmReg payload_reg,
@@ -6681,133 +6829,31 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto fallback_label =
 					layout.target_opcode == ZEND_MATCH
 						? default_label : text_writer.label_create();
-				auto long_label = text_writer.label_create();
-				auto string_label = text_writer.label_create();
 				auto [frame_ref, frame] = val_ref_single(
 					node.operands[dispatch_case.frame_operand]);
 				auto frame_scratch = frame_register(std::move(frame));
 				ScratchReg slot{this};
 				ScratchReg type{this};
 				ScratchReg value{this};
-				ScratchReg probe{this};
 				ScratchReg constant{this};
 				auto slot_reg = slot.alloc_gp();
 				auto type_reg = type.alloc_gp();
 				auto value_reg = value.alloc_gp();
-				auto probe_reg = probe.alloc_gp();
 				auto constant_reg = constant.alloc_gp();
-				ASM(MOV64rr, slot_reg, frame_scratch.cur_reg());
-				ASM(ADD64ri, slot_reg,
-					static_cast<int32_t>(layout.operand_offset));
+				ASM(LEA64rm, slot_reg, FE_MEM(frame_scratch.cur_reg(), 0,
+					FE_NOREG, static_cast<int32_t>(layout.operand_offset)));
 				ASM(MOVZXr32m8, type_reg,
 					FE_MEM(slot_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
 							offsetof(zval, u1.type_info))));
 				auto spilled = spill_before_branch();
 				begin_branch_region();
-				auto dereferenced = text_writer.label_create();
-				ASM(CMP32ri, type_reg, IS_REFERENCE);
-				emit_cold_branch(Jump::je, dereferenced, [&] {
-					ASM(MOV64rm, slot_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG, 0));
-					ASM(ADD64ri, slot_reg,
-						static_cast<int32_t>(offsetof(zend_reference, val)));
-					ASM(MOVZXr32m8, type_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))));
-				});
-				if (layout.target_opcode != ZEND_SWITCH_STRING) {
-					ASM(CMP32ri, type_reg, IS_LONG);
-					generate_raw_jump(Jump::je, long_label);
+				if (!emit_multi_branch_dispatch(layout.target_opcode,
+						layout.cases, layout.case_count, case_labels,
+						default_label, fallback_label, slot_reg, type_reg,
+						value_reg, constant_reg)) {
+					return false;
 				}
-				if (layout.target_opcode != ZEND_SWITCH_LONG) {
-					ASM(CMP32ri, type_reg, IS_STRING);
-					generate_raw_jump(Jump::je, string_label);
-				}
-				generate_raw_jump(Jump::jmp, fallback_label);
-
-				label_place(long_label);
-				ASM(MOV64rm, value_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG, 0));
-				emit_integer_dispatch(
-					layout.cases, layout.case_count, case_labels,
-					value_reg, constant_reg, default_label);
-
-				label_place(string_label);
-				ASM(MOV64rm, value_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG, 0));
-				for (uint32_t case_index = 0;
-						case_index < layout.case_count; ++case_index) {
-					const zend_tpde_multi_branch_case &branch_case =
-						layout.cases[case_index];
-					if (branch_case.string_key != nullptr) {
-						auto next_case = text_writer.label_create();
-						const uint64_t length = branch_case.string_length;
-						ASM(MOV64rm, probe_reg,
-							FE_MEM(value_reg, 0, FE_NOREG,
-								static_cast<int32_t>(
-									offsetof(zend_string, len))));
-						materialize_constant(
-							&length,
-							tpde::x64::PlatformConfig::GP_BANK,
-							8, constant_reg);
-						ASM(CMP64rr, probe_reg, constant_reg);
-						generate_raw_jump(Jump::jne, next_case);
-						size_t offset = 0;
-						while (offset < branch_case.string_length) {
-							const uint32_t width =
-								branch_case.string_length - offset >= 8 ? 8
-								: branch_case.string_length - offset >= 4 ? 4
-								: branch_case.string_length - offset >= 2 ? 2 : 1;
-							const size_t byte_offset =
-								offsetof(zend_string, val) + offset;
-							if (byte_offset > INT32_MAX) {
-								return false;
-							}
-							uint64_t expected = 0;
-							memcpy(&expected,
-								branch_case.string_key + offset, width);
-							switch (width) {
-								case 8:
-									ASM(MOV64rm, probe_reg,
-										FE_MEM(value_reg, 0, FE_NOREG,
-											static_cast<int32_t>(
-												byte_offset)));
-									break;
-								case 4:
-									ASM(MOV32rm, probe_reg,
-										FE_MEM(value_reg, 0, FE_NOREG,
-											static_cast<int32_t>(
-												byte_offset)));
-									break;
-								case 2:
-									ASM(MOVZXr32m16, probe_reg,
-										FE_MEM(value_reg, 0, FE_NOREG,
-											static_cast<int32_t>(
-												byte_offset)));
-									break;
-								default:
-									ASM(MOVZXr32m8, probe_reg,
-										FE_MEM(value_reg, 0, FE_NOREG,
-											static_cast<int32_t>(
-												byte_offset)));
-									break;
-							}
-							materialize_constant(
-								&expected,
-								tpde::x64::PlatformConfig::GP_BANK,
-								width, constant_reg);
-							ASM(CMP64rr, probe_reg, constant_reg);
-							generate_raw_jump(Jump::jne, next_case);
-							offset += width;
-						}
-						generate_raw_jump(
-							Jump::jmp, case_labels[case_index]);
-						label_place(next_case);
-					}
-				}
-				generate_raw_jump(Jump::jmp, default_label);
 
 				for (uint32_t case_index = 0;
 						case_index < layout.case_count; ++case_index) {
@@ -7101,19 +7147,8 @@ bool ZendCompilerX64::compile_inst_impl(
 							source_call_fast_callable_location(descriptor), 8);
 						builder.call(runtime_symbol(
 							ZEND_NATIVE_HELPER_CALL_FAST_DYNAMIC_INIT));
-						ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
-						ValuePart do_entry{
-							tpde::x64::PlatformConfig::GP_BANK, 8};
-						builder.add_ret(entry, tpde::CCAssignment{});
-						builder.add_ret(do_entry, tpde::CCAssignment{});
-						ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, do_entry_slot),
-							do_entry.cur_reg_or_load(this));
-						do_entry.reset(this);
-						auto entry_reg = entry.cur_reg_or_load(this);
-						ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot),
-							entry_reg);
-						ASM(TEST64rr, entry_reg, entry_reg);
-						entry.reset(this);
+						store_fast_init_entries(builder, entry_slot,
+							do_entry_slot);
 					}
 					generate_raw_jump(Jump::je, fast_miss);
 					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
@@ -7453,19 +7488,8 @@ bool ZendCompilerX64::compile_inst_impl(
 							call.id, &assigner), tpde::CCAssignment{});
 						builder.call(runtime_symbol(
 							ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT));
-						ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
-						ValuePart do_entry{
-							tpde::x64::PlatformConfig::GP_BANK, 8};
-						builder.add_ret(entry, tpde::CCAssignment{});
-						builder.add_ret(do_entry, tpde::CCAssignment{});
-						ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, do_entry_slot),
-							do_entry.cur_reg_or_load(this));
-						do_entry.reset(this);
-						auto entry_reg = entry.cur_reg_or_load(this);
-						ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, entry_slot),
-							entry_reg);
-						ASM(TEST64rr, entry_reg, entry_reg);
-						entry.reset(this);
+						store_fast_init_entries(builder, entry_slot,
+							do_entry_slot);
 					}
 					generate_raw_jump(Jump::je, fast_miss);
 					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 2);
@@ -18485,8 +18509,6 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto default_label = text_writer.label_create();
 			auto fallback_label = layout.source_opcode == ZEND_MATCH
 				? default_label : text_writer.label_create();
-			auto long_label = text_writer.label_create();
-			auto string_label = text_writer.label_create();
 			/* MATCH warns about an undefined CV; type inference often
 			 * proves it defined. */
 			const uint32_t match_position =
@@ -18536,116 +18558,11 @@ bool ZendCompilerX64::compile_inst_impl(
 						offsetof(zval, u1.type_info))));
 			auto spilled = spill_before_branch();
 			begin_branch_region();
-			auto dereferenced = text_writer.label_create();
-			ASM(CMP32ri, type_reg, IS_REFERENCE);
-			emit_cold_branch(Jump::je, dereferenced, [&] {
-				ASM(MOV64rm, slot_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG, 0));
-				ASM(ADD64ri, slot_reg,
-					static_cast<int32_t>(offsetof(zend_reference, val)));
-				ASM(MOVZXr32m8, type_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zval, u1.type_info))));
-			});
-			if (layout.source_opcode != ZEND_SWITCH_STRING) {
-				ASM(CMP32ri, type_reg, IS_LONG);
-				generate_raw_jump(Jump::je, long_label);
-			}
-			if (layout.source_opcode != ZEND_SWITCH_LONG) {
-				ASM(CMP32ri, type_reg, IS_STRING);
-				generate_raw_jump(Jump::je, string_label);
-			}
-			generate_raw_jump(Jump::jmp, fallback_label);
-
-			/* SWITCH_STRING never takes the integer dispatch, SWITCH_LONG
-			 * never the string one. */
-			if (layout.source_opcode != ZEND_SWITCH_STRING) {
-				label_place(long_label);
-				ASM(MOV64rm, value_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG, 0));
-				emit_integer_dispatch(
+			if (!emit_multi_branch_dispatch(layout.source_opcode,
 					layout.cases, layout.case_count, case_labels,
-					value_reg, constant_reg, default_label);
-			}
-
-			if (layout.source_opcode != ZEND_SWITCH_LONG) {
-				label_place(string_label);
-				ASM(MOV64rm, value_reg,
-					FE_MEM(slot_reg, 0, FE_NOREG, 0));
-				/* The length once; the bytes compare in memory with
-				 * immediates where they fit. */
-				const AsmReg length_reg = type_reg;
-				ASM(MOV64rm, length_reg,
-					FE_MEM(value_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_string, len))));
-				for (uint32_t case_index = 0;
-						case_index < layout.case_count; ++case_index) {
-					const zend_tpde_multi_branch_case &branch_case =
-						layout.cases[case_index];
-					if (branch_case.string_key != nullptr) {
-						auto next_case = text_writer.label_create();
-						const uint64_t length = branch_case.string_length;
-						if (length > INT32_MAX) {
-							return false;
-						}
-						ASM(CMP64ri, length_reg, static_cast<int32_t>(length));
-						generate_raw_jump(Jump::jne, next_case);
-						size_t offset = 0;
-						while (offset < branch_case.string_length) {
-							const uint32_t width =
-								branch_case.string_length - offset >= 8 ? 8
-								: branch_case.string_length - offset >= 4 ? 4
-								: branch_case.string_length - offset >= 2 ? 2 : 1;
-							const size_t byte_offset =
-								offsetof(zend_string, val) + offset;
-							if (byte_offset > INT32_MAX) {
-								return false;
-							}
-							uint64_t expected = 0;
-							memcpy(&expected, branch_case.string_key + offset,
-								width);
-							const auto bytes = FE_MEM(value_reg, 0, FE_NOREG,
-								static_cast<int32_t>(byte_offset));
-							switch (width) {
-								case 8:
-									if (static_cast<int64_t>(expected)
-											== static_cast<int64_t>(
-												static_cast<int32_t>(expected))) {
-										ASM(CMP64mi, bytes,
-											static_cast<int32_t>(expected));
-									} else {
-										materialize_constant(&expected,
-											tpde::x64::PlatformConfig::GP_BANK,
-											8, constant_reg);
-										ASM(CMP64rm, constant_reg, bytes);
-									}
-									break;
-								case 4:
-									ASM(CMP32mi, bytes,
-										static_cast<int32_t>(
-											static_cast<uint32_t>(expected)));
-									break;
-								case 2:
-									ASM(CMP16mi, bytes,
-										static_cast<int16_t>(
-											static_cast<uint16_t>(expected)));
-									break;
-								default:
-									ASM(CMP8mi, bytes,
-										static_cast<int8_t>(
-											static_cast<uint8_t>(expected)));
-									break;
-							}
-							generate_raw_jump(Jump::jne, next_case);
-							offset += width;
-						}
-						generate_raw_jump(
-							Jump::jmp, case_labels[case_index]);
-						label_place(next_case);
-					}
-				}
-				generate_raw_jump(Jump::jmp, default_label);
+					default_label, fallback_label, slot_reg, type_reg,
+					value_reg, constant_reg)) {
+				return false;
 			}
 
 			for (uint32_t i = 0; i < case_labels.size(); ++i) {
