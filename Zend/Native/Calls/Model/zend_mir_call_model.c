@@ -1128,6 +1128,7 @@ static bool zend_mir_emit_calls(
 	return mutator->commit_call_model(mutator->context);
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_call_verify_emit(zend_mir_diagnostic_sink *diagnostics,
 	zend_mir_verify_call_code code, const char *token)
 {
@@ -1151,7 +1152,6 @@ static bool zend_mir_span_equal(zend_mir_span left, zend_mir_span right)
 	return left.offset == right.offset && left.count == right.count;
 }
 
-#if !defined(NDEBUG)
 typedef struct _zend_mir_fingerprint_digest {
 	uint32_t words[4];
 } zend_mir_fingerprint_digest;
@@ -1763,7 +1763,6 @@ static bool zend_mir_verify_machine_result_indexed(
 	*representation_out = value.representation;
 	return true;
 }
-#endif
 
 static bool zend_mir_verify_frame_shape(
 	const zend_mir_frame_state_ref *frame,
@@ -1806,7 +1805,6 @@ static bool zend_mir_verify_frame_shape(
 		&& frame->canonical;
 }
 
-#if !defined(NDEBUG)
 static bool zend_mir_call_find_function(
 	const zend_mir_view *view, const zend_mir_final_indexes *indexes,
 	zend_mir_function_id id,
@@ -2564,7 +2562,13 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_calls(
 #if !defined(NDEBUG)
 	view = context->module_ops.view(context->module_ops.context, lowered.module);
 	calls = zend_mir_module_get_call_view(lowered.module);
+	/* Fingerprint the stable projection before and after verification to
+	 * catch mutation during verification. */
 	if (view == NULL || calls == NULL
+			|| !zend_mir_build_fingerprints(
+				view, context->source, source_calls, calls,
+				context->diagnostics,
+				module_fingerprint, source_fingerprint)
 			|| !zend_mir_verify_final_composition(
 				view, source_calls, calls, context->diagnostics)) {
 		context->module_ops.destroy(context->module_ops.context, lowered.module);
@@ -2572,12 +2576,7 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_calls(
 		return zend_mir_failure(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_CALL_VERIFY_FAILED);
 	}
-	/* Recompute the stable projection to catch mutation during verification. */
 	if (!zend_mir_build_fingerprints(
-				view, context->source, source_calls, calls,
-				context->diagnostics,
-				module_fingerprint, source_fingerprint)
-			|| !zend_mir_build_fingerprints(
 				view, context->source, source_calls, calls,
 				context->diagnostics,
 				recomputed_module_fingerprint,
