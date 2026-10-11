@@ -889,7 +889,8 @@ static void zend_native_frameless_consume(
 	}
 	slot = zend_native_frameless_slot(execute_data, type, operand);
 	if (slot != NULL && !Z_ISUNDEF_P(slot)) {
-		zval_ptr_dtor(slot);
+		/* FREE_OP of a temporary argument. */
+		zval_ptr_dtor_nogc(slot);
 		ZVAL_UNDEF(slot);
 	}
 }
@@ -943,6 +944,7 @@ static zend_always_inline zval *zend_native_call_frameless_argument(
 		: (zval *) ((char *) execute_data + offset);
 }
 
+/* FREE_OP of a temporary argument the fast path found defined. */
 static zend_always_inline void zend_native_call_frameless_release(
 	zend_execute_data *execute_data, uint64_t descriptor, uint32_t index,
 	uint32_t offset)
@@ -950,10 +952,8 @@ static zend_always_inline void zend_native_call_frameless_release(
 	if ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1) {
 		zval *slot = (zval *) ((char *) execute_data + offset);
 
-		if (!Z_ISUNDEF_P(slot)) {
-			zval_ptr_dtor(slot);
-			ZVAL_UNDEF(slot);
-		}
+		zval_ptr_dtor_nogc(slot);
+		ZVAL_UNDEF(slot);
 	}
 }
 
@@ -1097,7 +1097,7 @@ cleanup:
 			zval *slot = (zval *) ((char *) execute_data + offsets[index]);
 
 			if (!Z_ISUNDEF_P(slot)) {
-				zval_ptr_dtor(slot);
+				zval_ptr_dtor_nogc(slot);
 				ZVAL_UNDEF(slot);
 			}
 		}
@@ -1164,7 +1164,7 @@ cleanup:
 			zval *slot = arguments[index];
 
 			if (!Z_ISUNDEF_P(slot)) {
-				zval_ptr_dtor(slot);
+				zval_ptr_dtor_nogc(slot);
 				ZVAL_UNDEF(slot);
 			}
 		}
@@ -1275,7 +1275,7 @@ zend_native_status zend_native_call_frameless_1(
 					ZEND_OBSERVER_DATA(zend_flf_functions[handler_index]))))
 #endif
 			) {
-		return zend_native_call_frameless_direct(
+		return zend_native_call_frameless_general(
 			execute_data, descriptor, slots, more_slots);
 	}
 	execute_data->opline =
