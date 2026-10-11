@@ -7135,24 +7135,11 @@ public:
 					ZEND_NATIVE_DIRECT_INTERNAL_CALL_REQUIRE_SCALAR_RESULT,
 					machine_result);
 			}
-			bool has_guarded_boxed_value_argument = false;
-			if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-					&& instruction.direct_call != nullptr
-					&& instruction.direct_call_argument_guard_types != nullptr) {
-				for (uint32_t argument = 0;
-						argument < instruction.call_argument_count; ++argument) {
-					if (zend_mir_scalar_type_is_exact(
-							instruction.direct_call_argument_guard_types[argument])) {
-						has_guarded_boxed_value_argument = true;
-						break;
-					}
-				}
-			}
 			const InlinedBody inlined_user_body =
 				function_mode_ == FunctionMode::ZendEntry
 					&& record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 					&& machine_result
-					&& !has_guarded_boxed_value_argument
+					&& !zend_tpde_direct_call_has_argument_guard(instruction)
 					? inline_component_scalar_body(instruction,
 						i,
 						result,
@@ -10810,25 +10797,13 @@ public:
 		if (value == INVALID_VALUE_REF) {
 			return false;
 		}
-		if (exact_type(value) == ZEND_MIR_SCALAR_TYPE_NULL) {
-			return false;
-		}
-		if (zend_mir_scalar_type_is_exact(exact_type(value))) {
-			uint64_t constant_bits;
-			return constant(value, &constant_bits)
-				|| machine_value_is_register_authoritative(value);
-		}
-		switch (machine_kind(value)) {
-			case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
-			case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
-			case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
-			case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
-			case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
-			case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
-				return machine_value_is_register_authoritative(value);
-			default:
-				return false;
-		}
+		const zend_mir_scalar_type_mask type = exact_type(value);
+		uint64_t constant_bits;
+		return zend_tpde_machine_result_representation(type,
+			machine_kind(value),
+			zend_mir_scalar_type_is_exact(type)
+				&& constant(value, &constant_bits),
+			machine_value_is_register_authoritative(value));
 	}
 	bool machine_value_needs_result_assignment(IRValueRef value) const {
 		uint64_t constant_bits;

@@ -2558,6 +2558,57 @@ static inline bool zend_tpde_generator_resume_value_live(
 			& (uint64_t{1} << (value_index % 64))) != 0;
 }
 
+/*
+ * Whether a value has a machine result of its own, for the planner and the
+ * adaptor alike: an exact scalar that is a constant or held in registers, or
+ * a pointer or boxed zval held in registers. A null is payload-free and has
+ * none.
+ */
+static inline bool zend_tpde_machine_result_representation(
+	zend_mir_scalar_type_mask exact_type,
+	zend_tpde_machine_value_kind machine_kind,
+	bool constant, bool register_authoritative)
+{
+	if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+		return false;
+	}
+	if (zend_mir_scalar_type_is_exact(exact_type)) {
+		return constant || register_authoritative;
+	}
+	switch (machine_kind) {
+		case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+		case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
+			return register_authoritative;
+		default:
+			return false;
+	}
+}
+
+/*
+ * A direct user call with an argument whose type is checked only at run time:
+ * a by-value boxed source or the referent of a by-reference one. Such a call
+ * keeps its frame; an effect-closed inline body would emit no check.
+ */
+static inline bool zend_tpde_direct_call_has_argument_guard(
+	const zend_tpde_instruction &instruction)
+{
+	if (instruction.direct_call_argument_guard_types == nullptr) {
+		return false;
+	}
+	for (uint32_t argument = 0;
+			argument < instruction.call_argument_count; ++argument) {
+		if (zend_mir_scalar_type_is_exact(
+				instruction.direct_call_argument_guard_types[argument])) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static inline bool zend_tpde_known_numeric_type(uint8_t known)
 {
 	return known == IS_LONG || known == IS_DOUBLE

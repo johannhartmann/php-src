@@ -11226,25 +11226,10 @@ static bool freeze_typed_component_calls(
 						- instruction.call_argument_offset) {
 			continue;
 		}
-		bool has_guarded_boxed_value_argument = false;
-		if (instruction.direct_call_argument_guard_types != nullptr) {
-			for (uint32_t argument = 0;
-					argument < instruction.call_argument_count
-						&& argument < instruction.direct_call->argument_count;
-					++argument) {
-				if (instruction.direct_call->arguments[argument].mode
-						== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-						&& zend_mir_scalar_type_is_exact(
-							instruction.direct_call_argument_guard_types[argument])) {
-					has_guarded_boxed_value_argument = true;
-					break;
-				}
-			}
-		}
 		const bool effect_closed_inline =
 			machine_plan_prefers_effect_closed_inline(
 				instruction, callee)
-			&& !has_guarded_boxed_value_argument;
+			&& !zend_tpde_direct_call_has_argument_guard(instruction);
 		bool compatible = true;
 		for (uint32_t argument = 0;
 				argument < instruction.call_argument_count; ++argument) {
@@ -11917,19 +11902,15 @@ static bool machine_plan_value_has_result_representation(
 	const int32_t definition =
 		plan->value_definition_instructions == nullptr
 			? -1 : plan->value_definition_instructions[value_index];
+	/* The adaptor defines a transient scalar result in registers. */
 	if (definition >= 0
 			&& static_cast<uint32_t>(definition) < plan->instruction_count
 			&& plan->instructions[static_cast<uint32_t>(definition)]
 				.transient_scalar_result) {
 		return true;
 	}
-	if (zend_mir_scalar_type_is_exact(value.exact_type)
-			&& value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL) {
-		return value.constant || value.register_authoritative;
-	}
-	return machine_value_kind_can_be_register_authoritative(
-			value.machine_kind)
-		&& value.register_authoritative;
+	return zend_tpde_machine_result_representation(value.exact_type,
+		value.machine_kind, value.constant, value.register_authoritative);
 }
 
 static bool machine_plan_value_needs_result_assignment(
