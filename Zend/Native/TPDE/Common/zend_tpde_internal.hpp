@@ -11,6 +11,7 @@
 #include "Zend/zend_execute.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -543,8 +544,16 @@ enum zend_tpde_machine_control_flow_flag : uint8_t {
 	ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_MERGE = 1u << 7,
 };
 
+/* The two machine functions of a member: Zend entry and typed body. */
+inline constexpr uint8_t ZEND_TPDE_MACHINE_MODE_ENTRY = 1u << 0;
+inline constexpr uint8_t ZEND_TPDE_MACHINE_MODE_TYPED_BODY = 1u << 1;
+
+constexpr uint8_t zend_tpde_machine_mode(bool typed_body) {
+	return typed_body
+		? ZEND_TPDE_MACHINE_MODE_TYPED_BODY : ZEND_TPDE_MACHINE_MODE_ENTRY;
+}
+
 struct zend_tpde_instruction {
-	zend_mir_instruction_id id;
 	zend_mir_instruction_record record;
 	uint32_t operand_offset;
 	uint32_t operand_count;
@@ -602,6 +611,9 @@ struct zend_tpde_instruction {
 	/* A specialized member's guarded operation whose failed guard
 	 * deoptimizes into the generic copy: 1 + its resume index there. */
 	uint32_t deopt_exit_resume_plus_one;
+	/* ZEND_TPDE_MACHINE_MODE_* bits of the modes whose conditional branch
+	 * tests the register condition instead of the boxed value. */
+	uint8_t register_cond_branch_modes;
 	bool transient_scalar_result;
 	zend_mir_representation transient_result_representation;
 	zend_mir_scalar_type_mask transient_result_exact_type;
@@ -2344,6 +2356,10 @@ struct zend_tpde_machine_cfg {
 inline constexpr bool zend_tpde_linux_inline_forms =
 	ZEND_NATIVE_HOST_TARGET == ZEND_NATIVE_TARGET_LINUX_AMD64;
 
+namespace zend::native::tpde {
+class ZendIRAdaptor;
+}
+
 struct zend_tpde_plan {
 	uint32_t source_ssa_variable_count;
 	uint32_t source_opcode_count;
@@ -2521,6 +2537,12 @@ struct zend_tpde_plan {
 	uint32_t *deopt_resume_targets;
 	uint32_t *deopt_resume_instructions;
 	/*
+	 * A generic copy's Zend-entry adaptor, built to decide which resume IDs
+	 * land when its specialized member's exits are frozen. The component
+	 * adaptor adopts it instead of building the member again.
+	 */
+	mutable zend::native::tpde::ZendIRAdaptor *deopt_landing_adaptor;
+	/*
 	 * Per CV, nonzero when its lazy scalar stores are observable only by an
 	 * operation that names the CV: no symbol table, parameter, catch,
 	 * generator or user-opcode observer can read the slot otherwise.
@@ -2581,6 +2603,51 @@ static inline bool zend_tpde_generator_resume_value_live(
 				* plan->generator_resume_live_word_count;
 	return (words[value_index / 64]
 			& (uint64_t{1} << (value_index % 64))) != 0;
+}
+
+/* The generator resume of a target source position, or UINT32_MAX; the
+ * targets are sorted and unique. */
+static inline uint32_t zend_tpde_generator_resume_at_target(
+	const zend_tpde_plan *plan, uint32_t target)
+{
+	if (plan->generator_resume_targets == nullptr) {
+		return UINT32_MAX;
+	}
+	const uint32_t *begin = plan->generator_resume_targets;
+	const uint32_t *end = begin + plan->generator_resume_count;
+	const uint32_t *found = std::lower_bound(begin, end, target);
+	return found != end && *found == target
+		? static_cast<uint32_t>(found - begin) : UINT32_MAX;
+}
+
+/* Calls visit(value_index) for the live values of a generator resume in
+ * ascending order; stops at, and returns, the first false. */
+template <typename Visit>
+static inline bool zend_tpde_visit_generator_resume_values(
+	const zend_tpde_plan *plan, uint32_t resume_index, Visit &&visit)
+{
+	if (resume_index >= plan->generator_resume_count
+			|| plan->generator_resume_live_values == nullptr) {
+		return true;
+	}
+	const uint64_t *words =
+		plan->generator_resume_live_values
+			+ static_cast<size_t>(resume_index)
+				* plan->generator_resume_live_word_count;
+	for (uint32_t word = 0;
+			word < plan->generator_resume_live_word_count; ++word) {
+		for (uint64_t bits = words[word]; bits != 0; bits &= bits - 1) {
+			const uint32_t value_index = word * 64
+				+ static_cast<uint32_t>(std::countr_zero(bits));
+			if (value_index >= plan->value_count) {
+				return true;
+			}
+			if (!visit(value_index)) {
+				return false;
+			}
+		}
+	}
+	return true;
 }
 
 /*
@@ -2926,6 +2993,35 @@ zend_mir_value_id zend_tpde_operand_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction,
 	uint32_t index);
+
+/*
+ * The machine kind of a typed body's proven numeric binary result
+ * (zend_tpde_typed_numeric_binary): a comparison's boolean, an exact long
+ * where inference proved one (its range excludes overflow), else a boxed
+ * number.
+ */
+static inline zend_tpde_machine_value_kind zend_tpde_typed_numeric_result_kind(
+	const zend_tpde_plan *plan, const zend_tpde_instruction &instruction)
+{
+	if (zend_tpde_numeric_comparison(
+			instruction.value_operation.source_opcode)) {
+		return ZEND_TPDE_MACHINE_VALUE_BOOL;
+	}
+	const zend_mir_value_id result_ssa =
+		instruction.value_operation.result.ssa_variable_id;
+	const int32_t result_value =
+		instruction.source_result_binding.value_index >= 0
+			? instruction.source_result_binding.value_index
+		: result_ssa != ZEND_MIR_ID_INVALID
+			? zend_tpde_value_index(plan,
+				zend_mir_value_from_original_ssa(result_ssa))
+			: -1;
+	return result_value >= 0
+			&& static_cast<uint32_t>(result_value) < plan->value_count
+			&& plan->values[result_value].exact_type
+				== ZEND_MIR_SCALAR_TYPE_I64
+		? ZEND_TPDE_MACHINE_VALUE_I64 : ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+}
 
 struct zend_tpde_scalar_diamond {
 	uint32_t entry;

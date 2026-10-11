@@ -2679,7 +2679,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						zend_native_direct_activation, pending_call)),
 					scratch_reg, 8);
 				auto descriptor = image_symbol_value(
-					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id);
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.record.id);
 				auto descriptor_scratch =
 					std::move(descriptor).into_scratch(this);
 				store_off(activation_reg,
@@ -3250,7 +3250,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				builder.add_arg(copy_fixed_argument(
 					canonical_frame_register()), ::tpde::CCAssignment{});
 				builder.add_arg(image_symbol_value(
-					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id),
+					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.record.id),
 					::tpde::CCAssignment{});
 				builder.add_arg(ValuePart{node.argument_index, 4,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -3482,7 +3482,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			builder.add_arg(copy_fixed_argument(
 				canonical_frame_register()), ::tpde::CCAssignment{});
 			builder.add_arg(image_symbol_value(
-				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.id),
+				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.record.id),
 				::tpde::CCAssignment{});
 			ScratchReg activation{this};
 			ScratchReg target_kind{this};
@@ -3854,7 +3854,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		builder.add_arg(image_symbol_value(
 			ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-			call.id), ::tpde::CCAssignment{});
+			call.record.id), ::tpde::CCAssignment{});
 		builder.add_arg(ValuePart{
 			node.argument_index, 4, DarwinConfig::GP_BANK},
 			::tpde::CCAssignment{});
@@ -11366,7 +11366,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						auto cell_reg = cell_scratch.cur_reg();
 						auto descriptor_value = image_symbol_value(
 							ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
-							call.id);
+							call.record.id);
 						auto descriptor_scratch =
 							std::move(descriptor_value).into_scratch(this);
 						leaf_private_frame_slot = allocate_stack_slot(
@@ -11876,7 +11876,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					auto cell_reg = cell_scratch.cur_reg();
 					auto descriptor_value = image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
-						call.id);
+						call.record.id);
 					auto descriptor_scratch =
 						std::move(descriptor_value).into_scratch(this);
 					auto descriptor_reg = descriptor_scratch.cur_reg();
@@ -13286,7 +13286,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						CallArg{node.operands[frame_operand + 3]});
 					finish_builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
-						call.id), ::tpde::CCAssignment{});
+						call.record.id), ::tpde::CCAssignment{});
 					finish_builder.add_arg(
 						CallArg{node.operands[context_operand + 3]});
 					finish_builder.add_arg(
@@ -13360,7 +13360,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						call.call_site->target_id), ::tpde::CCAssignment{});
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
-						call.id), ::tpde::CCAssignment{});
+						call.record.id), ::tpde::CCAssignment{});
 					if (split_cold) {
 						builder.add_arg(CallArg{
 							node.operands[context_operand]});
@@ -13432,7 +13432,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				}
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
-					call.id), ::tpde::CCAssignment{});
+					call.record.id), ::tpde::CCAssignment{});
 				if (split_cold) {
 					builder.add_arg(CallArg{
 						node.operands[context_operand + 2]});
@@ -13579,7 +13579,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						call.call_site->target_id), ::tpde::CCAssignment{});
 					enter_builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-						call.id), ::tpde::CCAssignment{});
+						call.record.id), ::tpde::CCAssignment{});
 					enter_builder.add_arg(CallArg{
 						node.operands[context_operand]});
 					enter_builder.call(runtime_symbol(
@@ -13622,7 +13622,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					CallArg{node.operands[frame_operand + 1]});
 				leave_builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-					call.id), ::tpde::CCAssignment{});
+					call.record.id), ::tpde::CCAssignment{});
 				leave_builder.add_arg(CallArg{
 					node.operands[context_operand + 2]});
 				leave_builder.add_arg(
@@ -13680,7 +13680,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				call.call_site->target_id), ::tpde::CCAssignment{});
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-				call.id), ::tpde::CCAssignment{});
+				call.record.id), ::tpde::CCAssignment{});
 			for (IRValueRef operand : node.operands) {
 				auto liveness = val_ref(operand);
 				(void) liveness;
@@ -13749,7 +13749,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						call.call_site->target_id), ::tpde::CCAssignment{});
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-						call.id), ::tpde::CCAssignment{});
+						call.record.id), ::tpde::CCAssignment{});
 					builder.call(runtime_symbol(
 						ZEND_NATIVE_HELPER_INTERNAL_CALL_BEGIN));
 				}
@@ -13830,7 +13830,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						builder.add_arg(CallArg{frame_operand});
 						builder.add_arg(image_symbol_value(
 							ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-							call.id), ::tpde::CCAssignment{});
+							call.record.id), ::tpde::CCAssignment{});
 						builder.add_arg(ValuePart{index, 4,
 							DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 						for (uint32_t part = 0; part < 2; ++part) {
@@ -13850,7 +13850,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						(void) source_liveness;
 						builder.add_arg(image_symbol_value(
 							ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-							call.id), ::tpde::CCAssignment{});
+							call.record.id), ::tpde::CCAssignment{});
 						builder.add_arg(ValuePart{index, 4,
 							DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 						builder.call(runtime_symbol(
@@ -13861,7 +13861,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 						builder.add_arg(image_symbol_value(
 							ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-							call.id), ::tpde::CCAssignment{});
+							call.record.id), ::tpde::CCAssignment{});
 						builder.add_arg(ValuePart{index, 4,
 							DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 						builder.call(runtime_symbol(
@@ -13870,7 +13870,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					}
 					builder.add_arg(image_symbol_value(
 						ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-						call.id), ::tpde::CCAssignment{});
+						call.record.id), ::tpde::CCAssignment{});
 					builder.add_arg(ValuePart{index, 4,
 						DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 					builder.add_arg(CallArg{operand});
@@ -13897,7 +13897,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					call.call_site->target_id), ::tpde::CCAssignment{});
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-					call.id), ::tpde::CCAssignment{});
+					call.record.id), ::tpde::CCAssignment{});
 				builder.call(runtime_symbol(
 					ZEND_NATIVE_HELPER_INTERNAL_CALL_FINISH_SOURCE));
 				ValuePart status{DarwinConfig::GP_BANK, 4};
@@ -13965,7 +13965,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				call.call_site->target_id), ::tpde::CCAssignment{});
 			builder.add_arg(image_symbol_value(
 				ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-				call.id), ::tpde::CCAssignment{});
+				call.record.id), ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(call.internal_call_cell != nullptr
 					&& zend_native_internal_call_descriptor_plain(
 						call.internal_call_cell, call.direct_internal_call)

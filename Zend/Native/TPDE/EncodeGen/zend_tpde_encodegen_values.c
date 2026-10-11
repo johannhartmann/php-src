@@ -35,15 +35,15 @@ typedef struct _zend_native_boxed {
 } zend_native_boxed;
 
 /*
- * The slot of a declared property of an object receiver whose class and
- * offset the VM run-time cache slot names, or NULL: a non-object receiver, a
- * different class, a dynamic property, or an undefined or reference slot.
+ * The declared property slot of an object receiver whose class and offset
+ * the VM run-time cache slot names, or NULL: a non-object receiver, a
+ * different class or a dynamic property.
  */
-zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
+ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_cached_property(
+	const zval *receiver, void *const *cache_slot)
 {
 	const zend_object *object;
 	uintptr_t offset;
-	zval *property;
 
 	if (UNEXPECTED(Z_TYPE_P(receiver) != IS_OBJECT)) {
 		return NULL;
@@ -56,7 +56,21 @@ zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
 	if (UNEXPECTED(!IS_VALID_PROPERTY_OFFSET(offset))) {
 		return NULL;
 	}
-	property = OBJ_PROP(object, offset);
+	return OBJ_PROP(object, offset);
+}
+
+/*
+ * The slot of a declared property of an object receiver whose class and
+ * offset the VM run-time cache slot names, or NULL: a non-object receiver, a
+ * different class, a dynamic property, or an undefined or reference slot.
+ */
+zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
+{
+	zval *property = zend_native_cached_property(receiver, cache_slot);
+
+	if (property == NULL) {
+		return NULL;
+	}
 	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF
 			|| Z_TYPE_P(property) == IS_REFERENCE)
 		? NULL : property;
@@ -70,22 +84,11 @@ zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
 zval *zend_native_property_read_slot(
 	const zval *receiver, void *const *cache_slot)
 {
-	const zend_object *object;
-	uintptr_t offset;
-	zval *property;
+	zval *property = zend_native_cached_property(receiver, cache_slot);
 
-	if (UNEXPECTED(Z_TYPE_P(receiver) != IS_OBJECT)) {
+	if (property == NULL) {
 		return NULL;
 	}
-	object = Z_OBJ_P(receiver);
-	if (UNEXPECTED(cache_slot[0] != object->ce)) {
-		return NULL;
-	}
-	offset = (uintptr_t) cache_slot[1];
-	if (UNEXPECTED(!IS_VALID_PROPERTY_OFFSET(offset))) {
-		return NULL;
-	}
-	property = OBJ_PROP(object, offset);
 	if (UNEXPECTED(Z_TYPE_P(property) == IS_REFERENCE)) {
 		return &Z_REF_P(property)->val;
 	}
@@ -827,80 +830,17 @@ uint64_t zend_native_container_shared(const zval *container)
 }
 
 /*
- * zend_is_identical() of a value, through a reference, and a literal: 1 or
- * 0 for null, bools, integers and strings, ZEND_NATIVE_IDENTICAL_UNKNOWN for
- * an undefined value, doubles (signed zeros, NaN), arrays and objects.
+ * zend_is_identical() of two defined values without references: 1 or 0 for
+ * null, bools, integers and strings, ZEND_NATIVE_IDENTICAL_UNKNOWN for
+ * doubles (signed zeros, NaN), arrays and objects.
  */
-uint64_t zend_native_zval_identical(const zval *value, const zval *literal)
+ZEND_NATIVE_SNIPPET_INLINE uint64_t zend_native_identical_values(
+	const zval *value, const zval *other)
 {
 	const char *left;
 	const char *right;
 	size_t length;
 
-	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
-		value = &Z_REF_P(value)->val;
-	}
-	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
-	}
-	if (Z_TYPE_P(value) != Z_TYPE_P(literal)) {
-		return 0;
-	}
-	if (Z_TYPE_P(value) <= IS_TRUE) {
-		return 1;
-	}
-	if (Z_TYPE_P(value) == IS_LONG) {
-		return Z_LVAL_P(value) == Z_LVAL_P(literal);
-	}
-	if (UNEXPECTED(Z_TYPE_P(value) != IS_STRING)) {
-		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
-	}
-	if (Z_STR_P(value) == Z_STR_P(literal)) {
-		return 1;
-	}
-	length = Z_STRLEN_P(value);
-	if (length != Z_STRLEN_P(literal)) {
-		return 0;
-	}
-	/* Word by word, then the last bytes; no library call and few
-	 * registers: two cursors and the remaining length. */
-	left = Z_STRVAL_P(value);
-	right = Z_STRVAL_P(literal);
-	for (; length >= sizeof(uint64_t); length -= sizeof(uint64_t)) {
-		if (*(const uint64_t *) left != *(const uint64_t *) right) {
-			return 0;
-		}
-		left += sizeof(uint64_t);
-		right += sizeof(uint64_t);
-	}
-	for (; length != 0; length--) {
-		if (*left++ != *right++) {
-			return 0;
-		}
-	}
-	return 1;
-}
-
-/*
- * The same for two variables: the second operand is a CV, which may also
- * hold a reference or be undefined (the helper warns about it).
- */
-uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
-{
-	const char *left;
-	const char *right;
-	size_t length;
-
-	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
-		value = &Z_REF_P(value)->val;
-	}
-	if (UNEXPECTED(Z_TYPE_P(other) == IS_REFERENCE)) {
-		other = &Z_REF_P(other)->val;
-	}
-	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF
-			|| Z_TYPE_P(other) == IS_UNDEF)) {
-		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
-	}
 	if (Z_TYPE_P(value) != Z_TYPE_P(other)) {
 		return 0;
 	}
@@ -920,6 +860,8 @@ uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
 	if (length != Z_STRLEN_P(other)) {
 		return 0;
 	}
+	/* Word by word, then the last bytes; no library call and few
+	 * registers: two cursors and the remaining length. */
 	left = Z_STRVAL_P(value);
 	right = Z_STRVAL_P(other);
 	for (; length >= sizeof(uint64_t); length -= sizeof(uint64_t)) {
@@ -935,6 +877,41 @@ uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
 		}
 	}
 	return 1;
+}
+
+/*
+ * zend_is_identical() of a value, through a reference, and a literal, as
+ * zend_native_identical_values() decides it; ZEND_NATIVE_IDENTICAL_UNKNOWN
+ * for an undefined value.
+ */
+uint64_t zend_native_zval_identical(const zval *value, const zval *literal)
+{
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
+		value = &Z_REF_P(value)->val;
+	}
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
+		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
+	}
+	return zend_native_identical_values(value, literal);
+}
+
+/*
+ * The same for two variables: the second operand is a CV, which may also
+ * hold a reference or be undefined (the helper warns about it).
+ */
+uint64_t zend_native_zval_identical_any(const zval *value, const zval *other)
+{
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
+		value = &Z_REF_P(value)->val;
+	}
+	if (UNEXPECTED(Z_TYPE_P(other) == IS_REFERENCE)) {
+		other = &Z_REF_P(other)->val;
+	}
+	if (UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF
+			|| Z_TYPE_P(other) == IS_UNDEF)) {
+		return ZEND_NATIVE_IDENTICAL_UNKNOWN;
+	}
+	return zend_native_identical_values(value, other);
 }
 
 /*

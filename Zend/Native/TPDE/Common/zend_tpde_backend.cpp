@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
+#include <string_view>
 
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
@@ -1013,18 +1014,78 @@ static void zend_tpde_refine_literal_assignment_values(
 	}
 }
 
+/*
+ * A fixed point over instructions in index order, pass after pass, like a
+ * full sweep until nothing changes. evaluate(index) returns the index of the
+ * value it changed, or -1; an instruction is evaluated again only after
+ * visit_users reported it as a user of a changed value. Its evaluation
+ * reads only its own operands and its result, so a skipped evaluation would
+ * have changed nothing.
+ */
+template <typename Evaluate, typename VisitUsers>
+static void sweep_to_fixed_point(
+		uint32_t instruction_count, Evaluate &&evaluate,
+		VisitUsers &&visit_users) {
+	std::vector<uint8_t> dirty(instruction_count, 1);
+	for (bool swept = true; swept;) {
+		swept = false;
+		for (uint32_t index = 0; index < instruction_count; ++index) {
+			if (dirty[index] == 0) {
+				continue;
+			}
+			dirty[index] = 0;
+			const int32_t changed = evaluate(index);
+			if (changed < 0) {
+				continue;
+			}
+			swept = true;
+			visit_users(static_cast<uint32_t>(changed),
+				[&](uint32_t user) {
+					if (user < instruction_count) {
+						dirty[user] = 1;
+					}
+				});
+		}
+	}
+}
+
+/* Visits the instructions that read a value as a MIR operand. */
+static void visit_operand_users(const zend_tpde_plan *plan,
+		uint32_t value_index, const auto &visit) {
+	if (plan->value_consumer_offsets == nullptr
+			|| value_index >= plan->value_count) {
+		return;
+	}
+	for (uint32_t use = plan->value_consumer_offsets[value_index];
+			use < plan->value_consumer_offsets[value_index + 1]; ++use) {
+		const zend_tpde_machine_use &consumer = plan->value_consumers[use];
+		if (consumer.kind == ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND
+				|| consumer.kind == ZEND_TPDE_MACHINE_USE_PHI_EDGE) {
+			visit(consumer.instruction_index);
+		}
+	}
+}
+
 static void zend_tpde_refine_boxed_scalar_copies(zend_tpde_plan *plan)
 {
-	uint32_t pass = 0;
-	bool changed;
-
 	if (plan->values == nullptr
 			|| plan->instructions == nullptr) {
 		return;
 	}
-	do {
-		changed = false;
-		for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+	/* The value consumers are not frozen yet: the COPYs per source. */
+	std::unordered_map<uint32_t, std::vector<uint32_t>> copies_of;
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &instruction = plan->instructions[index];
+		const int32_t source_index = zend_tpde_value_index(
+			plan, zend_tpde_operand_at(plan, &instruction, 0));
+		if (zend_tpde_instruction_record_at(plan, &instruction).opcode
+					== ZEND_MIR_OPCODE_COPY
+				&& instruction.operand_count == 1 && source_index >= 0) {
+			copies_of[static_cast<uint32_t>(source_index)].push_back(index);
+		}
+	}
+	sweep_to_fixed_point(plan->instruction_count,
+		[&](uint32_t index) -> int32_t {
 			const zend_tpde_instruction &instruction =
 				plan->instructions[index];
 			const zend_mir_instruction_record record =
@@ -1032,14 +1093,14 @@ static void zend_tpde_refine_boxed_scalar_copies(zend_tpde_plan *plan)
 			if (record.opcode != ZEND_MIR_OPCODE_COPY
 					|| record.representation != ZEND_MIR_REPRESENTATION_ZVAL
 					|| instruction.operand_count != 1) {
-				continue;
+				return -1;
 			}
 			const int32_t result_index =
 				zend_tpde_value_index(plan, record.result_id);
 			const int32_t source_index = zend_tpde_value_index(
 				plan, zend_tpde_operand_at(plan, &instruction, 0));
 			if (result_index < 0 || source_index < 0) {
-				continue;
+				return -1;
 			}
 			zend_tpde_value &result = plan->values[result_index];
 			const zend_tpde_value &source = plan->values[source_index];
@@ -1051,7 +1112,7 @@ static void zend_tpde_refine_boxed_scalar_copies(zend_tpde_plan *plan)
 					|| (source.exact_type != ZEND_MIR_SCALAR_TYPE_I1
 						&& source.exact_type != ZEND_MIR_SCALAR_TYPE_I64
 						&& source.exact_type != ZEND_MIR_SCALAR_TYPE_F64)) {
-				continue;
+				return -1;
 			}
 			/*
 			 * A COPY into a boxed PHI component preserves the source payload
@@ -1063,10 +1124,16 @@ static void zend_tpde_refine_boxed_scalar_copies(zend_tpde_plan *plan)
 			result.exact_type = source.exact_type;
 			result.category = ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;
 			result.refcount_state = ZEND_MIR_REFCOUNT_IMMORTAL;
-			changed = true;
-		}
-		pass++;
-	} while (changed && pass < plan->value_count);
+			return result_index;
+		},
+		[&](uint32_t value_index, const auto &mark) {
+			const auto copies = copies_of.find(value_index);
+			if (copies != copies_of.end()) {
+				for (const uint32_t copy : copies->second) {
+					mark(copy);
+				}
+			}
+		});
 }
 
 zend_mir_scalar_type_mask exact_scalar_from_zval(const zval *value) {
@@ -1146,20 +1213,68 @@ zend_mir_scalar_type_mask exact_scalar_from_call_result(
 	return ZEND_MIR_SCALAR_TYPE_NONE;
 }
 
-zend_mir_scalar_type_mask exact_scalar_from_ssa_value(
+/*
+ * Answers of exact_scalar_from_ssa_value per SSA variable. The search gives
+ * up below depth 64, so an answer is kept only when its search stayed above
+ * that limit, with the depth it reached below its variable (its height); it
+ * stands for a search from any depth that leaves room for that height.
+ */
+struct exact_scalar_ssa_memo {
+	std::vector<zend_mir_scalar_type_mask> types;
+	/* 0 when unknown, else 1 + the height. */
+	std::vector<uint32_t> heights;
+};
+
+static constexpr uint32_t EXACT_SCALAR_SSA_DEPTH_LIMIT = 64;
+
+static zend_mir_scalar_type_mask exact_scalar_from_ssa_value_at(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
 	const zend_mir_call_view *calls,
 	const zend_native_call_binding *bindings,
 	uint32_t binding_count,
 	uint32_t ssa_variable_id,
-	uint32_t depth) {
+	uint32_t depth,
+	exact_scalar_ssa_memo *memo,
+	uint32_t *height,
+	bool *limited) {
+	*height = 0;
 	if (op_array == nullptr || ssa == nullptr || ssa->var_info == nullptr
 			|| ssa->vars == nullptr || ssa->ops == nullptr
-			|| ssa_variable_id >= static_cast<uint32_t>(ssa->vars_count)
-			|| depth > 64) {
+			|| ssa_variable_id >= static_cast<uint32_t>(ssa->vars_count)) {
 		return ZEND_MIR_SCALAR_TYPE_NONE;
 	}
+	if (depth > EXACT_SCALAR_SSA_DEPTH_LIMIT) {
+		*limited = true;
+		return ZEND_MIR_SCALAR_TYPE_NONE;
+	}
+	if (memo != nullptr) {
+		if (memo->types.empty()) {
+			memo->types.assign(static_cast<uint32_t>(ssa->vars_count),
+				ZEND_MIR_SCALAR_TYPE_NONE);
+			memo->heights.assign(static_cast<uint32_t>(ssa->vars_count), 0);
+		}
+		const uint32_t known = memo->heights[ssa_variable_id];
+		if (known != 0
+				&& depth + (known - 1) <= EXACT_SCALAR_SSA_DEPTH_LIMIT) {
+			*height = known - 1;
+			return memo->types[ssa_variable_id];
+		}
+	}
+	bool search_limited = false;
+	const zend_mir_scalar_type_mask result = [&]() -> zend_mir_scalar_type_mask {
+	auto exact_scalar_from_ssa_value = [&](
+			const zend_op_array *, const zend_ssa *,
+			const zend_mir_call_view *, const zend_native_call_binding *,
+			uint32_t, uint32_t source, uint32_t source_depth) {
+		uint32_t source_height = 0;
+		const zend_mir_scalar_type_mask type =
+			exact_scalar_from_ssa_value_at(op_array, ssa, calls, bindings,
+				binding_count, source, source_depth, memo, &source_height,
+				&search_limited);
+		*height = std::max(*height, source_height + 1);
+		return type;
+	};
 	zend_mir_scalar_type_mask exact =
 		exact_scalar_from_type_mask(ssa->var_info[ssa_variable_id].type);
 	if (zend_mir_scalar_type_is_exact(exact)) {
@@ -1261,6 +1376,28 @@ zend_mir_scalar_type_mask exact_scalar_from_ssa_value(
 			break;
 	}
 	return ZEND_MIR_SCALAR_TYPE_NONE;
+	}();
+	if (search_limited) {
+		*limited = true;
+	} else if (memo != nullptr) {
+		memo->types[ssa_variable_id] = result;
+		memo->heights[ssa_variable_id] = *height + 1;
+	}
+	return result;
+}
+
+static zend_mir_scalar_type_mask exact_scalar_from_ssa_value(
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_call_view *calls,
+	const zend_native_call_binding *bindings,
+	uint32_t binding_count,
+	uint32_t ssa_variable_id,
+	exact_scalar_ssa_memo *memo) {
+	uint32_t height = 0;
+	bool limited = false;
+	return exact_scalar_from_ssa_value_at(op_array, ssa, calls, bindings,
+		binding_count, ssa_variable_id, 0, memo, &height, &limited);
 }
 
 /* The SSA variable a call argument sends: its operand's, or its SEND's
@@ -1318,7 +1455,8 @@ zend_mir_scalar_type_mask exact_scalar_from_source_argument(
 	const zend_mir_call_view *calls,
 	const zend_native_call_binding *bindings,
 	uint32_t binding_count,
-	const zend_mir_call_argument_ref &argument) {
+	const zend_mir_call_argument_ref &argument,
+	exact_scalar_ssa_memo *memo) {
 	if (op_array == nullptr) {
 		return ZEND_MIR_SCALAR_TYPE_NONE;
 	}
@@ -1338,7 +1476,7 @@ zend_mir_scalar_type_mask exact_scalar_from_source_argument(
 		return ZEND_MIR_SCALAR_TYPE_NONE;
 	}
 	return exact_scalar_from_ssa_value(
-		op_array, ssa, calls, bindings, binding_count, ssa_variable_id, 0);
+		op_array, ssa, calls, bindings, binding_count, ssa_variable_id, memo);
 }
 
 bool source_call_argument_may_be_undefined(
@@ -1641,7 +1779,7 @@ bool prepare_image_symbols(
 		if (instruction.direct_call != nullptr
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR,
-					instruction.id, plan->symbol_namespace,
+					instruction.record.id, plan->symbol_namespace,
 					instruction.direct_call)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -1651,7 +1789,7 @@ bool prepare_image_symbols(
 		if (instruction.direct_internal_call != nullptr
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
-					instruction.id, plan->symbol_namespace,
+					instruction.record.id, plan->symbol_namespace,
 					instruction.direct_internal_call)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -1661,7 +1799,7 @@ bool prepare_image_symbols(
 		if (instruction.user_call != nullptr
 				&& !image_add_symbol(image,
 					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-					instruction.id, plan->symbol_namespace,
+					instruction.record.id, plan->symbol_namespace,
 					instruction.user_call)) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -2765,27 +2903,19 @@ bool freeze_machine_plan_consumers(
 					|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
 					|| record.opcode
 						== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
-			const uint32_t target = record.source_position_id + 1;
-			for (uint32_t resume = 0;
-					resume < plan->generator_resume_count; ++resume) {
-				if (plan->generator_resume_targets[resume] != target) {
-					continue;
-				}
-				for (uint32_t value = 0;
-						value < plan->value_count; ++value) {
-					if (zend_tpde_generator_resume_value_live(
-							plan, resume, value)
-							&& !visit_use(plan->values[
-									generator_suspend_value_index(plan,
-										plan->value_definition_instructions,
-										instruction_index, value)].id,
-								instruction_index, value, resume,
-								ZEND_TPDE_MACHINE_USE_SUSPEND_LIVE,
-								fill, cursors)) {
-						return false;
-					}
-				}
-				break;
+			const uint32_t resume = zend_tpde_generator_resume_at_target(
+				plan, record.source_position_id + 1);
+			if (!zend_tpde_visit_generator_resume_values(plan, resume,
+					[&](uint32_t value) {
+						return visit_use(plan->values[
+								generator_suspend_value_index(plan,
+									plan->value_definition_instructions,
+									instruction_index, value)].id,
+							instruction_index, value, resume,
+							ZEND_TPDE_MACHINE_USE_SUSPEND_LIVE,
+							fill, cursors);
+					})) {
+				return false;
 			}
 		}
 		return true;
@@ -4197,6 +4327,37 @@ void freeze_dynamic_fetch_cv_indices(
 		return use_block >= 0
 			&& static_cast<uint32_t>(use_block) == definition_block;
 	};
+	/* Per CV: whether a PHI defines it, and the SSA variables an opline
+	 * defines for it in index order. Built on the first query. */
+	std::vector<uint8_t> cv_has_phi;
+	std::vector<std::vector<int32_t>> cv_definitions;
+	std::unordered_map<std::string_view, uint32_t> cv_by_name;
+	auto index_cvs = [&] {
+		if (!cv_definitions.empty()) {
+			return;
+		}
+		cv_has_phi.assign(source_op_array->last_var, 0);
+		cv_definitions.resize(source_op_array->last_var);
+		for (int32_t candidate = 0;
+				candidate < source_ssa->vars_count; ++candidate) {
+			const zend_ssa_var &variable = source_ssa->vars[candidate];
+			if (variable.var < 0 || variable.var >= source_op_array->last_var) {
+				continue;
+			}
+			const uint32_t cv = static_cast<uint32_t>(variable.var);
+			if (variable.definition_phi != nullptr) {
+				cv_has_phi[cv] = 1;
+			}
+			if (variable.definition >= 0) {
+				cv_definitions[cv].push_back(candidate);
+			}
+		}
+		for (uint32_t cv = source_op_array->last_var; cv-- > 0;) {
+			cv_by_name.insert_or_assign(std::string_view{
+				ZSTR_VAL(source_op_array->vars[cv]),
+				ZSTR_LEN(source_op_array->vars[cv])}, cv);
+		}
+	};
 	for (uint32_t instruction_index = 0;
 			instruction_index < plan->instruction_count; ++instruction_index) {
 		zend_tpde_instruction &instruction =
@@ -4233,44 +4394,24 @@ void freeze_dynamic_fetch_cv_indices(
 			continue;
 		}
 		const uint32_t name_cv = EX_VAR_TO_NUM(op.op1.var);
-		uint32_t name_definition_count = 0;
-		bool name_has_phi = false;
-		for (int32_t candidate = 0;
-				candidate < source_ssa->vars_count; ++candidate) {
-			const zend_ssa_var &name = source_ssa->vars[candidate];
-			if (name.var != static_cast<int32_t>(name_cv)) {
-				continue;
-			}
-			name_has_phi = name_has_phi || name.definition_phi != nullptr;
-			if (name.definition >= 0) {
-				++name_definition_count;
-			}
-		}
-		if (name_has_phi || name_definition_count != 1) {
+		index_cvs();
+		if (name_cv >= source_op_array->last_var
+				|| cv_has_phi[name_cv] != 0
+				|| cv_definitions[name_cv].size() != 1) {
 			continue;
 		}
 		const zval *literal = RT_CONSTANT(&op, op.op2);
 		if (Z_TYPE_P(literal) != IS_STRING) {
 			continue;
 		}
-		for (uint32_t cv = 0; cv < source_op_array->last_var; ++cv) {
-			if (zend_string_equals(
-					source_op_array->vars[cv], Z_STR_P(literal))) {
-				uint32_t target_definition_count = 0;
+		const auto named = cv_by_name.find(std::string_view{
+			Z_STRVAL_P(literal), Z_STRLEN_P(literal)});
+		if (named != cv_by_name.end()) {
+			const uint32_t cv = named->second;
+			{
 				bool target_is_dominating_long = false;
-				bool target_has_phi = false;
-				for (int32_t candidate = 0;
-						candidate < source_ssa->vars_count; ++candidate) {
+				for (const int32_t candidate : cv_definitions[cv]) {
 					const zend_ssa_var &target = source_ssa->vars[candidate];
-					if (target.var != static_cast<int32_t>(cv)) {
-						continue;
-					}
-					target_has_phi = target_has_phi
-						|| target.definition_phi != nullptr;
-					if (target.definition < 0) {
-						continue;
-					}
-					++target_definition_count;
 					const uint32_t target_definition =
 						static_cast<uint32_t>(target.definition);
 					if (target_definition >= source_op_array->last) {
@@ -4291,14 +4432,13 @@ void freeze_dynamic_fetch_cv_indices(
 						target_is_dominating_long = true;
 					}
 				}
-				const bool target_is_stable =
-					!target_has_phi && target_definition_count == 1;
+				const bool target_is_stable = cv_has_phi[cv] == 0
+					&& cv_definitions[cv].size() == 1;
 				if (target_is_stable) {
 					instruction.dynamic_fetch_cv_index = cv;
 					instruction.dynamic_fetch_direct_long =
 						target_is_dominating_long;
 				}
-				break;
 			}
 		}
 	}
@@ -4613,51 +4753,58 @@ bool freeze_generator_resume_liveness(
 		return false;
 	}
 
+	/* A resume lands at the first MIR source position at or after its
+	 * target; its suspensions must agree on their exception edge. */
+	std::vector<uint32_t> source_positions;
+	source_positions.reserve(plan->instruction_count);
+	std::copy(targets.begin(), targets.end(),
+		plan->generator_resume_targets);
+	std::fill_n(plan->generator_resume_exception_blocks,
+		plan->generator_resume_count, ZEND_MIR_ID_INVALID);
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		const zend_tpde_instruction &instruction = plan->instructions[i];
+		const zend_mir_instruction_record record =
+			zend_tpde_instruction_record_at(plan, &instruction);
+		const uint32_t source_position = record.source_position_id;
+		if (source_position == UINT32_MAX) {
+			continue;
+		}
+		source_positions.push_back(source_position);
+		if (!instruction.has_value_operation
+				|| (record.opcode != ZEND_MIR_OPCODE_GENERATOR_CREATE
+					&& record.opcode != ZEND_MIR_OPCODE_GENERATOR_YIELD
+					&& record.opcode
+						!= ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
+			continue;
+		}
+		const auto target = std::lower_bound(
+			targets.begin(), targets.end(), source_position + 1);
+		if (target == targets.end() || *target != source_position + 1) {
+			continue;
+		}
+		zend_mir_block_id &exception_block =
+			plan->generator_resume_exception_blocks[target - targets.begin()];
+		if (zend_mir_id_is_valid(exception_block)
+				&& exception_block != instruction.exception_block_id) {
+			zend_tpde_set_diagnostic(diag,
+				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+				"generator resume has inconsistent exception edges");
+			return false;
+		}
+		exception_block = instruction.exception_block_id;
+	}
+	std::sort(source_positions.begin(), source_positions.end());
 	for (uint32_t resume = 0;
 			resume < plan->generator_resume_count; ++resume) {
-		const uint32_t target = targets[resume];
-		uint32_t landing = UINT32_MAX;
-		zend_mir_block_id exception_block = ZEND_MIR_ID_INVALID;
-		plan->generator_resume_targets[resume] = target;
-		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-			const zend_tpde_instruction &instruction =
-				plan->instructions[i];
-			const zend_mir_instruction_record record =
-				zend_tpde_instruction_record_at(plan, &instruction);
-			const uint32_t source_position = record.source_position_id;
-			if (source_position >= target
-					&& (landing == UINT32_MAX
-						|| source_position < landing)) {
-				landing = source_position;
-			}
-			if (instruction.has_value_operation
-					&& source_position != UINT32_MAX
-					&& source_position + 1 == target
-					&& (record.opcode
-							== ZEND_MIR_OPCODE_GENERATOR_CREATE
-						|| record.opcode
-							== ZEND_MIR_OPCODE_GENERATOR_YIELD
-						|| record.opcode
-							== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
-				if (zend_mir_id_is_valid(exception_block)
-						&& exception_block
-							!= instruction.exception_block_id) {
-					zend_tpde_set_diagnostic(diag,
-						ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-						"generator resume has inconsistent exception edges");
-					return false;
-				}
-				exception_block = instruction.exception_block_id;
-			}
-		}
-		if (landing == UINT32_MAX) {
+		const auto landing = std::lower_bound(source_positions.begin(),
+			source_positions.end(), targets[resume]);
+		if (landing == source_positions.end()) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 				"generator resume target has no MIR landing");
 			return false;
 		}
-		plan->generator_resume_landings[resume] = landing;
-		plan->generator_resume_exception_blocks[resume] = exception_block;
+		plan->generator_resume_landings[resume] = *landing;
 	}
 
 	const uint32_t live_count =
@@ -5710,18 +5857,10 @@ bool freeze_statepoint_materializations(
 					|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
 					|| record.opcode
 						== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
-			const uint32_t target = record.source_position_id + 1;
-			for (uint32_t resume = 0;
-					resume < plan->generator_resume_count; ++resume) {
-				if (plan->generator_resume_targets[resume] != target) {
-					continue;
-				}
-				for (uint32_t live_index = 0;
-						live_index < plan->value_count; ++live_index) {
-					if (!zend_tpde_generator_resume_value_live(
-							plan, resume, live_index)) {
-						continue;
-					}
+			const uint32_t resume = zend_tpde_generator_resume_at_target(
+				plan, record.source_position_id + 1);
+			zend_tpde_visit_generator_resume_values(plan, resume,
+					[&](uint32_t live_index) {
 					const uint32_t value_index =
 						generator_suspend_value_index(plan,
 							generator_definitions.data(), index, live_index);
@@ -5743,15 +5882,14 @@ bool freeze_statepoint_materializations(
 									== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
 								|| value.machine_kind
 									== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR)) {
-						continue;
+						return true;
 					}
 					append_materialization(
 						value_index,
 						plan->values[live_index].canonical_storage_id,
 						value.machine_kind, value_index, -1);
-				}
-				break;
-			}
+					return true;
+				});
 		}
 
 		/*
@@ -6286,6 +6424,7 @@ bool freeze_entry_undef_temporaries(
 }
 
 void destroy_plan(zend_tpde_plan *plan) {
+	delete plan->deopt_landing_adaptor;
 	for (uint32_t index = 0;
 			plan->instructions != nullptr && index < plan->instruction_count;
 			++index) {
@@ -6504,6 +6643,7 @@ bool initialize_plan(
 		|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0;
 	plan->source_num_args =
 		source_op_array != nullptr ? source_op_array->num_args : 0;
+	exact_scalar_ssa_memo exact_scalar_memo;
 	plan->source_return_type_mask = source_op_array != nullptr
 			&& (source_op_array->fn_flags & ZEND_ACC_HAS_RETURN_TYPE) != 0
 			&& source_op_array->arg_info != nullptr
@@ -7115,7 +7255,6 @@ bool initialize_plan(
 				"MIR operand count is outside the executable bound");
 			return false;
 		}
-		plan->instructions[i].id = record.id;
 		plan->instructions[i].record = record;
 		plan->instructions[i].operand_offset =
 			static_cast<uint32_t>(operands - count);
@@ -7159,7 +7298,7 @@ bool initialize_plan(
 				operand < instruction.operand_count; ++operand) {
 			zend_mir_value_id value = ZEND_MIR_ID_INVALID;
 			if (!view->instruction_operand_at(view->context,
-					instruction.id, operand, &value)) {
+					instruction.record.id, operand, &value)) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"MIR instruction operand table is unreadable");
@@ -7602,13 +7741,8 @@ bool initialize_plan(
 	}
 	std::vector<uint8_t> register_definitions(plan->value_count, 0);
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-		zend_mir_instruction_record record{};
-		if (!view->instruction_at(view->context, i, &record)) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"MIR instruction table is unreadable while classifying value definitions");
-			return false;
-		}
+		const zend_mir_instruction_record &record =
+			plan->instructions[i].record;
 		if (!zend_mir_id_is_valid(record.result_id)) {
 			continue;
 		}
@@ -8157,13 +8291,8 @@ bool initialize_plan(
 	std::vector<zend_tpde_id_index_entry> interrupt_frame_index;
 	uint32_t interrupt_frame_index_capacity = 0;
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-		zend_mir_instruction_record record;
-		if (!view->instruction_at(view->context, i, &record)
-				|| record.id != plan->instructions[i].id) {
-			zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-				"MIR instruction table is unreadable");
-			return false;
-		}
+		const zend_mir_instruction_record &record =
+			plan->instructions[i].record;
 		const uint32_t count = plan->instructions[i].operand_count;
 		if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 			if (count != 2) {
@@ -9740,7 +9869,8 @@ bool initialize_plan(
 							descriptor->arguments[n].exact_type =
 								exact_scalar_from_source_argument(
 									source_op_array, source_ssa, calls,
-									user_bindings, user_binding_count, argument);
+									user_bindings, user_binding_count, argument,
+									&exact_scalar_memo);
 						}
 						/* A parameter CV holds its declared type only while it
 						 * still holds the value its RECV received. */
@@ -10464,12 +10594,10 @@ bool initialize_plan(
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		const zend_tpde_instruction &instruction = plan->instructions[i];
 		for (uint32_t n = 0; n < instruction.operand_count; ++n) {
-			zend_mir_value_id operand;
-			if (!view->instruction_operand_at(view->context,
-					instruction.id, n, &operand)
-					|| zend_tpde_value_index(plan, operand) < 0) {
+			if (zend_tpde_value_index(
+					plan, zend_tpde_operand_at(plan, &instruction, n)) < 0) {
 				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"MIR operand table is unreadable or references an unknown value");
+					"MIR operand table references an unknown value");
 				return false;
 			}
 		}
@@ -10745,11 +10873,37 @@ static bool machine_plan_type_check_supported(
 	}
 }
 
+/* Per-call scratch of freeze_typed_body_signature, reused across members
+ * and fixpoint passes. */
+struct typed_body_signature_scratch {
+	std::vector<zend_tpde_local_abi_type> call_result_types;
+	std::vector<zend_tpde_local_abi_type> instruction_result_types;
+	std::vector<zend_tpde_local_abi_type> register_source_ssa;
+};
+
+/* A variadic receive constructs a packed array from a dynamic number of
+ * arguments. The fixed typed-body ABI does not carry enough information to
+ * reproduce that operation. */
+static bool plan_receives_variadic(const zend_tpde_plan *plan) {
+	if (plan->source_opcodes == nullptr) {
+		return false;
+	}
+	for (uint32_t source = 0; source < plan->source_opcode_count; ++source) {
+		if (plan->source_opcodes[source].opcode == ZEND_RECV_VARIADIC) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* The caller rejects members that receive variadic arguments
+ * (plan_receives_variadic). */
 static bool freeze_typed_body_signature(
 		const zend_tpde_plan *plan,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
 		const uint8_t *typed_body_candidates,
+		typed_body_signature_scratch &scratch,
 		zend_tpde_local_abi_type *return_type,
 		bool *may_fail) {
 	*may_fail = false;
@@ -10760,17 +10914,6 @@ static bool freeze_typed_body_signature(
 			|| (plan->argument_count != 0
 				&& plan->argument_value_indices == nullptr)) {
 		return false;
-	}
-	if (plan->source_opcodes != nullptr) {
-		for (uint32_t source = 0;
-				source < plan->source_opcode_count; ++source) {
-			if (plan->source_opcodes[source].opcode == ZEND_RECV_VARIADIC) {
-				/* A variadic receive constructs a packed array from a dynamic
-				 * number of arguments. The fixed typed-body ABI does not carry
-				 * enough information to reproduce that operation. */
-				return false;
-			}
-		}
 	}
 	for (uint32_t argument = 0;
 			argument < plan->argument_count; ++argument) {
@@ -10786,12 +10929,15 @@ static bool freeze_typed_body_signature(
 	}
 
 	zend_tpde_local_abi_type result_type{};
-	std::vector<zend_tpde_local_abi_type> call_result_types(
-		plan->value_count);
-	std::vector<zend_tpde_local_abi_type> instruction_result_types(
-		plan->instruction_count);
-	std::vector<zend_tpde_local_abi_type> register_source_ssa(
-		plan->source_ssa_variable_count);
+	std::vector<zend_tpde_local_abi_type> &call_result_types =
+		scratch.call_result_types;
+	std::vector<zend_tpde_local_abi_type> &instruction_result_types =
+		scratch.instruction_result_types;
+	std::vector<zend_tpde_local_abi_type> &register_source_ssa =
+		scratch.register_source_ssa;
+	call_result_types.assign(plan->value_count, {});
+	instruction_result_types.assign(plan->instruction_count, {});
+	register_source_ssa.assign(plan->source_ssa_variable_count, {});
 	auto value_has_typed_body_definition = [&](int32_t value_index) {
 		for (uint32_t depth = 0;
 				value_index >= 0 && depth < plan->value_count;
@@ -11092,22 +11238,14 @@ static bool freeze_typed_body_signature(
 						instruction.value_operation.op2)) {
 				return false;
 			}
-			const int32_t result_value =
-				instruction.source_result_binding.value_index >= 0
-					? instruction.source_result_binding.value_index
-					: machine_plan_source_value_index(
-						plan, instruction.value_operation.result);
-			const bool exact_long = result_value >= 0
-				&& plan->values[result_value].exact_type
-					== ZEND_MIR_SCALAR_TYPE_I64;
+			const zend_tpde_machine_value_kind result_kind =
+				zend_tpde_typed_numeric_result_kind(plan, instruction);
 			const zend_tpde_local_abi_type result =
-				exact_long && !zend_tpde_numeric_comparison(
-						instruction.value_operation.source_opcode)
+				result_kind == ZEND_TPDE_MACHINE_VALUE_I64
 					? machine_plan_abi(ZEND_MIR_REPRESENTATION_I64,
 						ZEND_MIR_SCALAR_TYPE_I64, ZEND_TPDE_MACHINE_VALUE_I64,
 						ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE)
-				: zend_tpde_numeric_comparison(
-						instruction.value_operation.source_opcode)
+				: result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL
 					? machine_plan_abi(ZEND_MIR_REPRESENTATION_I1,
 						ZEND_MIR_SCALAR_TYPE_I1, ZEND_TPDE_MACHINE_VALUE_BOOL,
 						ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE)
@@ -12013,15 +12151,17 @@ static bool retain_typed_call_materializations(
 		std::unique(lazy_scalar_storages.begin(), lazy_scalar_storages.end()),
 		lazy_scalar_storages.end());
 	/* A COPY or PHI joins a machine source directly or through other
-	 * joins, such as an outer loop's PHI over an inner loop's. */
-	std::vector<uint8_t> join_visited(plan->value_count, 0);
+	 * joins, such as an outer loop's PHI over an inner loop's. Each search
+	 * marks its visits with its own generation. */
+	std::vector<uint32_t> join_visited(plan->value_count, 0);
+	uint32_t join_generation = 0;
 	auto lazy_join_has_machine_source = [&](uint32_t value_index,
 			auto &&self) -> bool {
 		if (value_index >= plan->value_count
-				|| join_visited[value_index] != 0) {
+				|| join_visited[value_index] == join_generation) {
 			return false;
 		}
-		join_visited[value_index] = 1;
+		join_visited[value_index] = join_generation;
 		const int32_t definition =
 			plan->value_definition_instructions == nullptr
 				? -1 : plan->value_definition_instructions[value_index];
@@ -12056,6 +12196,20 @@ static bool retain_typed_call_materializations(
 			}
 		}
 		return false;
+	};
+	/* The answer per searched value: 0 unknown, 1 no, 2 yes. */
+	std::vector<uint8_t> join_has_machine_source(plan->value_count, 0);
+	auto lazy_join_root_has_machine_source = [&](uint32_t value_index) {
+		if (value_index >= plan->value_count) {
+			return false;
+		}
+		if (join_has_machine_source[value_index] == 0) {
+			++join_generation;
+			join_has_machine_source[value_index] =
+				lazy_join_has_machine_source(
+					value_index, lazy_join_has_machine_source) ? 2 : 1;
+		}
+		return join_has_machine_source[value_index] == 2;
 	};
 	std::vector<zend_tpde_materialization> retained;
 	retained.reserve(plan->materialization_count);
@@ -12132,10 +12286,8 @@ static bool retain_typed_call_materializations(
 					&& !value.canonical_alias_observable
 					&& (definition_opcode == ZEND_MIR_OPCODE_COPY
 						|| definition_opcode == ZEND_MIR_OPCODE_PHI)
-					&& (std::ranges::fill(join_visited, 0),
-						lazy_join_has_machine_source(
-							materialization.value_index,
-							lazy_join_has_machine_source));
+					&& lazy_join_root_has_machine_source(
+						materialization.value_index);
 				if (!lazy_scalar_join
 						&& !machine_plan_value_has_result_representation(
 							plan, value.id)) {
@@ -12447,53 +12599,63 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 		}
 	}
 
-	bool changed;
-	do {
-		changed = false;
-		for (uint32_t value_index = 0;
-				value_index < plan->value_count; ++value_index) {
-			if (scalar_copy_phi_candidates[value_index] == 0) {
-				continue;
+	/* Dropping candidates only shrinks the set: a worklist reaches the
+	 * same greatest fixed point in any order. */
+	std::vector<uint32_t> pending;
+	for (uint32_t value_index = plan->value_count; value_index-- > 0;) {
+		if (scalar_copy_phi_candidates[value_index] != 0) {
+			pending.push_back(value_index);
+		}
+	}
+	while (!pending.empty()) {
+		const uint32_t value_index = pending.back();
+		pending.pop_back();
+		if (scalar_copy_phi_candidates[value_index] == 0) {
+			continue;
+		}
+		const zend_tpde_value &result = plan->values[value_index];
+		const uint32_t definition = static_cast<uint32_t>(
+			plan->value_definition_instructions[value_index]);
+		const zend_tpde_instruction &instruction =
+			plan->instructions[definition];
+		bool candidate = true;
+		for (uint32_t operand = 0;
+				candidate && operand < instruction.operand_count; ++operand) {
+			const int32_t input_index = zend_tpde_value_index(
+				plan, zend_tpde_operand_at(
+					plan, &instruction, operand));
+			if (input_index < 0) {
+				candidate = false;
+				break;
 			}
-			const zend_tpde_value &result = plan->values[value_index];
-			const uint32_t definition = static_cast<uint32_t>(
-				plan->value_definition_instructions[value_index]);
-			const zend_tpde_instruction &instruction =
-				plan->instructions[definition];
-			for (uint32_t operand = 0;
-					operand < instruction.operand_count; ++operand) {
-				const int32_t input_index = zend_tpde_value_index(
-					plan, zend_tpde_operand_at(
-						plan, &instruction, operand));
-				if (input_index < 0) {
-					scalar_copy_phi_candidates[value_index] = 0;
-					changed = true;
-					break;
-				}
-				const zend_tpde_value &input =
-					plan->values[static_cast<uint32_t>(input_index)];
-				if (scalar_machine_definition(input)) {
-					continue;
-				}
-				const bool deferred_candidate =
-					input.representation == ZEND_MIR_REPRESENTATION_ZVAL
+			const zend_tpde_value &input =
+				plan->values[static_cast<uint32_t>(input_index)];
+			candidate = scalar_machine_definition(input)
+				|| (input.representation == ZEND_MIR_REPRESENTATION_ZVAL
 					&& !input.canonical_alias_observable
 					&& input.canonical_storage_id
 						== result.canonical_storage_id
 					&& scalar_copy_phi_candidates[
-						static_cast<uint32_t>(input_index)] != 0;
-				if (!deferred_candidate) {
-					scalar_copy_phi_candidates[value_index] = 0;
-					changed = true;
-					break;
-				}
-			}
+						static_cast<uint32_t>(input_index)] != 0);
 		}
-	} while (changed);
+		if (candidate) {
+			continue;
+		}
+		scalar_copy_phi_candidates[value_index] = 0;
+		visit_operand_users(plan, value_index, [&](uint32_t user) {
+			const int32_t user_result = zend_tpde_value_index(plan,
+				zend_tpde_instruction_record_at(
+					plan, &plan->instructions[user]).result_id);
+			if (user_result >= 0
+					&& scalar_copy_phi_candidates[
+						static_cast<uint32_t>(user_result)] != 0) {
+				pending.push_back(static_cast<uint32_t>(user_result));
+			}
+		});
+	}
 
-	do {
-		changed = false;
-		for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+	sweep_to_fixed_point(plan->instruction_count,
+		[&](uint32_t index) -> int32_t {
 			const zend_tpde_instruction &instruction =
 				plan->instructions[index];
 			const zend_mir_instruction_record record =
@@ -12503,19 +12665,19 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 					|| record.representation
 						!= ZEND_MIR_REPRESENTATION_ZVAL
 					|| instruction.operand_count == 0) {
-				continue;
+				return -1;
 			}
 			const int32_t result_index =
 				zend_tpde_value_index(plan, record.result_id);
 			if (result_index < 0) {
-				continue;
+				return -1;
 			}
 			zend_tpde_value &result =
 				plan->values[static_cast<uint32_t>(result_index)];
 			if (result.constant || result.canonical_alias_observable
 					|| result.representation
 						!= ZEND_MIR_REPRESENTATION_ZVAL) {
-				continue;
+				return -1;
 			}
 
 			zend_mir_scalar_type_mask input_type =
@@ -12577,16 +12739,18 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 					|| input_type == ZEND_MIR_SCALAR_TYPE_NONE
 					|| input_representation
 						== ZEND_MIR_REPRESENTATION_ZVAL) {
-				continue;
+				return -1;
 			}
 			result.representation = input_representation;
 			result.exact_type = input_type;
 			result.category = ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;
 			result.refcount_state = ZEND_MIR_REFCOUNT_IMMORTAL;
 			zend_tpde_apply_machine_value_facts(&result, true);
-			changed = true;
-		}
-	} while (changed);
+			return result_index;
+		},
+		[&](uint32_t value_index, const auto &mark) {
+			visit_operand_users(plan, value_index, mark);
+		});
 }
 
 static void freeze_machine_register_authority(
@@ -12667,11 +12831,8 @@ static void freeze_machine_register_authority(
 		}
 	}
 
-	bool changed;
-	do {
-		changed = false;
-		for (uint32_t index = 0;
-				index < plan->instruction_count; ++index) {
+	sweep_to_fixed_point(plan->instruction_count,
+		[&](uint32_t index) -> int32_t {
 			const zend_tpde_instruction &instruction =
 				plan->instructions[index];
 			const zend_mir_instruction_record record =
@@ -12681,7 +12842,7 @@ static void freeze_machine_register_authority(
 					|| record.representation
 						!= ZEND_MIR_REPRESENTATION_ZVAL
 					|| instruction.operand_count == 0) {
-				continue;
+				return -1;
 			}
 			const int32_t result =
 				zend_tpde_value_index(plan, record.result_id);
@@ -12689,7 +12850,7 @@ static void freeze_machine_register_authority(
 					|| plan->values[result].machine_kind
 						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 					|| plan->values[result].register_authoritative) {
-				continue;
+				return -1;
 			}
 			bool all_inputs_register = true;
 			for (uint32_t operand = 0;
@@ -12706,12 +12867,15 @@ static void freeze_machine_register_authority(
 					break;
 				}
 			}
-			if (all_inputs_register) {
-				plan->values[result].register_authoritative = true;
-				changed = true;
+			if (!all_inputs_register) {
+				return -1;
 			}
-		}
-	} while (changed);
+			plan->values[result].register_authoritative = true;
+			return result;
+		},
+		[&](uint32_t value_index, const auto &mark) {
+			visit_operand_users(plan, value_index, mark);
+		});
 }
 
 static bool machine_plan_local_abi_call_eligible(
@@ -12749,6 +12913,25 @@ static bool machine_plan_call_arguments_require_values(
 	}
 	return machine_plan_inline_frame_call(
 		plan->instructions[instruction_index]);
+}
+
+/* Register authority, eligibility and the register-result flags are final
+ * once the machine operand transports are frozen. */
+static void freeze_register_cond_branch_modes(zend_tpde_plan *plan) {
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		zend_tpde_instruction &instruction = plan->instructions[index];
+		instruction.register_cond_branch_modes =
+			(machine_cfg_register_cond_branch(plan, instruction, false)
+				? ZEND_TPDE_MACHINE_MODE_ENTRY : 0)
+			| (machine_cfg_register_cond_branch(plan, instruction, true)
+				? ZEND_TPDE_MACHINE_MODE_TYPED_BODY : 0);
+	}
+}
+
+static bool register_cond_branch(
+		const zend_tpde_instruction &instruction, bool typed_body) {
+	return (instruction.register_cond_branch_modes
+		& zend_tpde_machine_mode(typed_body)) != 0;
 }
 
 static bool machine_plan_use_requires_value(
@@ -12803,8 +12986,7 @@ static bool machine_plan_use_requires_value(
 	const bool boxed_cond_branch =
 		(instruction.machine_control_flow_flags
 			& ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH) != 0
-		&& !machine_cfg_register_cond_branch(
-			plan, instruction, typed_body);
+		&& !register_cond_branch(instruction, typed_body);
 	if (boxed_cond_branch
 			|| record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 			|| (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
@@ -12817,8 +12999,23 @@ static bool machine_plan_use_requires_value(
 	return use.operand_index < instruction.operand_count;
 }
 
+static uint8_t machine_plan_use_value_modes(
+		const zend_tpde_plan *plan, const zend_tpde_machine_use &use) {
+	return (machine_plan_use_requires_value(plan, use, false)
+			? ZEND_TPDE_MACHINE_MODE_ENTRY : 0)
+		| (machine_plan_use_requires_value(plan, use, true)
+			? ZEND_TPDE_MACHINE_MODE_TYPED_BODY : 0);
+}
+
+/*
+ * operand_value_modes receives, per instruction operand, the modes whose
+ * machine function needs the operand's value (machine_plan_use_value_modes);
+ * freeze_machine_required_values reads it for the same uses.
+ */
 static bool freeze_machine_operand_transports(
-		zend_tpde_plan *plan, zend_native_diagnostic *diag) {
+		zend_tpde_plan *plan, std::vector<uint8_t> &operand_value_modes,
+		zend_native_diagnostic *diag) {
+	operand_value_modes.assign(plan->instruction_operand_count, 0);
 	if (plan->instruction_operand_count == 0) {
 		return true;
 	}
@@ -12907,8 +13104,10 @@ static bool freeze_machine_operand_transports(
 					? ZEND_TPDE_MACHINE_USE_PHI_EDGE
 					: ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND,
 			};
-			if (!machine_plan_use_requires_value(plan, use, false)
-					&& !machine_plan_use_requires_value(plan, use, true)) {
+			const uint8_t modes = machine_plan_use_value_modes(plan, use);
+			operand_value_modes[instruction.operand_offset + operand_index] =
+				modes;
+			if (modes == 0) {
 				continue;
 			}
 			const int32_t value_index = zend_tpde_value_index(
@@ -12992,6 +13191,7 @@ static bool freeze_machine_operand_transports(
 
 static bool freeze_machine_required_values(
 		zend_tpde_plan *plan,
+		const std::vector<uint8_t> &operand_value_modes,
 		zend_native_diagnostic *diag) {
 	if (plan->value_count == 0) {
 		return true;
@@ -13048,12 +13248,17 @@ static bool freeze_machine_required_values(
 			for (uint32_t use = begin; use < end; ++use) {
 				const zend_tpde_machine_use &consumer =
 					plan->value_consumers[use];
+				const uint8_t modes =
+					consumer.kind == ZEND_TPDE_MACHINE_USE_INSTRUCTION_OPERAND
+						|| consumer.kind == ZEND_TPDE_MACHINE_USE_PHI_EDGE
+					? operand_value_modes[
+						plan->instructions[consumer.instruction_index]
+							.operand_offset + consumer.operand_index]
+					: machine_plan_use_value_modes(plan, consumer);
 				plan->entry_value_required[value] |=
-					machine_plan_use_requires_value(
-						plan, consumer, false);
+					(modes & ZEND_TPDE_MACHINE_MODE_ENTRY) != 0;
 				plan->typed_body_value_required[value] |=
-					machine_plan_use_requires_value(
-						plan, consumer, true);
+					(modes & ZEND_TPDE_MACHINE_MODE_TYPED_BODY) != 0;
 			}
 		}
 	}
@@ -13072,12 +13277,10 @@ static bool freeze_machine_required_values(
 			continue;
 		}
 		const uint32_t value = static_cast<uint32_t>(value_index);
-		if (machine_cfg_register_cond_branch(
-				plan, instruction, false)) {
+		if (register_cond_branch(instruction, false)) {
 			plan->entry_value_required[value] = 1;
 		}
-		if (machine_cfg_register_cond_branch(
-				plan, instruction, true)) {
+		if (register_cond_branch(instruction, true)) {
 			plan->typed_body_value_required[value] = 1;
 		}
 	}
@@ -13133,6 +13336,8 @@ static bool freeze_machine_cfg(
 	std::vector<uint32_t> boxed_cond_cold_by_predecessor(
 		plan->block_count, UINT32_MAX);
 	std::vector<uint32_t> final_blocks(plan->block_count);
+	/* The MIR block of each instruction. */
+	std::vector<uint32_t> source_blocks(plan->instruction_count);
 	uint32_t synthetic_block_count = 0;
 
 	for (uint32_t block = 0; block < plan->block_count; ++block) {
@@ -13149,6 +13354,7 @@ static bool freeze_machine_cfg(
 			goto malformed;
 		}
 		const uint32_t source = static_cast<uint32_t>(source_block);
+		source_blocks[index] = source;
 		instruction_blocks[index] = final_blocks[source];
 		const bool typed_component_call =
 			(instruction.machine_control_flow_flags
@@ -13185,8 +13391,7 @@ static bool freeze_machine_cfg(
 		const bool boxed_branch =
 			(instruction.machine_control_flow_flags
 				& ZEND_TPDE_MACHINE_CONTROL_FLOW_BOXED_BRANCH) != 0
-			&& !machine_cfg_register_cond_branch(
-				plan, instruction, typed_body)
+			&& !register_cond_branch(instruction, typed_body)
 			&& zend_tpde_value_condition_at(instruction, &condition);
 		if (!boxed_branch) {
 			continue;
@@ -13200,26 +13405,22 @@ static bool freeze_machine_cfg(
 		const uint32_t cold_block =
 			plan->block_count + synthetic_block_count++;
 		boxed_cond_cold_blocks[index] = cold_block;
-		const int32_t source_predecessor =
-			zend_tpde_block_index(plan, instruction.record.block_id);
-		if (source_predecessor < 0) {
-			goto malformed;
-		}
-		boxed_cond_cold_by_predecessor[
-			static_cast<uint32_t>(source_predecessor)] = cold_block;
+		boxed_cond_cold_by_predecessor[source_blocks[index]] = cold_block;
 	}
 
 	{
 		const uint32_t block_count =
 			plan->block_count + synthetic_block_count;
-		std::vector<std::vector<uint32_t>> block_successors(block_count);
+		/* The edges in insertion order; each block keeps the order of its
+		 * own edges. */
+		std::vector<std::pair<uint32_t, uint32_t>> edges;
 		std::vector<uint32_t> finally_return_blocks;
 		std::vector<uint32_t> finally_targets;
 		auto add_edge = [&](uint32_t from, uint32_t to) {
 			if (from >= block_count || to >= block_count) {
 				return false;
 			}
-			block_successors[from].push_back(to);
+			edges.emplace_back(from, to);
 			return true;
 		};
 
@@ -13266,10 +13467,8 @@ static bool freeze_machine_cfg(
 			if (cold == UINT32_MAX) {
 				continue;
 			}
-			const int32_t source_predecessor = zend_tpde_block_index(
-				plan, plan->instructions[index].record.block_id);
-			if (source_predecessor < 0
-					|| plan->block_successor_offsets[
+			const uint32_t source_predecessor = source_blocks[index];
+			if (plan->block_successor_offsets[
 							source_predecessor + 1]
 						- plan->block_successor_offsets[
 							source_predecessor]
@@ -13312,10 +13511,8 @@ static bool freeze_machine_cfg(
 			if (record.opcode == ZEND_MIR_OPCODE_FINALLY_RETURN) {
 				finally_return_blocks.push_back(record_block);
 			} else if (record.opcode == ZEND_MIR_OPCODE_FINALLY_CALL) {
-				const int32_t source_block =
-					zend_tpde_block_index(plan, record.block_id);
-				if (source_block < 0
-						|| plan->block_successor_offsets[source_block + 1]
+				const uint32_t source_block = source_blocks[index];
+				if (plan->block_successor_offsets[source_block + 1]
 							- plan->block_successor_offsets[source_block]
 							!= 2) {
 					goto malformed;
@@ -13338,14 +13535,33 @@ static bool freeze_machine_cfg(
 			}
 		}
 
+		/* Group the edges by block (a stable counting sort), then drop
+		 * repeated targets except an identical two-way branch. */
+		std::vector<uint32_t> edge_offsets(block_count + 1, 0);
+		for (const auto &[from, to] : edges) {
+			++edge_offsets[from + 1];
+		}
+		for (uint32_t block = 0; block < block_count; ++block) {
+			edge_offsets[block + 1] += edge_offsets[block];
+		}
+		std::vector<uint32_t> edge_targets(edges.size());
+		{
+			std::vector<uint32_t> next = edge_offsets;
+			for (const auto &[from, to] : edges) {
+				edge_targets[next[from]++] = to;
+			}
+		}
 		std::vector<uint32_t> successor_offsets(block_count + 1);
 		std::vector<uint32_t> successors;
 		std::vector<uint32_t> seen(block_count, UINT32_MAX);
 		for (uint32_t block = 0; block < block_count; ++block) {
+			const std::span<const uint32_t> block_successors{
+				edge_targets.data() + edge_offsets[block],
+				edge_offsets[block + 1] - edge_offsets[block]};
 			const bool identical_branch_targets =
-				block_successors[block].size() == 2
-				&& block_successors[block][0] == block_successors[block][1];
-			for (uint32_t target : block_successors[block]) {
+				block_successors.size() == 2
+				&& block_successors[0] == block_successors[1];
+			for (uint32_t target : block_successors) {
 				if (!identical_branch_targets && seen[target] == block) {
 					continue;
 				}
@@ -13610,8 +13826,9 @@ static void freeze_component_numeric_operands(
  * The deoptimization exits of the specialized members (ADR 0025 section 4).
  * A guarded operation exits where its generic copy has a landing (both
  * members lower the same MIR; the copy's adaptor decides which resume IDs
- * land). The machine CFG keeps an exit's cold-to-continuation edge, so the
- * specialized member's frozen CFG stays as it is.
+ * land, and the component adaptor adopts it). The machine CFG keeps an
+ * exit's cold-to-continuation edge, so the specialized member's frozen CFG
+ * stays as it is.
  */
 static bool freeze_deopt_exits(
 		zend_tpde_plan *plans,
@@ -13632,9 +13849,14 @@ static bool freeze_deopt_exits(
 				|| generic.value_count != specialized.value_count) {
 			continue;
 		}
-		zend::native::tpde::ZendIRAdaptor landings{&generic,
-			std::span<const zend_tpde_plan *const>{
-				component_plans, component_count}};
+		if (generic.deopt_landing_adaptor == nullptr) {
+			generic.deopt_landing_adaptor =
+				new zend::native::tpde::ZendIRAdaptor{&generic,
+					std::span<const zend_tpde_plan *const>{
+						component_plans, component_count}};
+		}
+		const zend::native::tpde::ZendIRAdaptor &landings =
+			*generic.deopt_landing_adaptor;
 		if (!landings.valid()) {
 			continue;
 		}
@@ -13687,10 +13909,82 @@ static bool freeze_component_machine_plan(
 		}
 	}
 	std::vector<uint8_t> candidates(component_count, 1);
+	std::vector<uint8_t> has_direct_call(component_count, 0);
+	for (uint32_t index = 0; index < component_count; ++index) {
+		const zend_tpde_plan &plan = plans[index];
+		candidates[index] = plan_receives_variadic(&plan) ? 0 : 1;
+		for (uint32_t i = 0; has_direct_call[index] == 0
+				&& i < plan.instruction_count; ++i) {
+			has_direct_call[index] = zend_tpde_instruction_record_at(
+					&plan, &plan.instructions[i]).opcode
+				== ZEND_MIR_OPCODE_CALL_DIRECT_USER;
+		}
+	}
 	/* A signature depends only on the candidate set and frozen plan facts:
 	 * the pass that drops no candidate computed the final ones. */
 	std::vector<zend_tpde_local_abi_type> return_types(component_count);
 	std::vector<uint8_t> may_fail(component_count, 0);
+	typed_body_signature_scratch signature_scratch;
+	/*
+	 * freeze_typed_component_calls depends only on frozen plan facts and on
+	 * each callee's typed_body_eligible and typed_body_return_abi. A member's
+	 * call freeze is kept with those callee facts and repeated only when they
+	 * change; its machine control-flow flags and body indices before any call freeze
+	 * restore it. The kept freeze is the final one when the facts still match.
+	 */
+	struct component_call_freeze {
+		bool frozen = false;
+		bool all_typed = false;
+		std::vector<std::pair<bool, zend_tpde_local_abi_type>> callees;
+		std::vector<uint8_t> flags;
+		std::vector<uint32_t> body_indices;
+	};
+	std::vector<component_call_freeze> call_freezes(component_count);
+	auto callee_facts = [&](const zend_tpde_plan &plan) {
+		std::vector<std::pair<bool, zend_tpde_local_abi_type>> facts;
+		for (uint32_t i = 0; i < plan.instruction_count; ++i) {
+			const uint32_t target = plan.instructions[i].component_target_index;
+			if (zend_tpde_instruction_record_at(
+						&plan, &plan.instructions[i]).opcode
+					!= ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					|| target >= component_count) {
+				continue;
+			}
+			facts.emplace_back(plans[target].typed_body_eligible,
+				plans[target].typed_body_return_abi);
+		}
+		return facts;
+	};
+	auto same_callee_facts = [](
+			const std::vector<std::pair<bool, zend_tpde_local_abi_type>> &a,
+			const std::vector<std::pair<bool, zend_tpde_local_abi_type>> &b) {
+		return std::ranges::equal(a, b, [](const auto &x, const auto &y) {
+			return x.first == y.first
+				&& x.second.valid == y.second.valid
+				&& x.second.representation == y.second.representation
+				&& x.second.exact_type == y.second.exact_type
+				&& x.second.machine_kind == y.second.machine_kind
+				&& x.second.transfer == y.second.transfer;
+		});
+	};
+	auto unfreeze_component_calls = [&](uint32_t index) {
+		zend_tpde_plan &plan = plans[index];
+		component_call_freeze &freeze = call_freezes[index];
+		if (!freeze.frozen) {
+			return;
+		}
+		std::free(plan.typed_component_call_eligible);
+		std::free(plan.effect_closed_inline_eligible);
+		plan.typed_component_call_eligible = nullptr;
+		plan.effect_closed_inline_eligible = nullptr;
+		plan.has_register_component_results = false;
+		for (uint32_t i = 0; i < plan.instruction_count; ++i) {
+			plan.instructions[i].machine_control_flow_flags = freeze.flags[i];
+			plan.instructions[i].component_body_function_index =
+				freeze.body_indices[i];
+		}
+		freeze.frozen = false;
+	};
 	bool nested_dropped;
 	do {
 	nested_dropped = false;
@@ -13705,7 +13999,7 @@ static bool freeze_component_machine_plan(
 			bool member_may_fail = false;
 			if (!freeze_typed_body_signature(
 					&plans[index], component_plans, component_count,
-					candidates.data(),
+					candidates.data(), signature_scratch,
 					&return_type, &member_may_fail)) {
 				candidates[index] = 0;
 				changed = true;
@@ -13731,47 +14025,43 @@ static bool freeze_component_machine_plan(
 	 */
 	for (uint32_t index = 0; index < component_count; ++index) {
 		zend_tpde_plan &plan = plans[index];
-		bool has_direct_call = false;
-		for (uint32_t i = 0; !has_direct_call && i < plan.instruction_count;
-				++i) {
-			has_direct_call = zend_tpde_instruction_record_at(
-					&plan, &plan.instructions[i]).opcode
-				== ZEND_MIR_OPCODE_CALL_DIRECT_USER;
-		}
-		if (!plan.typed_body_eligible || !has_direct_call) {
+		if (!plan.typed_body_eligible || has_direct_call[index] == 0) {
 			continue;
 		}
-		std::vector<uint8_t> saved_flags(plan.instruction_count);
-		std::vector<uint32_t> saved_body_indices(plan.instruction_count);
-		for (uint32_t i = 0; i < plan.instruction_count; ++i) {
-			saved_flags[i] = plan.instructions[i].machine_control_flow_flags;
-			saved_body_indices[i] =
-				plan.instructions[i].component_body_function_index;
+		component_call_freeze &freeze = call_freezes[index];
+		std::vector<std::pair<bool, zend_tpde_local_abi_type>> callees =
+			callee_facts(plan);
+		if (!freeze.frozen || !same_callee_facts(freeze.callees, callees)) {
+			unfreeze_component_calls(index);
+			if (freeze.flags.empty()) {
+				freeze.flags.resize(plan.instruction_count);
+				freeze.body_indices.resize(plan.instruction_count);
+				for (uint32_t i = 0; i < plan.instruction_count; ++i) {
+					freeze.flags[i] =
+						plan.instructions[i].machine_control_flow_flags;
+					freeze.body_indices[i] =
+						plan.instructions[i].component_body_function_index;
+				}
+			}
+			bool all_typed = freeze_typed_component_calls(
+				&plan, component_plans, component_count);
+			freeze.frozen = true;
+			/* Only a Zend entry clones an effect-closed callee; a typed
+			 * body needs a typed call. */
+			for (uint32_t i = 0; all_typed && i < plan.instruction_count;
+					++i) {
+				all_typed = zend_tpde_instruction_record_at(
+						&plan, &plan.instructions[i]).opcode
+							!= ZEND_MIR_OPCODE_CALL_DIRECT_USER
+					|| (plan.typed_component_call_eligible != nullptr
+						&& plan.typed_component_call_eligible[i] != 0
+						&& (plan.effect_closed_inline_eligible == nullptr
+							|| plan.effect_closed_inline_eligible[i] == 0));
+			}
+			freeze.all_typed = all_typed;
+			freeze.callees = std::move(callees);
 		}
-		bool all_typed = freeze_typed_component_calls(
-			&plan, component_plans, component_count);
-		/* Only a Zend entry clones an effect-closed callee; a typed body
-		 * needs a typed call. */
-		for (uint32_t i = 0; all_typed && i < plan.instruction_count; ++i) {
-			all_typed = zend_tpde_instruction_record_at(
-					&plan, &plan.instructions[i]).opcode
-						!= ZEND_MIR_OPCODE_CALL_DIRECT_USER
-				|| (plan.typed_component_call_eligible != nullptr
-					&& plan.typed_component_call_eligible[i] != 0
-					&& (plan.effect_closed_inline_eligible == nullptr
-						|| plan.effect_closed_inline_eligible[i] == 0));
-		}
-		std::free(plan.typed_component_call_eligible);
-		std::free(plan.effect_closed_inline_eligible);
-		plan.typed_component_call_eligible = nullptr;
-		plan.effect_closed_inline_eligible = nullptr;
-		plan.has_register_component_results = false;
-		for (uint32_t i = 0; i < plan.instruction_count; ++i) {
-			plan.instructions[i].machine_control_flow_flags = saved_flags[i];
-			plan.instructions[i].component_body_function_index =
-				saved_body_indices[i];
-		}
-		if (!all_typed) {
+		if (!freeze.all_typed) {
 			candidates[index] = 0;
 			nested_dropped = true;
 		}
@@ -13830,12 +14120,30 @@ static bool freeze_component_machine_plan(
 		}
 	}
 	for (uint32_t index = 0; index < component_count; ++index) {
-		if (!freeze_typed_component_calls(
-				&plans[index], component_plans, component_count)) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-				"unable to freeze component-local TPDE call plan");
-			return false;
+		if (call_freezes[index].frozen
+				&& same_callee_facts(call_freezes[index].callees,
+					callee_facts(plans[index]))) {
+			/* The kept freeze ran before the typed bodies were numbered. */
+			zend_tpde_plan &plan = plans[index];
+			for (uint32_t i = 0; i < plan.instruction_count; ++i) {
+				const uint32_t target =
+					plan.instructions[i].component_target_index;
+				if (plan.typed_component_call_eligible != nullptr
+						&& plan.typed_component_call_eligible[i] != 0
+						&& target < component_count) {
+					plan.instructions[i].component_body_function_index =
+						plans[target].typed_body_function_index;
+				}
+			}
+		} else {
+			unfreeze_component_calls(index);
+			if (!freeze_typed_component_calls(
+					&plans[index], component_plans, component_count)) {
+				zend_tpde_set_diagnostic(diag,
+					ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+					"unable to freeze component-local TPDE call plan");
+				return false;
+			}
 		}
 		bool typed_body_may_emit_calls = false;
 		for (uint32_t instruction = 0;
@@ -13873,14 +14181,17 @@ static bool freeze_component_machine_plan(
 		freeze_machine_register_authority(
 			&plans[index]);
 		demote_slot_backed_lazy_stores(&plans[index]);
-		if (!freeze_machine_operand_transports(&plans[index], diag)) {
+		freeze_register_cond_branch_modes(&plans[index]);
+		std::vector<uint8_t> operand_value_modes;
+		if (!freeze_machine_operand_transports(
+				&plans[index], operand_value_modes, diag)) {
 			return false;
 		}
 		if (!retain_typed_call_materializations(&plans[index], diag)) {
 			return false;
 		}
 		if (!freeze_machine_required_values(
-				&plans[index], diag)) {
+				&plans[index], operand_value_modes, diag)) {
 			return false;
 		}
 		if (!freeze_machine_cfg(
@@ -14078,7 +14389,6 @@ const zend_mir_instruction_record &zend_tpde_instruction_record_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction) {
 	(void) plan;
-	ZEND_ASSERT(instruction->record.id == instruction->id);
 	return instruction->record;
 }
 
