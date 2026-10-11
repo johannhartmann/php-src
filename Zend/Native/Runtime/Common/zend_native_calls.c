@@ -4956,6 +4956,22 @@ static zend_always_inline bool zend_native_call_class_persistent(
 		|| (ce->ce_flags & ZEND_ACC_IMMUTABLE) != 0);
 }
 
+/* The class operand of a fast new site: a literal class, which the site's
+ * re-arm finds bound again, or self, parent or static, which
+ * zend_native_call_fast_new() compares with the key on every call. */
+static zend_always_inline bool zend_native_call_fast_new_class_operand(
+	const zend_native_user_call_descriptor *descriptor)
+{
+	const uint32_t fetch =
+		descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+
+	return descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		|| (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& (fetch == ZEND_FETCH_CLASS_SELF
+				|| fetch == ZEND_FETCH_CLASS_PARENT
+				|| fetch == ZEND_FETCH_CLASS_STATIC));
+}
+
 /*
  * Whether a fast site's target applies in every request until the
  * persistent sites are invalidated: an immutable user function of a
@@ -4992,6 +5008,11 @@ static bool zend_native_call_fast_site_persistent(
 	switch (descriptor->init_opcode) {
 		case ZEND_INIT_METHOD_CALL:
 			return zend_native_call_class_persistent(key);
+		case ZEND_NEW:
+			/* new self, new parent and new static compare the class they
+			 * name with the key. */
+			return descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& zend_native_call_class_persistent(key);
 		case ZEND_INIT_STATIC_METHOD_CALL:
 			if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 				return false;
@@ -5158,12 +5179,11 @@ static void zend_native_call_fast_publish_internal(
 		case ZEND_NEW: {
 			const zend_object *object = resolution->object_or_called_scope;
 
-			/* new C(...) of a literal class whose public constructor the
+			/* new C(...) of a class whose public constructor the
 			 * standard handler returns, as zend_native_call_fast_new()
 			 * calls it on the object it creates. */
 			if (object == NULL
-					|| descriptor->init_op1.kind
-						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| !zend_native_call_fast_new_class_operand(descriptor)
 					|| (resolution->call_info
 						& (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS))
 						!= (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS)
@@ -5292,9 +5312,9 @@ static void zend_native_call_fast_publish(
 			return;
 		}
 	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NEW) {
-		/* new C(...) of a literal class: the constructor is called on the
-		 * object the Init creates in the result slot. */
-		if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+		/* new C(...): the constructor is called on the object the Init
+		 * creates in the result slot. */
+		if (!zend_native_call_fast_new_class_operand(descriptor)
 				|| entry->callable_class == NULL
 				|| (resolution->call_info
 					& (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS))
@@ -6409,7 +6429,7 @@ uint32_t zend_native_call_fast_send(
 }
 
 /*
- * new C of a literal class without a constructor and without arguments:
+ * new C of a class without a constructor and without arguments:
  * the site's fast Init creates the object, as ZEND_NEW does, and its Do
  * has no frame to call (ZEND_NATIVE_CALL_FAST_NO_CALL).
  */
@@ -6440,7 +6460,7 @@ static void zend_native_call_fast_publish_new_without_constructor(
 	object = Z_OBJ_P(result);
 	if (descriptor->argument_count != 0
 			|| descriptor->initial_argument_count != 0
-			|| descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| !zend_native_call_fast_new_class_operand(descriptor)
 			|| object->ce->constructor != NULL
 			|| object->ce->create_object != NULL
 			|| object->handlers != object->ce->default_object_handlers
@@ -9561,6 +9581,12 @@ bool zend_native_call_fast_new(
 			&& !zend_native_call_fast_rearm(caller, descriptor)) {
 		return false;
 	}
+	/* new self, new parent and new static: the class the caller names. */
+	if (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& zend_native_call_resolve_cached_static_class(
+				caller, descriptor, NULL) != ce) {
+		return false;
+	}
 	if (header->fast_function == NULL) {
 		/* No constructor: only the object, no frame. */
 		if ((header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
@@ -10118,6 +10144,23 @@ static bool zend_native_call_rearm_name_binding(
 	const zend_function *function);
 
 /*
+ * Whether a stale new site still applies to its key: a literal class name
+ * must still bind it; new self, new parent and new static compare the class
+ * they name with the key on every call, so the key must outlive the
+ * request.
+ */
+static bool zend_native_call_rearm_new_class(
+	const zend_op_array *op_array,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_class_entry *key)
+{
+	if (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		return zend_native_call_class_persistent(key);
+	}
+	return zend_native_call_rearm_class_binding(op_array, descriptor, key);
+}
+
+/*
  * Whether a stale site of an internal target still applies: the function
  * and the classes the site keyed must outlive the request that published
  * them, a name must still bind the function, and a literal class name the
@@ -10145,7 +10188,7 @@ static bool zend_native_call_fast_rearm_internal(
 			/* The guard compares every receiver's class with the key. */
 			return zend_native_call_class_persistent(key);
 		case ZEND_NEW:
-			return zend_native_call_rearm_class_binding(
+			return zend_native_call_rearm_new_class(
 				op_array, descriptor, key);
 		case ZEND_INIT_STATIC_METHOD_CALL:
 			if (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
@@ -10310,7 +10353,7 @@ static bool zend_native_call_fast_rearm_site(
 		/* new C of a class without a constructor: only the class. */
 		if (descriptor->init_opcode != ZEND_NEW
 				|| (header->fast_flags & ZEND_NATIVE_CALL_FAST_NO_CALL) == 0
-				|| !zend_native_call_rearm_class_binding(
+				|| !zend_native_call_rearm_new_class(
 					op_array, descriptor, key)) {
 			return false;
 		}
@@ -10343,7 +10386,7 @@ static bool zend_native_call_fast_rearm_site(
 			}
 			break;
 		case ZEND_NEW:
-			if (!zend_native_call_rearm_class_binding(
+			if (!zend_native_call_rearm_new_class(
 					op_array, descriptor, key)) {
 				return false;
 			}

@@ -930,11 +930,18 @@ class ZendCompilerX64 final
 			case ZEND_INIT_FCALL_BY_NAME:
 			case ZEND_INIT_NS_FCALL_BY_NAME:
 				break;
-			case ZEND_NEW:
-				/* new of a literal class; the Init creates the object in
-				 * the result slot. */
-				if (descriptor->init_op1.kind
-						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+			case ZEND_NEW: {
+				/* new of a literal class, self, parent or static; the Init
+				 * creates the object in the result slot. */
+				const uint32_t fetch =
+					descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+				if ((descriptor->init_op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& (descriptor->init_op1.kind
+								!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+							|| (fetch != ZEND_FETCH_CLASS_SELF
+								&& fetch != ZEND_FETCH_CLASS_PARENT
+								&& fetch != ZEND_FETCH_CLASS_STATIC)))
 						|| !frame_slot(descriptor->init_result)
 						|| (descriptor->init_result.slot_kind
 								!= ZEND_MIR_SOURCE_SLOT_TMP
@@ -943,6 +950,7 @@ class ZendCompilerX64 final
 					return false;
 				}
 				break;
+			}
 			case ZEND_INIT_STATIC_METHOD_CALL: {
 				/* A named class, self::, parent:: or static::; a
 				 * constructor call (parent::__construct()) names no
