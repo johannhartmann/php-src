@@ -1727,22 +1727,8 @@ private:
 						caller_value)) {
 				const zend_mir_storage_id storage_id =
 					canonical_storage(caller_value);
-				const uint32_t reference =
-					zend_mir_id_is_valid(storage_id)
-						? machine_reference_index(
-							ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
-							storage_id)
-						: UINT32_MAX;
 				const IRValueRef address =
-					reference != UINT32_MAX
-						? add_derived_value(
-							ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-							ZEND_MIR_SCALAR_TYPE_NONE,
-							storage_id, false, 0, UINT8_MAX,
-							ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-							ZEND_MIR_REFCOUNT_UNKNOWN,
-							reference)
-						: INVALID_VALUE_REF;
+					frame_slot_address(storage_id);
 				const IRValueRef transported =
 					address != INVALID_VALUE_REF
 						? add_derived_value(
@@ -7997,22 +7983,8 @@ public:
 						 */
 						const zend_mir_storage_id storage_id =
 							transport->storage_id;
-						const uint32_t reference =
-							zend_mir_id_is_valid(storage_id)
-								? machine_reference_index(
-									ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
-									storage_id)
-								: UINT32_MAX;
 						const IRValueRef address =
-							reference != UINT32_MAX
-								? add_derived_value(
-									ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-									ZEND_MIR_SCALAR_TYPE_NONE,
-									storage_id, false, 0, UINT8_MAX,
-									ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-									ZEND_MIR_REFCOUNT_UNKNOWN,
-									reference)
-								: INVALID_VALUE_REF;
+							frame_slot_address(storage_id);
 						const IRValueRef resolved =
 							address != INVALID_VALUE_REF
 								&& transport->resolve_reference
@@ -8139,22 +8111,8 @@ public:
 						 */
 						const zend_mir_storage_id storage_id =
 							canonical_storage(operand);
-						const uint32_t reference =
-							zend_mir_id_is_valid(storage_id)
-								? machine_reference_index(
-									ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
-									storage_id)
-								: UINT32_MAX;
 						const IRValueRef address =
-							reference != UINT32_MAX
-								? add_derived_value(
-									ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-									ZEND_MIR_SCALAR_TYPE_NONE,
-									storage_id, false, 0, UINT8_MAX,
-									ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-									ZEND_MIR_REFCOUNT_UNKNOWN,
-									reference)
-								: INVALID_VALUE_REF;
+							frame_slot_address(storage_id);
 						const IRValueRef transported =
 							address != INVALID_VALUE_REF
 								? add_derived_value(
@@ -8652,22 +8610,8 @@ public:
 								storage_id = source_operand_storage_id(
 									argument.source_operand);
 							}
-							const uint32_t reference =
-								zend_mir_id_is_valid(storage_id)
-									? machine_reference_index(
-										ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
-										storage_id)
-									: UINT32_MAX;
 							const IRValueRef address =
-								reference != UINT32_MAX
-									? add_derived_value(
-										ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-										ZEND_MIR_SCALAR_TYPE_NONE,
-										storage_id, false, 0, UINT8_MAX,
-										ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-										ZEND_MIR_REFCOUNT_UNKNOWN,
-										reference)
-									: INVALID_VALUE_REF;
+								frame_slot_address(storage_id);
 							const IRValueRef transported =
 								address != INVALID_VALUE_REF
 									? add_derived_value(
@@ -9866,22 +9810,8 @@ public:
 						&& !register_mutation_result) {
 					const zend_mir_storage_id mutation_storage =
 						canonical_storage(mutation_result);
-					const uint32_t mutation_reference =
-						zend_mir_id_is_valid(mutation_storage)
-							? machine_reference_index(
-								ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
-								mutation_storage)
-							: UINT32_MAX;
 					const IRValueRef mutation_slot =
-						mutation_reference != UINT32_MAX
-							? add_derived_value(
-								ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-								ZEND_MIR_SCALAR_TYPE_NONE,
-								mutation_storage, false, 0, UINT8_MAX,
-								ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-								ZEND_MIR_REFCOUNT_UNKNOWN,
-								mutation_reference)
-							: INVALID_VALUE_REF;
+						frame_slot_address(mutation_storage);
 					if (mutation_slot == INVALID_VALUE_REF
 							|| mutation_storage
 								!= instruction.value_operation
@@ -10249,22 +10179,8 @@ public:
 					static_cast<uint32_t>(canonical_result);
 				const zend_mir_storage_id storage_id =
 					instruction.value_operation.result_storage_id;
-				const uint32_t reference =
-					zend_mir_id_is_valid(storage_id)
-						? machine_reference_index(
-							ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT,
-							storage_id)
-						: UINT32_MAX;
 				const IRValueRef address =
-					reference != UINT32_MAX
-						? add_derived_value(
-							ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
-							ZEND_MIR_SCALAR_TYPE_NONE,
-							storage_id, false, 0, UINT8_MAX,
-							ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-							ZEND_MIR_REFCOUNT_UNKNOWN,
-							reference)
-						: INVALID_VALUE_REF;
+					frame_slot_address(storage_id);
 				const IRValueRef array =
 					address != INVALID_VALUE_REF
 						? add_derived_value(
@@ -11205,9 +11121,7 @@ public:
 			: plan_->zend_entry_may_emit_calls;
 	}
 	bool cur_needs_unwind_info() const {
-		return function_mode_ == FunctionMode::TypedBody
-			? plan_->typed_body_may_emit_calls
-			: plan_->zend_entry_may_emit_calls;
+		return cur_func_may_emit_calls();
 	}
 	uint32_t cur_highest_val_idx() const {
 		return MIR_VALUE_BASE + plan_->value_count

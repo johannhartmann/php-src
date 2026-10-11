@@ -9868,100 +9868,46 @@ bool initialize_plan(
 								plan,
 								ZEND_NATIVE_HELPER_CALL_CONVERT_EXPLICIT);
 					} else {
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT);
-						require_runtime_helper(
-							plan, ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER);
-						require_runtime_helper(
-							plan, ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_USER_CALL_RESOLVE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_USER_CALL_NORMALIZE_RESOLUTION);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_USER_CALL_RELEASE_RESOLUTION);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_RESERVE_DYNAMIC_FRAME);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_USER_CALL_EXPAND_ARGUMENTS);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_USER_CALL_SEND_RESOLVED_ARGUMENT);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_FRAME_PREPARE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_FRAME_OBSERVER_BEGIN);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_FRAME_OBSERVER_END);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_FRAME_FINALIZE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_LEAVE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_UNDEFINED_ARGUMENT);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_SCALAR_VIOLATION);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_DYNAMIC_INIT);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_SEND);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_UNIVERSAL_INIT);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_UNIVERSAL_DO);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_UNIVERSAL_SEND);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_NEW);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_SEND_VAR_REFERENCE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_DO);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_FAST_REARM);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CALL_UNIVERSAL_EXPAND);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_CHECK_FUNC_ARG_RESOLVED);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_FRAME_ACTIVATION_POP);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RELEASE);
-						require_runtime_helper(
-							plan,
-							ZEND_NATIVE_HELPER_PREPARE_FINALLY_EXCEPTION);
+						/* Everything a source-backed user call may reach. */
+						static constexpr zend_native_runtime_helper_id
+							user_call_helpers[] = {
+								ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT,
+								ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER,
+								ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE,
+								ZEND_NATIVE_HELPER_USER_CALL_RESOLVE,
+								ZEND_NATIVE_HELPER_USER_CALL_NORMALIZE_RESOLUTION,
+								ZEND_NATIVE_HELPER_USER_CALL_RELEASE_RESOLUTION,
+								ZEND_NATIVE_HELPER_CALL_RESERVE_DYNAMIC_FRAME,
+								ZEND_NATIVE_HELPER_USER_CALL_EXPAND_ARGUMENTS,
+								ZEND_NATIVE_HELPER_USER_CALL_SEND_RESOLVED_ARGUMENT,
+								ZEND_NATIVE_HELPER_FRAME_PREPARE,
+								ZEND_NATIVE_HELPER_FRAME_OBSERVER_BEGIN,
+								ZEND_NATIVE_HELPER_FRAME_OBSERVER_END,
+								ZEND_NATIVE_HELPER_FRAME_FINALIZE,
+								ZEND_NATIVE_HELPER_CALL_FAST_LEAVE,
+								ZEND_NATIVE_HELPER_CALL_FAST_UNDEFINED_ARGUMENT,
+								ZEND_NATIVE_HELPER_CALL_FAST_SCALAR_VIOLATION,
+								ZEND_NATIVE_HELPER_CALL_FAST_DYNAMIC_INIT,
+								ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT,
+								ZEND_NATIVE_HELPER_CALL_FAST_SEND,
+								ZEND_NATIVE_HELPER_CALL_UNIVERSAL_INIT,
+								ZEND_NATIVE_HELPER_CALL_UNIVERSAL_DO,
+								ZEND_NATIVE_HELPER_CALL_UNIVERSAL_SEND,
+								ZEND_NATIVE_HELPER_CALL_FAST_NEW,
+								ZEND_NATIVE_HELPER_CALL_FAST_SEND_VAR_REFERENCE,
+								ZEND_NATIVE_HELPER_CALL_FAST_DO,
+								ZEND_NATIVE_HELPER_CALL_FAST_REARM,
+								ZEND_NATIVE_HELPER_CALL_UNIVERSAL_EXPAND,
+								ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE,
+								ZEND_NATIVE_HELPER_CHECK_FUNC_ARG_RESOLVED,
+								ZEND_NATIVE_HELPER_FRAME_ACTIVATION_POP,
+								ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RELEASE,
+								ZEND_NATIVE_HELPER_PREPARE_FINALLY_EXCEPTION,
+							};
+						for (const zend_native_runtime_helper_id helper
+								: user_call_helpers) {
+							require_runtime_helper(plan, helper);
+						}
 					}
 				}
 				if (!fragment_call
