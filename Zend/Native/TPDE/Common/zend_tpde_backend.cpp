@@ -10677,10 +10677,9 @@ static bool freeze_typed_body_signature(
 						ZEND_MIR_SCALAR_TYPE_NONE,
 						ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
 						ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
-			/* Its overflow check fails the body. */
-			*may_fail = *may_fail || (exact_long
-				&& !zend_tpde_numeric_comparison(
-					instruction.value_operation.source_opcode));
+			/* An exact long result cannot overflow: Zend's inference makes
+			 * the result of two longs a long only when its range excludes
+			 * overflow, so the operation cannot fail the body. */
 			instruction_result_types[index] = result;
 			register_source_ssa[
 				instruction.value_operation.result.ssa_variable_id] = result;

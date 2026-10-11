@@ -14695,8 +14695,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * form cannot: MUL and DIV, or any result that can hold a double
 			 * or a boolean.
 			 */
-			/* The plan keeps the result of two longs an exact long: an
-			 * overflow fails the typed body, whose caller repeats the call. */
+			/* The plan keeps the result of two longs an exact long only where
+			 * Zend's range inference excludes overflow. */
 			if (adaptor->typed_body() && !guarded && arithmetic
 					&& opcode != ZEND_DIV && node.has_result
 					&& node.operands.size() == 2
@@ -14737,7 +14737,12 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(IMUL64rr, left_reg, right_reg);
 						break;
 				}
-				generate_raw_jump(Jump::jo, typed_failure_label());
+#if ZEND_DEBUG
+				auto no_overflow = text_writer.label_create();
+				generate_raw_jump(Jump::jno, no_overflow);
+				ASM(UD2);
+				label_place(no_overflow);
+#endif
 				auto [result_ref_value, result] =
 					result_ref_single(node.result);
 				auto result_reg = result.alloc_reg();
