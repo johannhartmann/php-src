@@ -2174,12 +2174,10 @@ bool zend_mir_zend_source_direct_static_call_scope(
 bool zend_mir_zend_source_return_source_zval(
 	const zend_mir_zend_source *source, uint32_t return_opline_index)
 {
-	const zend_mir_frontend_call_inventory *inventory;
 	const zend_op_array *op_array;
 	const zend_op *return_opline;
 	uint32_t return_slot;
 	zend_mir_source_slot_kind return_slot_kind;
-	uint32_t index;
 
 	if (!zend_mir_source_is_initialized(source) || !source->calls_enabled
 			|| source->call_op_array == NULL || source->call_inventory == NULL) {
@@ -2204,58 +2202,6 @@ bool zend_mir_zend_source_return_source_zval(
 		|| zend_mir_frontend_decode_slot(
 			op_array, &return_opline->op1, return_opline->op1_type,
 			&return_slot, &return_slot_kind);
-	if (!zend_mir_frontend_decode_slot(
-			op_array, &return_opline->op1, return_opline->op1_type,
-			&return_slot, &return_slot_kind)) {
-		return false;
-	}
-	inventory = (const zend_mir_frontend_call_inventory *) source->call_inventory;
-	for (index = 0; index < inventory->site_count; index++) {
-		const zend_mir_source_call_site_ref *site = &inventory->sites[index];
-		const zend_mir_frontend_call_target *target;
-		const zend_op *do_opline;
-		uint32_t result_flags;
-		uint32_t result_slot;
-		zend_mir_source_slot_kind result_slot_kind;
-
-		if (site->do_opline_index >= return_opline_index
-				|| site->do_opline_index >= op_array->last
-				|| site->target_id >= inventory->target_count) {
-			continue;
-		}
-		target = &inventory->targets[site->target_id];
-		result_flags = site->flags
-			& (ZEND_MIR_SOURCE_CALL_SITE_RESULT_UNUSED
-				| ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR);
-		if (target->record.kind != ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL
-				|| result_flags != 0
-				|| zend_mir_id_is_valid(site->result_ssa_variable_id)) {
-			continue;
-		}
-		do_opline = &op_array->opcodes[site->do_opline_index];
-		if (!zend_mir_frontend_decode_slot(
-				op_array, &do_opline->result, do_opline->result_type,
-				&result_slot, &result_slot_kind)
-				|| result_slot != return_slot
-				|| result_slot_kind != return_slot_kind) {
-			continue;
-		}
-		/* The returned source slot must not be overwritten after the call. */
-		for (uint32_t scan = site->do_opline_index + 1;
-				scan < return_opline_index; scan++) {
-			uint32_t variable = return_slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-				? return_slot
-				: return_slot + (uint32_t) op_array->last_var;
-			if (zend_mir_frontend_opline_defines_variable(
-					op_array, &op_array->opcodes[scan], variable)) {
-				goto next_site;
-			}
-		}
-		return true;
-	next_site:
-		continue;
-	}
-	return false;
 }
 
 static zend_mir_source_call_target_kind
