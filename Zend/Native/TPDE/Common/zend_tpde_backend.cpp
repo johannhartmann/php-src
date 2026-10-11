@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 
 namespace {
 constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
@@ -3606,26 +3607,73 @@ int32_t freeze_reaching_phi_value(
 	if (consumer_block < 0) {
 		return -1;
 	}
+	/* The first PHI of each block that defines the storage. */
+	std::vector<int32_t> block_phi(plan->block_count, -1);
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_mir_instruction_record &candidate_record =
+			zend_tpde_instruction_record_at(plan, &plan->instructions[index]);
+		if (candidate_record.opcode != ZEND_MIR_OPCODE_PHI
+				|| !zend_mir_id_is_valid(candidate_record.result_id)) {
+			continue;
+		}
+		const int32_t block =
+			zend_tpde_block_index(plan, candidate_record.block_id);
+		const int32_t value =
+			zend_tpde_value_index(plan, candidate_record.result_id);
+		if (block >= 0 && block_phi[static_cast<uint32_t>(block)] < 0
+				&& value >= 0
+				&& plan->values[value].canonical_storage_id == storage_id) {
+			block_phi[static_cast<uint32_t>(block)] = value;
+		}
+	}
+	/*
+	 * The walk stops at such a PHI and cuts cycles at blocks it is still
+	 * visiting, which makes a block's answer depend on the path to it. Without
+	 * a cycle among the blocks it expands, no cut occurs and the answer is a
+	 * function of the block, which may then be reused instead of walking each
+	 * path through nested diamonds again.
+	 */
+	std::vector<uint8_t> state(plan->block_count, 0);
+	bool cyclic = false;
+	{
+		std::vector<std::pair<uint32_t, uint32_t>> stack;
+		stack.emplace_back(static_cast<uint32_t>(consumer_block), 0);
+		state[static_cast<uint32_t>(consumer_block)] = 1;
+		while (!stack.empty() && !cyclic) {
+			auto &[block, edge] = stack.back();
+			const uint32_t begin = plan->block_predecessor_offsets[block];
+			const uint32_t end = plan->block_predecessor_offsets[block + 1];
+			if (block_phi[block] >= 0 || begin + edge >= end) {
+				state[block] = 2;
+				stack.pop_back();
+				continue;
+			}
+			const uint32_t predecessor =
+				plan->block_predecessors[begin + edge++];
+			if (predecessor >= plan->block_count
+					|| state[predecessor] == 2) {
+				continue;
+			}
+			if (state[predecessor] == 1) {
+				cyclic = true;
+				break;
+			}
+			state[predecessor] = 1;
+			stack.emplace_back(predecessor, 0);
+		}
+	}
+	constexpr int32_t unresolved = INT32_MIN;
+	std::vector<int32_t> resolved(cyclic ? 0 : plan->block_count, unresolved);
 	std::vector<uint8_t> visiting(plan->block_count, 0);
 	auto resolve = [&](uint32_t block_index, auto &&self) -> int32_t {
 		if (block_index >= plan->block_count || visiting[block_index] != 0) {
 			return -1;
 		}
-		for (uint32_t index = 0; index < plan->instruction_count; ++index) {
-			const zend_tpde_instruction &candidate = plan->instructions[index];
-			const zend_mir_instruction_record candidate_record =
-				zend_tpde_instruction_record_at(plan, &candidate);
-			if (candidate_record.block_id != plan->block_ids[block_index]
-					|| candidate_record.opcode != ZEND_MIR_OPCODE_PHI
-					|| !zend_mir_id_is_valid(candidate_record.result_id)) {
-				continue;
-			}
-			const int32_t value =
-				zend_tpde_value_index(plan, candidate_record.result_id);
-			if (value >= 0
-					&& plan->values[value].canonical_storage_id == storage_id) {
-				return value;
-			}
+		if (block_phi[block_index] >= 0) {
+			return block_phi[block_index];
+		}
+		if (!cyclic && resolved[block_index] != unresolved) {
+			return resolved[block_index];
 		}
 		visiting[block_index] = 1;
 		const uint32_t begin = plan->block_predecessor_offsets[block_index];
@@ -3638,12 +3686,15 @@ int32_t freeze_reaching_phi_value(
 				continue;
 			}
 			if (merged >= 0 && merged != incoming) {
-				visiting[block_index] = 0;
-				return -1;
+				merged = -1;
+				break;
 			}
 			merged = incoming;
 		}
 		visiting[block_index] = 0;
+		if (!cyclic) {
+			resolved[block_index] = merged;
+		}
 		return merged;
 	};
 	return resolve(static_cast<uint32_t>(consumer_block), resolve);
@@ -4098,29 +4149,51 @@ bool freeze_machine_references(
 {
 
 	std::vector<zend_tpde_machine_reference> references;
+	/* Each distinct reference once, numbered in first-use order. */
+	struct reference_hash {
+		size_t operator()(const zend_tpde_machine_reference &reference) const {
+			uint64_t hash = UINT64_C(1469598103934665603);
+			for (const uint64_t field : {
+					uint64_t{reference.kind}, uint64_t{reference.base_value_id},
+					uint64_t{reference.index_value_id},
+					uint64_t{reference.stable_storage_or_layout_id},
+					uint64_t{reference.scale},
+					static_cast<uint64_t>(reference.displacement),
+					uint64_t{reference.access_width}}) {
+				hash = (hash ^ field) * UINT64_C(1099511628211);
+			}
+			return static_cast<size_t>(hash);
+		}
+	};
+	struct reference_equal {
+		bool operator()(const zend_tpde_machine_reference &left,
+				const zend_tpde_machine_reference &right) const {
+			return left.kind == right.kind
+				&& left.base_value_id == right.base_value_id
+				&& left.index_value_id == right.index_value_id
+				&& left.stable_storage_or_layout_id
+					== right.stable_storage_or_layout_id
+				&& left.scale == right.scale
+				&& left.displacement == right.displacement
+				&& left.access_width == right.access_width;
+		}
+	};
+	std::unordered_map<zend_tpde_machine_reference, uint32_t,
+		reference_hash, reference_equal> reference_indices;
 	auto add_reference =
 		[&](const zend_tpde_machine_reference &reference) -> uint32_t {
-			for (uint32_t index = 0; index < references.size(); ++index) {
-				const zend_tpde_machine_reference &candidate =
-					references[index];
-				if (candidate.kind == reference.kind
-						&& candidate.base_value_id
-							== reference.base_value_id
-						&& candidate.index_value_id
-							== reference.index_value_id
-						&& candidate.stable_storage_or_layout_id
-							== reference.stable_storage_or_layout_id
-						&& candidate.scale == reference.scale
-						&& candidate.displacement == reference.displacement
-						&& candidate.access_width == reference.access_width) {
-					return index;
-				}
+			if (const auto found = reference_indices.find(reference);
+					found != reference_indices.end()) {
+				return found->second;
 			}
 			if (references.size() >= MAX_RECORDS) {
 				return UINT32_MAX;
 			}
 			references.push_back(reference);
-			return static_cast<uint32_t>(references.size() - 1);
+			const uint32_t index =
+				static_cast<uint32_t>(references.size() - 1);
+			reference_indices.emplace(reference, index);
+			return index;
 		};
 	auto binding_value_id =
 		[&](const zend_tpde_source_value_binding &binding) {
@@ -4710,6 +4783,13 @@ bool freeze_statepoint_materializations(
 	};
 	constexpr reaching_scalar_definition no_reaching_scalar{-1, -1};
 	constexpr reaching_scalar_definition cyclic_reaching_scalar{-2, -2};
+	/* Scratch for every query: visiting is clear again after each one, a
+	 * block's memo is valid for the query whose epoch it carries. */
+	std::vector<uint8_t> visiting(plan->block_count, 0);
+	std::vector<uint32_t> memoized(plan->block_count, 0);
+	std::vector<reaching_scalar_definition> memo(
+		plan->block_count, no_reaching_scalar);
+	uint32_t reaching_epoch = 0;
 	auto reaching_scalar = [&](uint32_t boundary_index,
 			zend_mir_storage_id storage_id)
 			-> reaching_scalar_definition {
@@ -4721,17 +4801,14 @@ bool freeze_statepoint_materializations(
 		if (boundary_block < 0) {
 			return no_reaching_scalar;
 		}
-		std::vector<uint8_t> visiting(plan->block_count, 0);
-		std::vector<uint8_t> memoized(plan->block_count, 0);
-		std::vector<reaching_scalar_definition> memo(
-			plan->block_count, no_reaching_scalar);
+		++reaching_epoch;
 		auto resolve = [&](uint32_t block_index, uint32_t before,
 				auto &&self) -> reaching_scalar_definition {
 			if (block_index >= plan->block_count) {
 				return no_reaching_scalar;
 			}
 			const bool whole_block = before == plan->instruction_count;
-			if (whole_block && memoized[block_index] != 0) {
+			if (whole_block && memoized[block_index] == reaching_epoch) {
 				return memo[block_index];
 			}
 			if (visiting[block_index] != 0) {
@@ -4762,7 +4839,7 @@ bool freeze_statepoint_materializations(
 					};
 					if (whole_block) {
 						memo[block_index] = found;
-						memoized[block_index] = 1;
+						memoized[block_index] = reaching_epoch;
 					}
 					return found;
 				}
@@ -4816,7 +4893,7 @@ bool freeze_statepoint_materializations(
 					};
 					if (whole_block) {
 						memo[block_index] = found;
-						memoized[block_index] = 1;
+						memoized[block_index] = reaching_epoch;
 					}
 					return found;
 				}
@@ -4845,7 +4922,7 @@ bool freeze_statepoint_materializations(
 						const reaching_scalar_definition found{result, -1};
 						if (whole_block) {
 							memo[block_index] = found;
-							memoized[block_index] = 1;
+							memoized[block_index] = reaching_epoch;
 						}
 						return found;
 					}
@@ -4882,7 +4959,7 @@ bool freeze_statepoint_materializations(
 			}
 			if (whole_block) {
 				memo[block_index] = merged;
-				memoized[block_index] = 1;
+				memoized[block_index] = reaching_epoch;
 			}
 			return merged;
 		};
@@ -4913,82 +4990,178 @@ bool freeze_statepoint_materializations(
 				frames[index].id, index);
 		}
 	}
+	/*
+	 * Per value, in instruction order: the instructions defining it and the
+	 * plain ZVAL_STOREs of it, for stored_after_definition().
+	 */
+	std::vector<uint32_t> value_definition_offsets(plan->value_count + 1, 0);
+	std::vector<uint32_t> plain_store_offsets(plan->value_count + 1, 0);
+	auto definition_value = [&](const zend_tpde_instruction &instruction) {
+		return zend_mir_id_is_valid(instruction.record.result_id)
+			? zend_tpde_value_index(plan, instruction.record.result_id) : -1;
+	};
+	auto plain_store_value = [&](const zend_tpde_instruction &instruction) {
+		return instruction.record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
+				&& instruction.zval_store_plain
+				&& instruction.operand_count >= 1
+			? zend_tpde_value_index(plan,
+				zend_tpde_operand_at(plan, &instruction, 0))
+			: -1;
+	};
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const int32_t defined = definition_value(plan->instructions[index]);
+		const int32_t stored = plain_store_value(plan->instructions[index]);
+		if (defined >= 0) {
+			++value_definition_offsets[static_cast<uint32_t>(defined) + 1];
+		}
+		if (stored >= 0) {
+			++plain_store_offsets[static_cast<uint32_t>(stored) + 1];
+		}
+	}
+	for (uint32_t value = 0; value < plan->value_count; ++value) {
+		value_definition_offsets[value + 1] += value_definition_offsets[value];
+		plain_store_offsets[value + 1] += plain_store_offsets[value];
+	}
+	std::vector<uint32_t> value_definitions(
+		value_definition_offsets[plan->value_count]);
+	std::vector<uint32_t> plain_stores(plain_store_offsets[plan->value_count]);
+	{
+		std::vector<uint32_t> definition_fill(value_definition_offsets.begin(),
+			value_definition_offsets.end() - 1);
+		std::vector<uint32_t> store_fill(plain_store_offsets.begin(),
+			plain_store_offsets.end() - 1);
+		for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+			const int32_t defined = definition_value(plan->instructions[index]);
+			const int32_t stored = plain_store_value(plan->instructions[index]);
+			if (defined >= 0) {
+				value_definitions[
+					definition_fill[static_cast<uint32_t>(defined)]++] = index;
+			}
+			if (stored >= 0) {
+				plain_stores[store_fill[static_cast<uint32_t>(stored)]++] = index;
+			}
+		}
+	}
+	/*
+	 * Per storage: the materialization the boundary being planned has for it,
+	 * valid while the stamp is the boundary's. Larger storage ids are looked
+	 * up by a scan of the boundary's materializations.
+	 */
+	zend_mir_storage_id storage_bound = 0;
+	for (uint32_t value = 0; value < plan->value_count; ++value) {
+		const zend_mir_storage_id storage_id =
+			plan->values[value].canonical_storage_id;
+		if (zend_mir_id_is_valid(storage_id) && storage_id >= storage_bound
+				&& storage_id < (UINT32_C(1) << 20)) {
+			storage_bound = storage_id + 1;
+		}
+	}
+	for (const zend_mir_storage_id storage_id : lazy_scalar_storages) {
+		if (storage_id >= storage_bound && storage_id < (UINT32_C(1) << 20)) {
+			storage_bound = storage_id + 1;
+		}
+	}
+	std::vector<uint32_t> boundary_storage_stamps(storage_bound, 0);
+	std::vector<uint32_t> boundary_storage_materializations(storage_bound, 0);
+	uint32_t boundary_stamp = 0;
 	const bool operand_observed_plan = !ZEND_OBSERVER_ENABLED
 		&& plan->operand_observed_storages != nullptr
 		&& !plan->deopt_landings && !plan->deopt_stress
 		&& plan->deopt_generic_member_plus_one == 0
 		&& plan->tier2_fallback_entry == nullptr;
+	/*
+	 * The storages a boundary instruction reads, gathered once per boundary;
+	 * all is set when one of them cannot be determined.
+	 */
+	uint32_t read_storages_stamp = 0;
+	bool reads_all_storages = false;
+	std::vector<zend_mir_storage_id> boundary_read_storages;
 	auto instruction_reads_storage = [&](
 			const zend_tpde_instruction &instruction,
 			const zend_mir_instruction_record &record,
 			zend_mir_storage_id storage_id) {
-		if (instruction.has_value_operation
-				&& (instruction.value_operation.op1_storage_id == storage_id
-					|| instruction.value_operation.op2_storage_id
-						== storage_id
-					|| instruction.value_operation.auxiliary_storage_id
-						== storage_id)) {
-			return true;
-		}
-		for (uint32_t operand = 0;
-				operand < instruction.operand_count; ++operand) {
-			const int32_t operand_index = zend_tpde_value_index(
-				plan, zend_tpde_operand_at(plan, &instruction, operand));
-			if (operand_index >= 0
-					&& plan->values[operand_index].canonical_storage_id
-						== storage_id) {
-				return true;
+		if (read_storages_stamp != boundary_stamp) {
+			read_storages_stamp = boundary_stamp;
+			reads_all_storages = false;
+			boundary_read_storages.clear();
+			if (instruction.has_value_operation) {
+				boundary_read_storages.push_back(
+					instruction.value_operation.op1_storage_id);
+				boundary_read_storages.push_back(
+					instruction.value_operation.op2_storage_id);
+				boundary_read_storages.push_back(
+					instruction.value_operation.auxiliary_storage_id);
 			}
-		}
-		/* A direct call reads its source-backed arguments from the frame. */
-		if ((record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
-					|| record.opcode
-						== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL)
-				&& instruction.call_argument_offset
-					<= plan->call_argument_count
-				&& instruction.call_argument_count
-					<= plan->call_argument_count
-						- instruction.call_argument_offset) {
-			for (uint32_t argument_index = 0;
-					argument_index < instruction.call_argument_count;
-					++argument_index) {
-				zend_mir_call_argument_ref argument{};
-				if (!zend_tpde_call_argument_at(plan,
-						instruction.call_argument_offset + argument_index,
-						&argument)
-						|| source_descriptor_storage(source_op_array,
-							argument.source_operand) == storage_id) {
-					return true;
+			for (uint32_t operand = 0;
+					operand < instruction.operand_count; ++operand) {
+				const int32_t operand_index = zend_tpde_value_index(
+					plan, zend_tpde_operand_at(plan, &instruction, operand));
+				if (operand_index >= 0) {
+					boundary_read_storages.push_back(
+						plan->values[operand_index].canonical_storage_id);
 				}
 			}
-		}
-		/* A call reads its arguments through its frame state. */
-		if (zend_mir_id_is_valid(record.frame_state_id)) {
-			const int32_t frame_position = id_index_find(
-				frame_index.data(), frame_index_capacity,
-				record.frame_state_id);
-			if (frame_position < 0) {
-				return true;
-			}
-			const zend_mir_frame_state_ref &frame =
-				frames[static_cast<uint32_t>(frame_position)];
-			for (uint32_t slot_index = 0;
-					slot_index < frame.slots.count; ++slot_index) {
-				zend_mir_frame_slot_ref slot;
-				if (!view->frame_slot_at(view->context,
-						frame.slots.offset + slot_index, &slot)) {
-					return true;
+			/* A direct call reads its source-backed arguments from the
+			 * frame. */
+			if ((record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
+						|| record.opcode
+							== ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL)
+					&& instruction.call_argument_offset
+						<= plan->call_argument_count
+					&& instruction.call_argument_count
+						<= plan->call_argument_count
+							- instruction.call_argument_offset) {
+				for (uint32_t argument_index = 0;
+						!reads_all_storages
+							&& argument_index < instruction.call_argument_count;
+						++argument_index) {
+					zend_mir_call_argument_ref argument{};
+					if (!zend_tpde_call_argument_at(plan,
+							instruction.call_argument_offset + argument_index,
+							&argument)) {
+						reads_all_storages = true;
+					} else {
+						boundary_read_storages.push_back(
+							source_descriptor_storage(source_op_array,
+								argument.source_operand));
+					}
 				}
-				const int32_t slot_value = zend_mir_id_is_valid(slot.value_id)
-					? zend_tpde_value_index(plan, slot.value_id) : -1;
-				if (slot_value >= 0
-						&& plan->values[slot_value].canonical_storage_id
-							== storage_id) {
-					return true;
+			}
+			/* A call reads its arguments through its frame state. */
+			if (!reads_all_storages
+					&& zend_mir_id_is_valid(record.frame_state_id)) {
+				const int32_t frame_position = id_index_find(
+					frame_index.data(), frame_index_capacity,
+					record.frame_state_id);
+				if (frame_position < 0) {
+					reads_all_storages = true;
+				} else {
+					const zend_mir_frame_state_ref &frame =
+						frames[static_cast<uint32_t>(frame_position)];
+					for (uint32_t slot_index = 0;
+							!reads_all_storages && slot_index < frame.slots.count;
+							++slot_index) {
+						zend_mir_frame_slot_ref slot;
+						if (!view->frame_slot_at(view->context,
+								frame.slots.offset + slot_index, &slot)) {
+							reads_all_storages = true;
+							break;
+						}
+						const int32_t slot_value =
+							zend_mir_id_is_valid(slot.value_id)
+								? zend_tpde_value_index(plan, slot.value_id)
+								: -1;
+						if (slot_value >= 0) {
+							boundary_read_storages.push_back(
+								plan->values[slot_value].canonical_storage_id);
+						}
+					}
 				}
 			}
+			std::ranges::sort(boundary_read_storages);
 		}
-		return false;
+		return reads_all_storages
+			|| std::ranges::binary_search(boundary_read_storages, storage_id);
 	};
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &instruction = plan->instructions[index];
@@ -5059,17 +5232,27 @@ bool freeze_statepoint_materializations(
 			continue;
 		}
 
-		auto duplicate_storage = [&](zend_mir_storage_id storage_id) {
+		++boundary_stamp;
+		/* This boundary's materialization of the storage, or UINT32_MAX. */
+		auto boundary_materialization = [&](zend_mir_storage_id storage_id) {
+			if (storage_id < boundary_storage_stamps.size()) {
+				return boundary_storage_stamps[storage_id] == boundary_stamp
+					? boundary_storage_materializations[storage_id]
+					: UINT32_MAX;
+			}
 			for (uint32_t materialization_index =
 					instruction.materialization_offset;
 					materialization_index < materializations.size();
 					++materialization_index) {
 				if (materializations[materialization_index].storage_id
 						== storage_id) {
-					return true;
+					return materialization_index;
 				}
 			}
-			return false;
+			return UINT32_MAX;
+		};
+		auto duplicate_storage = [&](zend_mir_storage_id storage_id) {
+			return boundary_materialization(storage_id) != UINT32_MAX;
 		};
 		/*
 		 * A value materialized from its defining instruction is a boxed zval
@@ -5102,31 +5285,29 @@ bool freeze_statepoint_materializations(
 			if (!zend_tpde_linux_inline_forms || source_value_index < 0) {
 				return false;
 			}
-			const zend_mir_value_id value_id =
-				plan->values[source_value_index].id;
-			for (uint32_t cursor = index;
-					source_definition_instruction_index < 0 && cursor > 0;
-					--cursor) {
-				if (plan->instructions[cursor - 1].record.result_id
-						== value_id) {
-					source_definition_instruction_index =
-						static_cast<int32_t>(cursor - 1);
-				}
-			}
+			const uint32_t value = static_cast<uint32_t>(source_value_index);
 			if (source_definition_instruction_index < 0) {
-				return false;
+				/* The nearest definition before the boundary. */
+				const auto begin = value_definitions.begin()
+					+ value_definition_offsets[value];
+				const auto end = value_definitions.begin()
+					+ value_definition_offsets[value + 1];
+				const auto after = std::lower_bound(begin, end, index);
+				if (after == begin) {
+					return false;
+				}
+				source_definition_instruction_index =
+					static_cast<int32_t>(*(after - 1));
 			}
-			for (uint32_t candidate_index =
+			const auto end = plain_stores.begin()
+				+ plain_store_offsets[value + 1];
+			for (auto store = std::upper_bound(
+						plain_stores.begin() + plain_store_offsets[value], end,
 						static_cast<uint32_t>(
-							source_definition_instruction_index) + 1;
-					candidate_index < index; ++candidate_index) {
-				const zend_tpde_instruction &candidate =
-					plan->instructions[candidate_index];
-				if (candidate.record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
-						&& candidate.zval_store_plain
-						&& candidate.zval_store_storage_id == storage_id
-						&& zend_tpde_operand_at(plan, &candidate, 0)
-							== value_id) {
+							source_definition_instruction_index));
+					store != end && *store < index; ++store) {
+				if (plan->instructions[*store].zval_store_storage_id
+						== storage_id) {
 					return true;
 				}
 			}
@@ -5144,6 +5325,11 @@ bool freeze_statepoint_materializations(
 						source_definition_instruction_index)) {
 				return;
 			}
+			if (storage_id < boundary_storage_stamps.size()) {
+				boundary_storage_stamps[storage_id] = boundary_stamp;
+				boundary_storage_materializations[storage_id] =
+					static_cast<uint32_t>(materializations.size());
+			}
 			materializations.push_back({
 				value_index,
 				storage_id,
@@ -5158,20 +5344,15 @@ bool freeze_statepoint_materializations(
 				zend_tpde_machine_value_kind machine_kind,
 				int32_t source_value_index,
 				int32_t source_definition_instruction_index) {
-			for (uint32_t materialization_index =
-					instruction.materialization_offset;
-					materialization_index < materializations.size();
-					++materialization_index) {
-				zend_tpde_materialization &materialization =
-					materializations[materialization_index];
-				if (materialization.storage_id == storage_id) {
-					materialization = {
-						UINT32_MAX, storage_id, machine_kind,
-						source_value_index,
-						source_definition_instruction_index,
-					};
-					return;
-				}
+			if (const uint32_t existing =
+					boundary_materialization(storage_id);
+					existing != UINT32_MAX) {
+				materializations[existing] = {
+					UINT32_MAX, storage_id, machine_kind,
+					source_value_index,
+					source_definition_instruction_index,
+				};
+				return;
 			}
 			append_materialization(
 				UINT32_MAX, storage_id, machine_kind,
