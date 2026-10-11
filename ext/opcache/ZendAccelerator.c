@@ -1408,13 +1408,12 @@ static bool zend_accel_script_binds_nothing(
 			|| zend_hash_num_elements(&persistent_script->script.class_table) != 0) {
 		return false;
 	}
+	/* Runtime class declarations have their class_table entry; dynamic
+	 * functions and constants have none. */
 	for (uint32_t i = 0; i < main->last; i++) {
 		switch (main->opcodes[i].opcode) {
 			case ZEND_DECLARE_CONST:
 			case ZEND_DECLARE_FUNCTION:
-			case ZEND_DECLARE_CLASS:
-			case ZEND_DECLARE_CLASS_DELAYED:
-			case ZEND_DECLARE_ANON_CLASS:
 				return false;
 		}
 	}
@@ -1583,17 +1582,6 @@ static zend_always_inline bool is_phar_file(const zend_string *filename)
 }
 
 #ifdef HAVE_NATIVE_ENGINE
-static zend_always_inline zend_long zend_accel_native_optimization_level(void)
-{
-	/*
-	 * TPDE deliberately performs only local optimization. Preserve the full
-	 * OPcache dataflow pipeline so the native lowering consumes globally
-	 * simplified Zend SSA instead of reconstructing equivalent work in the
-	 * machine adaptor.
-	 */
-	return ZCG(accel_directives).optimization_level;
-}
-
 static zend_always_inline void zend_accel_prepare_native_script(
 	zend_persistent_script *script, bool preloaded_owner)
 {
@@ -1611,11 +1599,6 @@ static zend_always_inline void zend_accel_prepare_native_script(
 			diagnostic.message[0] != '\0'
 				? diagnostic.message : "unknown compiler failure");
 	}
-}
-#else
-static zend_always_inline zend_long zend_accel_native_optimization_level(void)
-{
-	return ZCG(accel_directives).optimization_level;
 }
 #endif
 
@@ -1681,10 +1664,7 @@ static zend_persistent_script *cache_script_in_file_cache(zend_persistent_script
 
 	orig_compiler_options = CG(compiler_options);
 	CG(compiler_options) |= ZEND_COMPILE_WITH_FILE_CACHE;
-	zend_optimize_script(
-		&new_persistent_script->script,
-		zend_accel_native_optimization_level(),
-		ZCG(accel_directives).opt_debug_level);
+	zend_optimize_script(&new_persistent_script->script, ZCG(accel_directives).optimization_level, ZCG(accel_directives).opt_debug_level);
 	zend_accel_finalize_delayed_early_binding_list(new_persistent_script);
 	CG(compiler_options) = orig_compiler_options;
 
@@ -1697,20 +1677,27 @@ static zend_persistent_script *cache_script_in_shared_memory(zend_persistent_scr
 	zend_accel_hash_entry *bucket;
 	uint32_t memory_used;
 	uint32_t orig_compiler_options;
+#ifdef HAVE_NATIVE_ENGINE
+	bool native_prepared = false;
+#endif
 
 	orig_compiler_options = CG(compiler_options);
 	if (ZCG(accel_directives).file_cache) {
 		CG(compiler_options) |= ZEND_COMPILE_WITH_FILE_CACHE;
 	}
-	zend_optimize_script(
-		&new_persistent_script->script,
-		zend_accel_native_optimization_level(),
-		ZCG(accel_directives).opt_debug_level);
+	zend_optimize_script(&new_persistent_script->script, ZCG(accel_directives).optimization_level, ZCG(accel_directives).opt_debug_level);
 	zend_accel_finalize_delayed_early_binding_list(new_persistent_script);
 	CG(compiler_options) = orig_compiler_options;
 
 #ifdef HAVE_NATIVE_ENGINE
-	zend_accel_prepare_native_script(new_persistent_script, false);
+	/* The native compile is skipped when another process stored the script
+	 * meanwhile; the check under the lock below decides. */
+	bucket = zend_accel_hash_find_entry(&ZCSG(hash), new_persistent_script->script.filename);
+	if (!bucket || ((zend_persistent_script *) bucket->data)->corrupted) {
+		zend_accel_prepare_native_script(new_persistent_script, false);
+		native_prepared = true;
+	}
+lock:
 #endif
 
 	/* exclusive lock */
@@ -1740,6 +1727,15 @@ static zend_persistent_script *cache_script_in_shared_memory(zend_persistent_scr
 #endif
 		}
 	}
+
+#ifdef HAVE_NATIVE_ENGINE
+	if (!native_prepared) {
+		zend_shared_alloc_unlock();
+		zend_accel_prepare_native_script(new_persistent_script, false);
+		native_prepared = true;
+		goto lock;
+	}
+#endif
 
 	if (zend_accel_hash_is_full(&ZCSG(hash))) {
 		zend_accel_error(ACCEL_LOG_DEBUG, "No more entries in hash table!");
@@ -4821,10 +4817,7 @@ static void preload_optimize(zend_persistent_script *script)
 		} ZEND_HASH_FOREACH_END();
 	} ZEND_HASH_FOREACH_END();
 
-	zend_optimize_script(
-		&script->script,
-		zend_accel_native_optimization_level(),
-		ZCG(accel_directives).opt_debug_level);
+	zend_optimize_script(&script->script, ZCG(accel_directives).optimization_level, ZCG(accel_directives).opt_debug_level);
 	zend_accel_finalize_delayed_early_binding_list(script);
 
 	ZEND_HASH_MAP_FOREACH_PTR(&script->script.class_table, ce) {
@@ -4840,16 +4833,12 @@ static void preload_optimize(zend_persistent_script *script)
 	zend_shared_alloc_destroy_xlat_table();
 
 	ZEND_HASH_MAP_FOREACH_PTR(preload_scripts, script) {
-		zend_optimize_script(
-			&script->script,
-			zend_accel_native_optimization_level(),
-			ZCG(accel_directives).opt_debug_level);
+		zend_optimize_script(&script->script, ZCG(accel_directives).optimization_level, ZCG(accel_directives).opt_debug_level);
 		zend_accel_finalize_delayed_early_binding_list(script);
 	} ZEND_HASH_FOREACH_END();
 }
 
-static zend_persistent_script* preload_script_in_shared_memory(
-	zend_persistent_script *new_persistent_script, bool prepare_native)
+static zend_persistent_script* preload_script_in_shared_memory(zend_persistent_script *new_persistent_script)
 {
 	zend_accel_hash_entry *bucket;
 	uint32_t memory_used;
@@ -4859,15 +4848,6 @@ static zend_persistent_script* preload_script_in_shared_memory(
 		zend_accel_error_noreturn(ACCEL_LOG_FATAL, "Not enough entries in hash table for preloading. Consider increasing the value for the opcache.max_accelerated_files directive in php.ini.");
 		return NULL;
 	}
-
-#ifdef HAVE_NATIVE_ENGINE
-	if (prepare_native) {
-		zend_accel_prepare_native_script(
-			new_persistent_script, false);
-	}
-#else
-	(void) prepare_native;
-#endif
 
 	checkpoint = zend_shared_alloc_checkpoint_xlat_table();
 
@@ -5225,8 +5205,7 @@ static zend_result accel_preload(const char *config, bool in_child)
 #ifdef HAVE_NATIVE_ENGINE
 		zend_accel_prepare_native_script(script, true);
 #endif
-		ZCSG(preload_script) =
-			preload_script_in_shared_memory(script, false);
+		ZCSG(preload_script) = preload_script_in_shared_memory(script);
 
 		SHM_PROTECT();
 		HANDLE_UNBLOCK_INTERRUPTIONS();
@@ -5249,8 +5228,10 @@ static zend_result accel_preload(const char *config, bool in_child)
 			if (zend_hash_num_elements(&script->script.class_table) > 1) {
 				zend_hash_sort_ex(&script->script.class_table, preload_sort_classes, NULL, 0);
 			}
-			ZCSG(saved_scripts)[i] =
-				preload_script_in_shared_memory(script, true);
+#ifdef HAVE_NATIVE_ENGINE
+			zend_accel_prepare_native_script(script, false);
+#endif
+			ZCSG(saved_scripts)[i] = preload_script_in_shared_memory(script);
 #ifdef HAVE_NATIVE_ENGINE
 			if (UNEXPECTED(zend_native_executor_register_preloaded_script(
 					&ZCSG(saved_scripts)[i]->script) == FAILURE)) {

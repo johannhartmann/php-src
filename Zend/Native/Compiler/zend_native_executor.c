@@ -429,6 +429,46 @@ zend_native_executor_generation_by_opcodes_locked(
 	return generation;
 }
 
+/* One lookup for "delete the entry if it holds value". */
+static void zend_native_executor_str_del_value(
+	HashTable *table, const void *key, size_t length, const void *value)
+{
+	zval *entry = zend_hash_str_find(table, (const char *) key, length);
+
+	if (entry != NULL && Z_PTR_P(entry) == value) {
+		zend_hash_del_bucket(table, (Bucket *) entry);
+	}
+}
+
+static void zend_native_executor_index_del_value(
+	HashTable *table, zend_ulong key, const void *value)
+{
+	zval *entry = zend_hash_index_find(table, key);
+
+	if (entry == NULL || Z_PTR_P(entry) != value) {
+		return;
+	}
+	if (HT_IS_PACKED(table)) {
+		zend_hash_index_del(table, key);
+	} else {
+		zend_hash_del_bucket(table, (Bucket *) entry);
+	}
+}
+
+/* The entry for key, added holding value if absent: whether it holds
+ * value. */
+static bool zend_native_executor_str_add_value(
+	HashTable *table, const void *key, size_t length, void *value)
+{
+	zval *entry = zend_hash_str_lookup(table, (const char *) key, length);
+
+	if (Z_TYPE_P(entry) == IS_NULL) {
+		ZVAL_PTR(entry, value);
+		return true;
+	}
+	return Z_PTR_P(entry) == value;
+}
+
 static void zend_native_executor_dispatch_store(
 	zend_op_array *op_array, zend_native_executor_dispatch *dispatch)
 {
@@ -635,61 +675,26 @@ zend_native_executor_find_function_generation(zend_function *function)
 		? generation : NULL;
 }
 
-typedef struct _zend_native_executor_index_change {
-	zend_ulong key;
-	zend_native_executor_generation *previous;
-	bool changed;
-} zend_native_executor_index_change;
-
-static bool zend_native_executor_index_ready_op_array(
+/* Indexes a published op array by its opcodes, unless a later request
+ * generation already holds them. */
+static void zend_native_executor_index_ready_op_array(
 	HashTable *index, zend_native_executor_generation *generation,
-	zend_op_array *op_array, zend_native_executor_index_change *change)
+	const zend_op_array *op_array)
 {
+	zval *entry;
 	zend_native_executor_generation *indexed;
-	zend_ulong key;
 
-	if (index == NULL || generation == NULL || op_array == NULL
-			|| op_array->opcodes == NULL || change == NULL) {
-		return false;
-	}
-	key = (zend_ulong) (uintptr_t) op_array->opcodes;
-	indexed = zend_hash_index_find_ptr(index, key);
-	change->key = key;
-	change->previous = indexed;
-	change->changed = false;
+	/* The publication log holds ready user functions. */
+	ZEND_ASSERT(op_array != NULL && op_array->opcodes != NULL);
+	entry = zend_hash_index_lookup(
+		index, (zend_ulong) (uintptr_t) op_array->opcodes);
+	indexed = Z_TYPE_P(entry) == IS_PTR ? Z_PTR_P(entry) : NULL;
 	if (indexed != NULL && indexed != generation
 			&& !indexed->persistent && !generation->persistent
 			&& indexed->request_rank > generation->request_rank) {
-		return true;
+		return;
 	}
-	if (indexed == generation) {
-		return true;
-	}
-	if (zend_hash_index_update_ptr(index, key, generation) == NULL) {
-		return false;
-	}
-	change->changed = true;
-	return true;
-}
-
-static void zend_native_executor_rollback_index_changes(
-	HashTable *index, zend_native_executor_index_change *changes,
-	uint32_t change_count)
-{
-	while (change_count != 0) {
-		zend_native_executor_index_change *change =
-			&changes[--change_count];
-
-		if (!change->changed) {
-			continue;
-		}
-		if (change->previous != NULL) {
-			(void) zend_hash_index_update_ptr(
-				index, change->key, change->previous);
-		} else {
-			zend_hash_index_del(index, change->key);
-		}
-	}
+	ZVAL_PTR(entry, generation);
 }
 
 static bool zend_native_executor_sync_ready_functions(
@@ -697,7 +702,6 @@ static bool zend_native_executor_sync_ready_functions(
 	uint32_t *publication_cursor)
 {
 	zend_op_array **op_arrays = NULL;
-	zend_native_executor_index_change *changes = NULL;
 	uint32_t capacity = 0;
 	uint32_t required_count = 0;
 	uint32_t next_index = 0;
@@ -725,23 +729,10 @@ static bool zend_native_executor_sync_ready_functions(
 			op_arrays, required_count, sizeof(*op_arrays), 0);
 		capacity = required_count;
 	} while (true);
-	if (required_count != 0) {
-		changes = safe_emalloc(required_count, sizeof(*changes), 0);
-	}
 	for (op_array_index = 0; op_array_index < required_count;
 			op_array_index++) {
-		if (!zend_native_executor_index_ready_op_array(
-				index, generation, op_arrays[op_array_index],
-				&changes[op_array_index])) {
-			zend_native_executor_rollback_index_changes(
-				index, changes, op_array_index);
-			efree(changes);
-			efree(op_arrays);
-			return false;
-		}
-	}
-	if (changes != NULL) {
-		efree(changes);
+		zend_native_executor_index_ready_op_array(
+			index, generation, op_arrays[op_array_index]);
 	}
 	if (op_arrays != NULL) {
 		efree(op_arrays);
@@ -775,9 +766,7 @@ static bool zend_native_executor_index_request_generation(
 	}
 	key = (zend_ulong) (uintptr_t) generation->root;
 	previous = zend_hash_index_find_ptr(root_index, key);
-	if (zend_hash_index_update_ptr(root_index, key, generation) == NULL) {
-		return false;
-	}
+	zend_hash_index_update_ptr(root_index, key, generation);
 	if (zend_native_executor_sync_request_generation(generation)) {
 		return true;
 	}
@@ -851,7 +840,19 @@ static zend_class_entry *zend_native_executor_bindable_class(
 	return (cached->ce_flags & ZEND_ACC_LINKED) != 0 ? cached : NULL;
 }
 
-static bool zend_native_executor_build_owner_script(
+/* A key of a persistent table: the owner's permanent interned names live as
+ * long as the generation, which references the owner's functions anyway. */
+static zend_always_inline zend_string *zend_native_executor_owner_key(
+	zend_string *name, bool persistent)
+{
+	return persistent && (!ZSTR_IS_INTERNED(name)
+			|| (GC_FLAGS(name) & IS_STR_PERMANENT) == 0)
+		? zend_string_init(ZSTR_VAL(name), ZSTR_LEN(name), true)
+		: name;
+}
+
+/* The tables are new and the source tables' keys unique. */
+static void zend_native_executor_build_owner_script(
 	zend_native_executor_generation *generation,
 	zend_op_array *root, const zend_script *owner, bool persistent)
 {
@@ -863,9 +864,6 @@ static bool zend_native_executor_build_owner_script(
 	zend_function *function;
 	zend_class_entry *class_entry;
 
-	if (generation == NULL || root == NULL) {
-		return false;
-	}
 	memset(&generation->script, 0, sizeof(generation->script));
 	generation->script.main_op_array =
 		owner != NULL ? owner->main_op_array : *root;
@@ -878,7 +876,7 @@ static bool zend_native_executor_build_owner_script(
 
 	ZEND_HASH_FOREACH_STR_KEY_PTR(
 			function_table, name, function) {
-		zend_string *persistent_name;
+		zend_string *key;
 		zend_function *runtime_function;
 
 		if (name == NULL || function == NULL
@@ -892,20 +890,17 @@ static bool zend_native_executor_build_owner_script(
 					== function->op_array.opcodes) {
 			function = runtime_function;
 		}
-		persistent_name = zend_string_init(
-			ZSTR_VAL(name), ZSTR_LEN(name), persistent);
-		if (zend_hash_add_ptr(
-				&generation->script.function_table,
-				persistent_name, function) == NULL) {
-			zend_string_release_ex(persistent_name, persistent);
-			goto failure;
+		key = zend_native_executor_owner_key(name, persistent);
+		zend_hash_add_new_ptr(
+			&generation->script.function_table, key, function);
+		if (key != name) {
+			zend_string_release_ex(key, true);
 		}
-		zend_string_release_ex(persistent_name, persistent);
 	} ZEND_HASH_FOREACH_END();
 
 	ZEND_HASH_FOREACH_STR_KEY_PTR(
 			class_table, name, class_entry) {
-		zend_string *persistent_name;
+		zend_string *key;
 		zend_class_entry *runtime_class;
 
 		if (name == NULL || class_entry == NULL
@@ -923,23 +918,14 @@ static bool zend_native_executor_build_owner_script(
 				&& runtime_class->type == ZEND_USER_CLASS) {
 			class_entry = runtime_class;
 		}
-		persistent_name = zend_string_init(
-			ZSTR_VAL(name), ZSTR_LEN(name), persistent);
-		if (zend_hash_add_ptr(
-				&generation->script.class_table,
-				persistent_name, class_entry) == NULL) {
-			zend_string_release_ex(persistent_name, persistent);
-			goto failure;
+		key = zend_native_executor_owner_key(name, persistent);
+		zend_hash_add_new_ptr(
+			&generation->script.class_table, key, class_entry);
+		if (key != name) {
+			zend_string_release_ex(key, true);
 		}
-		zend_string_release_ex(persistent_name, persistent);
 	} ZEND_HASH_FOREACH_END();
 	generation->owns_script_tables = true;
-	return true;
-
-failure:
-	zend_hash_destroy(&generation->script.class_table);
-	zend_hash_destroy(&generation->script.function_table);
-	return false;
 }
 
 static bool zend_native_executor_index_op_array_locked(
@@ -947,7 +933,6 @@ static bool zend_native_executor_index_op_array_locked(
 	zend_op_array *op_array, uint32_t depth)
 {
 	zend_native_executor_generation_key key;
-	zend_native_executor_generation *indexed;
 	uint32_t index;
 
 	if (generation == NULL || op_array == NULL || depth > 64) {
@@ -956,17 +941,9 @@ static bool zend_native_executor_index_op_array_locked(
 	if (op_array->opcodes != NULL) {
 		key = zend_native_executor_generation_key_make(
 			generation->epoch, op_array->opcodes);
-		indexed = zend_hash_str_find_ptr(
-			&zend_native_executor_generations_by_opcodes,
-			(const char *) &key, sizeof(key));
-		if (indexed != NULL && indexed != generation) {
-			return false;
-		}
-		if (indexed == NULL
-				&& zend_hash_str_add_ptr(
-					&zend_native_executor_generations_by_opcodes,
-					(const char *) &key, sizeof(key),
-					generation) == NULL) {
+		if (!zend_native_executor_str_add_value(
+				&zend_native_executor_generations_by_opcodes,
+				&key, sizeof(key), generation)) {
 			return false;
 		}
 	}
@@ -1033,17 +1010,20 @@ static void zend_native_executor_unindex_op_array_locked(
 		return;
 	}
 	if (op_array->opcodes != NULL) {
+		zval *entry;
+
 		key = zend_native_executor_generation_key_make(
 			generation->epoch, op_array->opcodes);
-		if (zend_hash_str_find_ptr(
-				&zend_native_executor_generations_by_opcodes,
-				(const char *) &key, sizeof(key)) == generation) {
+		entry = zend_hash_str_find(
+			&zend_native_executor_generations_by_opcodes,
+			(const char *) &key, sizeof(key));
+		if (entry != NULL && Z_PTR_P(entry) == generation) {
 			const uint32_t slot =
 				zend_native_executor_opcodes_slot(op_array->opcodes);
 
-			zend_hash_str_del(
+			zend_hash_del_bucket(
 				&zend_native_executor_generations_by_opcodes,
-				(const char *) &key, sizeof(key));
+				(Bucket *) entry);
 			if (zend_native_executor_opcodes_cache[slot].generation
 					== generation) {
 				memset(&zend_native_executor_opcodes_cache[slot], 0,
@@ -1112,13 +1092,9 @@ static void zend_native_executor_unregister_generation_locked(
 	if (generation->owner != NULL) {
 		key = zend_native_executor_generation_key_make(
 			generation->epoch, generation->owner);
-		if (zend_hash_str_find_ptr(
-				&zend_native_executor_generations_by_owner,
-				(const char *) &key, sizeof(key)) == generation) {
-			zend_hash_str_del(
-				&zend_native_executor_generations_by_owner,
-				(const char *) &key, sizeof(key));
-		}
+		zend_native_executor_str_del_value(
+			&zend_native_executor_generations_by_owner,
+			&key, sizeof(key), generation);
 	}
 	zend_native_executor_unindex_op_array_locked(
 		generation, &generation->script.main_op_array, 0);
@@ -1140,7 +1116,6 @@ static bool zend_native_executor_register_generation_locked(
 	zend_native_executor_generation *generation)
 {
 	zend_native_executor_generation_key key;
-	zend_native_executor_generation *indexed;
 	zend_function *function;
 	zend_class_entry *class_entry;
 
@@ -1151,15 +1126,9 @@ static bool zend_native_executor_register_generation_locked(
 	}
 	key = zend_native_executor_generation_key_make(
 		generation->epoch, generation->owner);
-	indexed = zend_hash_str_find_ptr(
-		&zend_native_executor_generations_by_owner,
-		(const char *) &key, sizeof(key));
-	if ((indexed != NULL && indexed != generation)
-			|| (indexed == NULL
-				&& zend_hash_str_add_ptr(
-					&zend_native_executor_generations_by_owner,
-					(const char *) &key, sizeof(key),
-					generation) == NULL)
+	if (!zend_native_executor_str_add_value(
+				&zend_native_executor_generations_by_owner,
+				&key, sizeof(key), generation)
 			|| !zend_native_executor_index_op_array_locked(
 				generation, &generation->script.main_op_array, 0)) {
 		goto failure;
@@ -1228,6 +1197,7 @@ static void zend_native_executor_bind_dispatch(
 	zend_native_executor_dispatch *dispatch;
 	zend_native_executor_dispatch_key key;
 	void **slot;
+	zval *entry;
 
 	if (generation == NULL || op_array == NULL || entry_cell == NULL) {
 		return;
@@ -1250,17 +1220,16 @@ static void zend_native_executor_bind_dispatch(
 		ZEND_ASSERT(slot != NULL);
 		key = zend_native_executor_dispatch_key_make(op_array);
 		zend_native_executor_generation_lock();
-		dispatch = zend_hash_str_find_ptr(
+		entry = zend_hash_str_lookup(
 			&zend_native_executor_persistent_dispatches,
 			(const char *) &key, sizeof(key));
+		dispatch = Z_TYPE_P(entry) == IS_PTR ? Z_PTR_P(entry) : NULL;
 		if (dispatch == NULL) {
 			const uint32_t cached = zend_native_executor_dispatch_cache_slot(
 				op_array->opcodes);
 
 			dispatch = pecalloc(1, sizeof(*dispatch), true);
-			zend_hash_str_add_ptr(
-				&zend_native_executor_persistent_dispatches,
-				(const char *) &key, sizeof(key), dispatch);
+			ZVAL_PTR(entry, dispatch);
 			zend_native_executor_dispatch_cache[cached].opcodes =
 				op_array->opcodes;
 			zend_native_executor_dispatch_cache[cached].dispatch = dispatch;
@@ -1310,7 +1279,6 @@ static void zend_native_executor_release_completed_main_generation(
 {
 	zend_native_executor_generation **link;
 	zend_op_array **published_op_arrays = NULL;
-	zend_native_executor_generation *indexed;
 	zend_native_executor_dispatch *dispatch;
 	uint32_t published_capacity = 0;
 	uint32_t published_count = 0;
@@ -1342,29 +1310,18 @@ static void zend_native_executor_release_completed_main_generation(
 			sizeof(*published_op_arrays), 0);
 		published_capacity = published_count;
 	} while (true);
-	indexed = zend_hash_index_find_ptr(
+	zend_native_executor_index_del_value(
 		&zend_native_executor_request_state.request_generations_by_root,
-		(zend_ulong) (uintptr_t) op_array);
-	if (indexed == generation) {
-		zend_hash_index_del(
-			&zend_native_executor_request_state.request_generations_by_root,
-			(zend_ulong) (uintptr_t) op_array);
-	}
+		(zend_ulong) (uintptr_t) op_array, generation);
 	for (index = 0; index < published_count; index++) {
 		zend_op_array *published = published_op_arrays[index];
 
 		if (published == NULL || published->opcodes == NULL) {
 			continue;
 		}
-		indexed = zend_hash_index_find_ptr(
+		zend_native_executor_index_del_value(
 			&zend_native_executor_request_state.request_generations_by_opcodes,
-			(zend_ulong) (uintptr_t) published->opcodes);
-		if (indexed == generation) {
-			zend_hash_index_del(
-				&zend_native_executor_request_state
-					.request_generations_by_opcodes,
-				(zend_ulong) (uintptr_t) published->opcodes);
-		}
+			(zend_ulong) (uintptr_t) published->opcodes, generation);
 		dispatch = zend_hash_index_find_ptr(
 			&zend_native_executor_request_state.dispatch,
 			(zend_ulong) (uintptr_t) published);
@@ -1757,13 +1714,8 @@ zend_native_executor_create_owned_generation(
 		: __atomic_load_n(
 			&zend_native_executor_epoch, __ATOMIC_ACQUIRE);
 	if (persistent || bundle != NULL) {
-		if (!zend_native_executor_build_owner_script(
-				generation, root, owner, persistent)) {
-			pefree(generation, persistent);
-			zend_throw_error(NULL,
-				"Native script registry allocation failed");
-			return NULL;
-		}
+		zend_native_executor_build_owner_script(
+			generation, root, owner, persistent);
 	} else {
 		generation->script.main_op_array = *root;
 		generation->script.function_table = *EG(function_table);
@@ -3197,12 +3149,9 @@ static bool zend_native_executor_register_preloaded_op_array(
 			|| depth > 64) {
 		return false;
 	}
-	if (op_array->opcodes != NULL
-			&& zend_hash_index_update_ptr(
-				owners,
-				(zend_ulong) (uintptr_t) op_array->opcodes,
-				(void *) script) == NULL) {
-		return false;
+	if (op_array->opcodes != NULL) {
+		zend_hash_index_update_ptr(owners,
+			(zend_ulong) (uintptr_t) op_array->opcodes, (void *) script);
 	}
 	for (index = 0; index < op_array->num_dynamic_func_defs; index++) {
 		if (!zend_native_executor_register_preloaded_op_array(
@@ -3334,13 +3283,13 @@ zend_result zend_native_executor_register_script_owner(
 	}
 	if (op_array == NULL || script == NULL
 			|| op_array->opcodes == NULL
-			|| !zend_native_executor_request_state.dispatch_active
-			|| (op_array->filename != NULL
-				&& zend_hash_index_update_ptr(
-					&zend_native_executor_request_state.owners_by_file,
-					(zend_ulong) (uintptr_t) op_array->filename,
-					(void *) script) == NULL)) {
+			|| !zend_native_executor_request_state.dispatch_active) {
 		return FAILURE;
+	}
+	if (op_array->filename != NULL) {
+		zend_hash_index_update_ptr(
+			&zend_native_executor_request_state.owners_by_file,
+			(zend_ulong) (uintptr_t) op_array->filename, (void *) script);
 	}
 	/* An include from running code finds its code itself
 	 * (zend_native_executor_resolve_cached_include()): the dispatch below
