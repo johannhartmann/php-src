@@ -150,6 +150,10 @@ bool zend_mir_straight_line_track_value(
 bool zend_mir_straight_line_value_at(
 	const zend_mir_straight_line_lifetime *lifetime,
 	zend_mir_value_id value_id, zend_mir_straight_line_value *out);
+/* Entry slots are sorted by kind and index; NULL when the slot is absent. */
+zend_mir_straight_line_slot *zend_mir_straight_line_find_slot(
+	const zend_mir_straight_line_entry *entry,
+	zend_mir_frame_slot_kind kind, uint32_t index);
 
 zend_mir_lowering_status zend_mir_lower_copy_move(
 	zend_mir_lowering_context *context,

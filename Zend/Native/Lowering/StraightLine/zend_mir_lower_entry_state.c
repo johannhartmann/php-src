@@ -51,7 +51,7 @@ bool zend_mir_straight_line_emit_source_position(
 			mutator->context, &source, source_id_out);
 }
 
-static zend_mir_straight_line_value *zend_mir_straight_line_find_value(
+zend_mir_straight_line_value *zend_mir_straight_line_find_value(
 	zend_mir_straight_line_lifetime *lifetime, zend_mir_value_id value_id)
 {
 	uint32_t index;
@@ -85,6 +85,28 @@ static zend_mir_straight_line_value *zend_mir_straight_line_find_value(
 		}
 	}
 	return NULL;
+}
+
+zend_mir_straight_line_slot *zend_mir_straight_line_find_slot(
+	const zend_mir_straight_line_entry *entry,
+	zend_mir_frame_slot_kind kind, uint32_t index)
+{
+	uint32_t left = 0;
+	uint32_t right = entry->slot_count;
+
+	while (left < right) {
+		const uint32_t middle = left + (right - left) / 2;
+		const zend_mir_straight_line_slot *slot = &entry->slots[middle];
+
+		if (slot->kind < kind || (slot->kind == kind && slot->index < index)) {
+			left = middle + 1;
+		} else {
+			right = middle;
+		}
+	}
+	return left < entry->slot_count && entry->slots[left].kind == kind
+			&& entry->slots[left].index == index
+		? &entry->slots[left] : NULL;
 }
 
 bool zend_mir_straight_line_value_contract_is_valid(

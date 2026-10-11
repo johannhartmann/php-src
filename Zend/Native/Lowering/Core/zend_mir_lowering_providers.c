@@ -3695,8 +3695,8 @@ static bool zend_mir_resolve_operand(
 	zend_mir_value_id *value_id_out)
 {
 	const zend_mir_integration *integration = context;
+	const zend_mir_straight_line_slot *slot;
 	zend_mir_frame_slot_kind slot_kind;
-	uint32_t index;
 
 	if (integration == NULL || operand == NULL || value_id_out == NULL) {
 		return false;
@@ -3723,18 +3723,14 @@ static bool zend_mir_resolve_operand(
 				default:
 					return false;
 			}
-			for (index = 0; index < integration->entry.slot_count; index++) {
-				const zend_mir_straight_line_slot *slot =
-					&integration->entry.slots[index];
-
-				if (slot->kind == slot_kind
-						&& slot->index == operand->index
-						&& slot->materialization
-							== ZEND_MIR_MATERIALIZATION_MATERIALIZED
-						&& zend_mir_id_is_valid(slot->value_id)) {
-					*value_id_out = slot->value_id;
-					return true;
-				}
+			slot = zend_mir_straight_line_find_slot(
+				&integration->entry, slot_kind, operand->index);
+			if (slot != NULL
+					&& slot->materialization
+						== ZEND_MIR_MATERIALIZATION_MATERIALIZED
+					&& zend_mir_id_is_valid(slot->value_id)) {
+				*value_id_out = slot->value_id;
+				return true;
 			}
 			return false;
 		default:

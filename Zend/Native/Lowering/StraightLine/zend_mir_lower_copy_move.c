@@ -12,19 +12,6 @@
 
 #include "zend_mir_straight_line_internal.h"
 
-static zend_mir_straight_line_value *zend_mir_straight_line_mutable_value(
-	zend_mir_straight_line_lifetime *lifetime, zend_mir_value_id value_id)
-{
-	uint32_t index;
-
-	for (index = 0; index < lifetime->count; index++) {
-		if (lifetime->values[index].value_id == value_id) {
-			return &lifetime->values[index];
-		}
-	}
-	return NULL;
-}
-
 static bool zend_mir_straight_line_resolve_operand(
 	const zend_mir_straight_line_entry *entry,
 	const zend_mir_source_operand_ref *operand,
@@ -85,7 +72,6 @@ static zend_mir_straight_line_slot *zend_mir_straight_line_destination_slot(
 	const zend_mir_source_operand_ref *destination)
 {
 	zend_mir_frame_slot_kind kind;
-	uint32_t index;
 
 	if (destination->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 			&& destination->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
@@ -104,13 +90,7 @@ static zend_mir_straight_line_slot *zend_mir_straight_line_destination_slot(
 		default:
 			return NULL;
 	}
-	for (index = 0; index < entry->slot_count; index++) {
-		if (entry->slots[index].kind == kind
-				&& entry->slots[index].index == destination->index) {
-			return &entry->slots[index];
-		}
-	}
-	return NULL;
+	return zend_mir_straight_line_find_slot(entry, kind, destination->index);
 }
 
 static void zend_mir_straight_line_move_slots(
@@ -238,7 +218,7 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 	} else {
 		later_use = true;
 	}
-	source = zend_mir_straight_line_mutable_value(
+	source = zend_mir_straight_line_find_value(
 		provider_context->lifetime, source_id);
 	if (!zend_mir_straight_line_value_contract_is_valid(source)) {
 		if (diagnostic_out != NULL) {
@@ -268,7 +248,7 @@ zend_mir_lowering_status zend_mir_lower_copy_move(
 	result.value_id = result_id;
 	result.ownership = transition.has_result
 		? transition.result_state : transition.source_after;
-	if (zend_mir_straight_line_mutable_value(
+	if (zend_mir_straight_line_find_value(
 			provider_context->lifetime, result_id) != NULL
 			|| provider_context->lifetime->count
 				>= provider_context->lifetime->capacity

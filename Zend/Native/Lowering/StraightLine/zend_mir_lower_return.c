@@ -393,12 +393,8 @@ zend_mir_lowering_status zend_mir_lower_free(
 		}
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	for (index = 0; index < provider_context->lifetime->count; index++) {
-		if (provider_context->lifetime->values[index].value_id == value_id) {
-			tracked = &provider_context->lifetime->values[index];
-			break;
-		}
-	}
+	tracked = zend_mir_straight_line_find_value(
+		provider_context->lifetime, value_id);
 	if (tracked == NULL) {
 		return ZEND_MIR_LOWERING_REJECTED;
 	}

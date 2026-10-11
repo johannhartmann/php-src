@@ -13,6 +13,8 @@
 
 bool zend_mir_straight_line_value_contract_is_valid(
 	const zend_mir_straight_line_value *value);
+zend_mir_straight_line_value *zend_mir_straight_line_find_value(
+	zend_mir_straight_line_lifetime *lifetime, zend_mir_value_id value_id);
 void zend_mir_straight_line_restore_entry_state(
 	zend_mir_straight_line_lifetime *lifetime, bool entry_emitted,
 	zend_mir_frame_state_id entry_frame_state_id);
