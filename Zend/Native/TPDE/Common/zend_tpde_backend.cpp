@@ -5675,9 +5675,13 @@ bool freeze_statepoint_materializations(
 		 * each frame state. Runtime helpers still read explicit operands from
 		 * the Zend frame, so publish authoritative inputs at that boundary.
 		 * This also covers private typed-call results without a persistent MIR
-		 * result identity.
+		 * result identity. RETURN_BY_REF always returns through its helper,
+		 * which reads the operand's slot.
 		 */
-		if (instruction.runtime_helper != ZEND_NATIVE_HELPER_COUNT
+		if ((instruction.runtime_helper != ZEND_NATIVE_HELPER_COUNT
+					|| (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+						&& instruction.value_operation.source_opcode
+							== ZEND_RETURN_BY_REF))
 				&& instruction.has_value_operation) {
 			const struct {
 				zend_tpde_source_value_binding binding;
