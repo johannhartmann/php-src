@@ -28,6 +28,8 @@ void zend_native_dynamic_compiler_init(
 {
 	ZEND_ASSERT(compiler != NULL);
 	memset(compiler, 0, sizeof(*compiler));
+	zend_hash_init(&compiler->completed_include_once_sites, 8, NULL, NULL,
+		false);
 }
 
 void zend_native_dynamic_compiler_bind_product(
@@ -36,7 +38,6 @@ void zend_native_dynamic_compiler_bind_product(
 {
 	ZEND_ASSERT(compiler != NULL);
 	ZEND_ASSERT(compiler->owned_op_array_count == 0);
-	ZEND_ASSERT(compiler->entry_count == 0);
 	compiler->product_compiler = product_compiler;
 }
 
@@ -56,8 +57,7 @@ void zend_native_dynamic_compiler_destroy(
 		efree_size(op_array, sizeof(zend_op_array));
 	}
 	efree(compiler->owned_op_arrays);
-	efree(compiler->entries);
-	efree(compiler->completed_include_once_sites);
+	zend_hash_destroy(&compiler->completed_include_once_sites);
 	memset(compiler, 0, sizeof(*compiler));
 }
 
@@ -69,57 +69,6 @@ void zend_native_dynamic_compiler_activate(
 	ZEND_ASSERT(compiler->previous_active == NULL);
 	compiler->previous_active = zend_native_active_dynamic_compiler;
 	zend_native_active_dynamic_compiler = compiler;
-}
-
-zend_native_entry_cell *zend_native_dynamic_compiler_lookup(
-	const zend_native_dynamic_compiler *compiler,
-	const zend_op_array *op_array)
-{
-	uint32_t index;
-
-	if (compiler == NULL || op_array == NULL) {
-		return NULL;
-	}
-	/* Code created last is looked up first. */
-	for (index = compiler->entry_count; index-- > 0;) {
-		if (compiler->entries[index].op_array == op_array) {
-			return compiler->entries[index].entry_cell;
-		}
-	}
-	return NULL;
-}
-
-zend_result zend_native_dynamic_compiler_publish(
-	zend_native_dynamic_compiler *compiler,
-	zend_op_array *op_array,
-	zend_native_entry_cell *entry_cell)
-{
-	uint32_t old_capacity;
-	uint32_t new_capacity;
-
-	if (compiler == NULL || op_array == NULL || entry_cell == NULL
-			|| entry_cell->state != ZEND_NATIVE_ENTRY_READY
-			|| entry_cell->code == NULL) {
-		return FAILURE;
-	}
-	/* The op_array was created and adopted for this publication. */
-	ZEND_ASSERT(zend_native_dynamic_compiler_lookup(compiler, op_array)
-		== NULL);
-	if (compiler->entry_count == compiler->entry_capacity) {
-		old_capacity = compiler->entry_capacity;
-		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
-		if (new_capacity <= old_capacity) {
-			return FAILURE;
-		}
-		compiler->entries = safe_erealloc(
-			compiler->entries, new_capacity,
-			sizeof(*compiler->entries), 0);
-		compiler->entry_capacity = new_capacity;
-	}
-	compiler->entries[compiler->entry_count].op_array = op_array;
-	compiler->entries[compiler->entry_count].entry_cell = entry_cell;
-	compiler->entry_count++;
-	return SUCCESS;
 }
 
 static bool zend_native_dynamic_compiler_adopt(
@@ -144,53 +93,48 @@ static bool zend_native_dynamic_compiler_adopt(
 	return true;
 }
 
+/* Every op array adopted after this one was retired again: nothing compiled
+ * or published since can still reach it. */
 static bool zend_native_dynamic_compiler_can_retire_last(
 	const zend_native_dynamic_compiler *compiler,
-	const zend_op_array *op_array, const zend_native_entry_cell *entry_cell)
+	const zend_op_array *op_array)
 {
-	const zend_native_dynamic_entry *entry;
-
-	if (compiler == NULL || op_array == NULL || entry_cell == NULL
-			|| compiler->owned_op_array_count == 0
-			|| compiler->entry_count == 0
-			|| compiler->owned_op_arrays[
-				compiler->owned_op_array_count - 1] != op_array) {
-		return false;
-	}
-	entry = &compiler->entries[compiler->entry_count - 1];
-	return entry->op_array == op_array && entry->entry_cell == entry_cell;
+	return compiler->owned_op_array_count != 0
+		&& compiler->owned_op_arrays[
+			compiler->owned_op_array_count - 1] == op_array;
 }
 
 static void zend_native_dynamic_compiler_retire_last(
 	zend_native_dynamic_compiler *compiler, zend_op_array *op_array)
 {
-	ZEND_ASSERT(compiler != NULL);
-	ZEND_ASSERT(compiler->owned_op_array_count != 0);
-	ZEND_ASSERT(compiler->entry_count != 0);
-	ZEND_ASSERT(compiler->owned_op_arrays[
-		compiler->owned_op_array_count - 1] == op_array);
-	ZEND_ASSERT(compiler->entries[compiler->entry_count - 1].op_array
-		== op_array);
-	compiler->entry_count--;
+	ZEND_ASSERT(zend_native_dynamic_compiler_can_retire_last(
+		compiler, op_array));
 	compiler->owned_op_array_count--;
 	zend_destroy_static_vars(op_array);
 	destroy_op_array(op_array);
 	efree_size(op_array, sizeof(zend_op_array));
 }
 
+/*
+ * An include_once site with a literal absolute path and an unused result
+ * whose file this request already included: the site is a no-op for the
+ * rest of the request, as EG(included_files) only grows and the path does
+ * not depend on the working directory or include_path.
+ */
+static zend_always_inline zend_ulong zend_native_include_once_site_key(
+	const zend_op *source_opline)
+{
+	/* Oplines do not overlap; dropping the alignment bits spreads the keys
+	 * over the hash buckets. */
+	return (zend_ulong) ((uintptr_t) source_opline / sizeof(zend_op));
+}
+
 static bool zend_native_include_once_site_completed(
 	const zend_native_dynamic_compiler *compiler,
 	const zend_op *source_opline)
 {
-	uint32_t index;
-
-	for (index = compiler->completed_include_once_site_count;
-			index-- > 0;) {
-		if (compiler->completed_include_once_sites[index] == source_opline) {
-			return true;
-		}
-	}
-	return false;
+	return zend_hash_index_exists(&compiler->completed_include_once_sites,
+		zend_native_include_once_site_key(source_opline));
 }
 
 zend_native_status zend_native_execute_const_include_once(
@@ -226,26 +170,9 @@ zend_native_status zend_native_execute_const_include_once(
 static void zend_native_complete_include_once_site(
 	zend_native_dynamic_compiler *compiler, const zend_op *source_opline)
 {
-	uint32_t old_capacity;
-	uint32_t new_capacity;
-
-	if (zend_native_include_once_site_completed(compiler, source_opline)) {
-		return;
-	}
-	if (compiler->completed_include_once_site_count
-			== compiler->completed_include_once_site_capacity) {
-		old_capacity = compiler->completed_include_once_site_capacity;
-		new_capacity = old_capacity < 8 ? 8 : old_capacity * 2;
-		if (new_capacity <= old_capacity) {
-			return;
-		}
-		compiler->completed_include_once_sites = safe_erealloc(
-			compiler->completed_include_once_sites, new_capacity,
-			sizeof(*compiler->completed_include_once_sites), 0);
-		compiler->completed_include_once_site_capacity = new_capacity;
-	}
-	compiler->completed_include_once_sites[
-		compiler->completed_include_once_site_count++] = source_opline;
+	(void) zend_hash_index_add_empty_element(
+		&compiler->completed_include_once_sites,
+		zend_native_include_once_site_key(source_opline));
 }
 
 void zend_native_dynamic_compiler_deactivate(
@@ -327,6 +254,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	const zend_native_code *code;
 	zval *filename;
 	zval *result = NULL;
+	zend_string *resolved_path = NULL;
 	zend_native_status status;
 	zend_native_diagnostic diagnostic;
 	zend_native_compile_diagnostic compile_diagnostic;
@@ -350,13 +278,6 @@ zend_native_status zend_native_execute_include_or_eval(
 	source_opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
 	execute_data->opline = source_opline;
-	if ((extended_value == ZEND_INCLUDE_ONCE
-			|| extended_value == ZEND_REQUIRE_ONCE)
-			&& ZEND_NATIVE_OPERAND_TYPE(encoded_result) == IS_UNUSED
-			&& zend_native_include_once_site_completed(
-				compiler, source_opline)) {
-		return ZEND_NATIVE_RETURNED;
-	}
 	if (!zend_native_dynamic_decode_operand(
 				execute_data, encoded_op1, &op1_type, &op1)
 			|| !zend_native_dynamic_decode_operand(
@@ -386,9 +307,10 @@ zend_native_status zend_native_execute_include_or_eval(
 		result = ZEND_CALL_VAR(execute_data, result_operand.var);
 	}
 	/*
-	 * Avoid re-entering zend_include_or_eval(), including its bailout-state
-	 * allocation, after an absolute include_once operand has been resolved and
-	 * included.  A miss retains the complete semantic path.
+	 * A literal absolute include_once path resolves the same way at every
+	 * execution: resolve it once here, finish an already included file
+	 * without zend_include_or_eval(), and hand the resolved path of a new
+	 * one to the compile. A site with an unused result is then complete.
 	 */
 	if (op1_type == IS_CONST
 			&& (extended_value == ZEND_INCLUDE_ONCE
@@ -396,29 +318,34 @@ zend_native_status zend_native_execute_include_or_eval(
 			&& Z_TYPE_P(filename) == IS_STRING
 			&& IS_ABSOLUTE_PATH(
 				Z_STRVAL_P(filename), Z_STRLEN_P(filename))) {
-		zend_string *resolved_path = zend_resolve_path(Z_STR_P(filename));
-
-		if (resolved_path != NULL) {
-			bool already_included = zend_hash_exists(
-				&EG(included_files), resolved_path);
-
-			zend_string_release(resolved_path);
-			if (already_included) {
+		resolved_path = zend_resolve_path(Z_STR_P(filename));
+		if (resolved_path == NULL && EG(exception) != NULL) {
+			if (result != NULL) {
+				ZVAL_UNDEF(result);
+			}
+			return ZEND_NATIVE_EXCEPTION;
+		}
+		if (resolved_path != NULL
+				&& zend_hash_exists(&EG(included_files), resolved_path)) {
+			zend_string_release_ex(resolved_path, false);
+			if (result_type == IS_UNUSED) {
 				zend_native_complete_include_once_site(
 					compiler, source_opline);
-				if (result != NULL) {
-					ZVAL_TRUE(result);
-				}
-				return ZEND_NATIVE_RETURNED;
+			} else {
+				ZVAL_TRUE(result);
 			}
+			return ZEND_NATIVE_RETURNED;
 		}
 	}
 #ifdef ZEND_CHECK_STACK_LIMIT
-	/* Zend parses and compiles the include before the TPDE compile checked
-	 * below; its parser and AST compiler are deeply recursive too, so keep the
-	 * same reserve for them. */
+	/* Zend parses and compiles the include before TPDE compiles it; its
+	 * parser and AST compiler are deeply recursive too, and TPDE consumes
+	 * far more C stack than a VM opcode. Keep the reserve for both. */
 	if ((uintptr_t) zend_call_stack_position()
 			<= (uintptr_t) EG(stack_limit) + ZEND_NATIVE_INCLUDE_STACK_RESERVE) {
+		if (resolved_path != NULL) {
+			zend_string_release_ex(resolved_path, false);
+		}
 		zend_native_dynamic_free_operand(execute_data, op1_type, op1);
 		zend_call_stack_size_error();
 		if (result_type != IS_UNUSED) {
@@ -429,7 +356,10 @@ zend_native_status zend_native_execute_include_or_eval(
 #endif
 	first_function_bucket = EG(function_table)->nNumUsed;
 	first_class_bucket = EG(class_table)->nNumUsed;
-	new_op_array = zend_include_or_eval(filename, extended_value);
+	new_op_array = resolved_path != NULL
+		? zend_include_once_resolved(
+			Z_STR_P(filename), resolved_path, (int) extended_value)
+		: zend_include_or_eval(filename, extended_value);
 	zend_native_dynamic_free_operand(execute_data, op1_type, op1);
 	if (EG(exception) != NULL) {
 		if (new_op_array != ZEND_NATIVE_FAKE_OP_ARRAY
@@ -443,9 +373,7 @@ zend_native_status zend_native_execute_include_or_eval(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (new_op_array == ZEND_NATIVE_FAKE_OP_ARRAY) {
-		if (op1_type == IS_CONST
-				&& (extended_value == ZEND_INCLUDE_ONCE
-					|| extended_value == ZEND_REQUIRE_ONCE)) {
+		if (resolved_path != NULL && result_type == IS_UNUSED) {
 			zend_native_complete_include_once_site(
 				compiler, source_opline);
 		}
@@ -499,16 +427,6 @@ zend_native_status zend_native_execute_include_or_eval(
 	ephemeral_codeunit = new_op_array->num_dynamic_func_defs == 0
 		&& first_function_bucket == EG(function_table)->nNumUsed
 		&& first_class_bucket == EG(class_table)->nNumUsed;
-#ifdef ZEND_CHECK_STACK_LIMIT
-	/* TPDE compilation consumes substantially more C stack than dispatching a
-	 * VM opcode. Preserve enough of Zend's reserved stack for the exception
-	 * path before recursively compiling an include from native code. */
-	if ((uintptr_t) zend_call_stack_position()
-			<= (uintptr_t) EG(stack_limit) + ZEND_NATIVE_INCLUDE_STACK_RESERVE) {
-		zend_call_stack_size_error();
-		entry_cell = NULL;
-	} else
-#endif
 	if (compiler->product_compiler != NULL
 			&& extended_value != ZEND_EVAL
 			&& ((entry_cell = zend_native_executor_resolve_cached_include(
@@ -544,9 +462,8 @@ zend_native_status zend_native_execute_include_or_eval(
 			(zend_function *) new_op_array);
 	}
 	if (entry_cell == NULL
-			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL
-			|| zend_native_dynamic_compiler_publish(
-				compiler, new_op_array, entry_cell) == FAILURE) {
+			|| entry_cell->state != ZEND_NATIVE_ENTRY_READY
+			|| (code = zend_native_entry_cell_load(entry_cell)) == NULL) {
 		if (component_compiler != NULL) {
 			zend_native_compiler_release_ready_transients(
 				component_compiler, first_compiled_function);
@@ -576,7 +493,7 @@ zend_native_status zend_native_execute_include_or_eval(
 	if (component_compiler != NULL) {
 		bool retired = ephemeral_codeunit
 			&& zend_native_dynamic_compiler_can_retire_last(
-				compiler, new_op_array, entry_cell)
+				compiler, new_op_array)
 			&& zend_native_compiler_retire_dynamic_component(
 				component_compiler, first_compiled_function,
 				new_op_array);
@@ -590,7 +507,7 @@ zend_native_status zend_native_execute_include_or_eval(
 		}
 	} else if (cached_include
 			&& zend_native_dynamic_compiler_can_retire_last(
-				compiler, new_op_array, entry_cell)) {
+				compiler, new_op_array)) {
 		/* The persistent generation keeps the code: as in the VM, the
 		 * include's op array goes when the include returns, while it is
 		 * still in the caches. */

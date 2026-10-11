@@ -555,6 +555,12 @@ ZEND_API zval *zend_get_zval_ptr(const zend_op *opline, int op_type, const znode
 ZEND_API void zend_clean_and_cache_symbol_table(zend_array *symbol_table);
 ZEND_API zend_op_array *ZEND_FASTCALL zend_include_or_eval(
 	const zval *inc_filename_zv, int type);
+#ifdef HAVE_NATIVE_ENGINE
+/* include_once or require_once of a path the caller resolved and did not
+ * find in EG(included_files); takes resolved_path. */
+ZEND_API zend_op_array *ZEND_FASTCALL zend_include_once_resolved(
+	zend_string *inc_filename, zend_string *resolved_path, int type);
+#endif
 ZEND_API void ZEND_FASTCALL zend_free_compiled_variables(zend_execute_data *execute_data);
 ZEND_API void zend_cleanup_unfinished_execution(zend_execute_data *execute_data, uint32_t op_num, uint32_t catch_op_num);
 ZEND_API ZEND_ATTRIBUTE_DEPRECATED HashTable *zend_unfinished_execution_gc(zend_execute_data *execute_data, zend_execute_data *call, zend_get_gc_buffer *gc_buffer);

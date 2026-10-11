@@ -6,14 +6,8 @@
 
 /*
  * The compiler takes ownership of each dynamic op_array before resolving it
- * through the active product reentry scope. A successful resolution is
- * atomically published in this request-local dynamic registry.
+ * through the active product reentry scope, in request-local creation order.
  */
-
-typedef struct _zend_native_dynamic_entry {
-	zend_op_array *op_array;
-	zend_native_entry_cell *entry_cell;
-} zend_native_dynamic_entry;
 
 typedef struct _zend_native_dynamic_compiler {
 	struct _zend_native_compiler *product_compiler;
@@ -21,12 +15,8 @@ typedef struct _zend_native_dynamic_compiler {
 	zend_op_array **owned_op_arrays;
 	uint32_t owned_op_array_count;
 	uint32_t owned_op_array_capacity;
-	zend_native_dynamic_entry *entries;
-	const zend_op **completed_include_once_sites;
-	uint32_t completed_include_once_site_count;
-	uint32_t completed_include_once_site_capacity;
-	uint32_t entry_count;
-	uint32_t entry_capacity;
+	/* Completed include_once sites, keyed by opline. */
+	HashTable completed_include_once_sites;
 } zend_native_dynamic_compiler;
 
 /*
@@ -46,13 +36,6 @@ ZEND_API void zend_native_dynamic_compiler_activate(
 	zend_native_dynamic_compiler *compiler);
 ZEND_API void zend_native_dynamic_compiler_deactivate(
 	zend_native_dynamic_compiler *compiler);
-ZEND_API zend_result zend_native_dynamic_compiler_publish(
-	zend_native_dynamic_compiler *compiler,
-	zend_op_array *op_array,
-	zend_native_entry_cell *entry_cell);
-ZEND_API zend_native_entry_cell *zend_native_dynamic_compiler_lookup(
-	const zend_native_dynamic_compiler *compiler,
-	const zend_op_array *op_array);
 
 ZEND_API zend_native_status zend_native_execute_include_or_eval(
 	zend_execute_data *execute_data,
