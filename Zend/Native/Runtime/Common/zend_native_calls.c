@@ -575,24 +575,7 @@ void zend_native_generator_cleanup_call_stack(
 	}
 }
 
-static zval *zend_native_frameless_slot(
-	zend_execute_data *execute_data, uint8_t type, znode_op operand)
-{
-	type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
-	if (type != IS_CV && type != IS_VAR && type != IS_TMP_VAR) {
-		return NULL;
-	}
-	return ZEND_CALL_VAR(execute_data, operand.var);
-}
-
-static bool zend_native_frameless_decode_operand(
-	zend_execute_data *execute_data, uint64_t encoded,
-	uint8_t *operand_type, znode_op *operand)
-{
-	return zend_native_decode_explicit_operand(
-		execute_data, encoded, operand_type, operand);
-}
-
+/* The frame slot of an explicit CV, VAR or TMP operand; NULL otherwise. */
 zval *zend_native_call_explicit_slot(
 	zend_execute_data *caller,
 	uint64_t encoded_operand,
@@ -601,16 +584,11 @@ zval *zend_native_call_explicit_slot(
 	znode_op operand;
 
 	if (operand_type == NULL
-			|| !zend_native_frameless_decode_operand(
-				caller, encoded_operand, operand_type, &operand)
-			|| (*operand_type != IS_UNUSED
-				&& *operand_type != IS_CV
-				&& *operand_type != IS_VAR
-				&& *operand_type != IS_TMP_VAR)) {
+			|| !zend_native_decode_explicit_operand(
+				caller, encoded_operand, operand_type, &operand)) {
 		return NULL;
 	}
-	return *operand_type == IS_UNUSED
-		? NULL : zend_native_frameless_slot(caller, *operand_type, operand);
+	return zend_native_operand_slot(caller, *operand_type, operand);
 }
 
 static zval *zend_native_frameless_argument(
@@ -622,23 +600,16 @@ static zval *zend_native_frameless_argument(
 		value = operand.constant < execute_data->func->op_array.last_literal
 			? &execute_data->func->op_array.literals[operand.constant] : NULL;
 	} else {
-		value = zend_native_frameless_slot(execute_data, type, operand);
+		value = zend_native_operand_slot(execute_data, type, operand);
 	}
 	if (value == NULL) {
 		return NULL;
 	}
 	if (type == IS_CV && UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		uint32_t variable_index = EX_VAR_TO_NUM(operand.var);
-
-		if (variable_index >= execute_data->func->op_array.last_var) {
-			return NULL;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(execute_data->func->op_array.vars[variable_index]));
+		value = zend_native_undefined_cv(execute_data, operand.var);
 		if (EG(exception) != NULL) {
 			return NULL;
 		}
-		value = &EG(uninitialized_zval);
 	}
 	if (Z_ISREF_P(value)) {
 		value = Z_REFVAL_P(value);
@@ -654,7 +625,7 @@ zval *zend_native_call_explicit_operand(
 	znode_op operand;
 
 	if (operand_type == NULL
-			|| !zend_native_frameless_decode_operand(
+			|| !zend_native_decode_explicit_operand(
 				caller, encoded_operand, operand_type, &operand)
 			|| *operand_type == IS_UNUSED) {
 		return NULL;
@@ -873,8 +844,8 @@ static void zend_native_frameless_consume(
 	if (type != IS_TMP_VAR && type != IS_VAR) {
 		return;
 	}
-	slot = zend_native_frameless_slot(execute_data, type, operand);
-	if (slot != NULL && !Z_ISUNDEF_P(slot)) {
+	slot = ZEND_CALL_VAR(execute_data, operand.var);
+	if (!Z_ISUNDEF_P(slot)) {
 		/* FREE_OP of a temporary argument. */
 		zval_ptr_dtor_nogc(slot);
 		ZVAL_UNDEF(slot);
@@ -1033,15 +1004,10 @@ zend_native_call_frameless_general(
 		if (((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_CV_SHIFT + index))
 					& 1)
 				&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-			uint32_t variable_index = (uint32_t)
-				(value - ZEND_CALL_VAR_NUM(execute_data, 0));
-
-			zend_error(E_WARNING, "Undefined variable $%s",
-				ZSTR_VAL(op_array->vars[variable_index]));
+			value = zend_native_undefined_cv(execute_data, offsets[index]);
 			if (EG(exception) != NULL) {
 				goto cleanup;
 			}
-			value = &EG(uninitialized_zval);
 		}
 		ZVAL_DEREF(value);
 		arguments[index] = value;
@@ -1113,15 +1079,11 @@ zend_native_call_frameless_address_general(
 		if (((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_CV_SHIFT + index))
 					& 1)
 				&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-			uint32_t variable_index = (uint32_t)
-				(value - ZEND_CALL_VAR_NUM(execute_data, 0));
-
-			zend_error(E_WARNING, "Undefined variable $%s",
-				ZSTR_VAL(op_array->vars[variable_index]));
+			value = zend_native_undefined_cv(execute_data,
+				(uint32_t) ((char *) value - (char *) execute_data));
 			if (EG(exception) != NULL) {
 				goto cleanup;
 			}
-			value = &EG(uninitialized_zval);
 		}
 		ZVAL_DEREF(value);
 		values[index] = value;
@@ -1300,16 +1262,15 @@ zend_native_status zend_native_call_frameless_internal(
 			|| extended_value >= zend_flf_count
 			|| zend_flf_handlers[extended_value] == NULL
 			|| zend_flf_functions[extended_value] == NULL
-			|| !zend_native_frameless_decode_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, result_operand, &result_type, &result_node)
-			|| result_type == IS_UNUSED
-			|| (result = zend_native_frameless_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, result_type, result_node)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	argument_count = ZEND_FLF_NUM_ARGS(source_opcode);
 	for (index = 0; index < 3; index++) {
-		if (!zend_native_frameless_decode_operand(
+		if (!zend_native_decode_explicit_operand(
 				execute_data, encoded_arguments[index],
 				&argument_types[index], &argument_operands[index])
 				|| (index < argument_count
@@ -2410,13 +2371,9 @@ void zend_native_call_fast_scalar_violation(void)
 void zend_native_call_fast_undefined_argument(
 	zend_execute_data *caller, uint32_t variable, uint32_t source_position)
 {
-	if (source_position < caller->func->op_array.last) {
-		caller->opline = &caller->func->op_array.opcodes[source_position];
-	}
-	if (variable < (uint32_t) caller->func->op_array.last_var) {
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(caller->func->op_array.vars[variable]));
-	}
+	ZEND_ASSERT(source_position < caller->func->op_array.last);
+	caller->opline = &caller->func->op_array.opcodes[source_position];
+	(void) zend_native_undefined_cv(caller, EX_NUM_TO_VAR(variable));
 }
 
 static ZEND_COLD ZEND_NORETURN void zend_native_call_abort(const char *message)
@@ -2442,6 +2399,42 @@ static zend_function *zend_native_call_reject_target(const char *message)
 	return (zend_function *) &zend_pass_function;
 }
 
+/*
+ * The literal or frame slot of a source operand the compiler built from the
+ * frame's op array: a literal, CV, TMP or VAR; NULL for any other operand.
+ * *temporary, when given, tells whether it is a TMP or VAR slot. Unchecked;
+ * zend_native_direct_operand() is the bounded form.
+ */
+static zend_always_inline zval *zend_native_source_operand(
+	zend_execute_data *execute_data,
+	const zend_mir_source_operand_ref *operand, bool *temporary)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+
+	if (temporary != NULL) {
+		*temporary = false;
+	}
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		return &op_array->literals[operand->index];
+	}
+	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+			&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+		return NULL;
+	}
+	if (operand->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		return ZEND_CALL_VAR_NUM(execute_data, operand->index);
+	}
+	if (operand->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| operand->slot_kind == ZEND_MIR_SOURCE_SLOT_VAR) {
+		if (temporary != NULL) {
+			*temporary = true;
+		}
+		return ZEND_CALL_VAR_NUM(execute_data,
+			(uint32_t) op_array->last_var + operand->index);
+	}
+	return NULL;
+}
+
 static zval *zend_native_direct_operand(
 	zend_execute_data *execute_data,
 	const zend_mir_source_operand_ref *operand,
@@ -2459,15 +2452,11 @@ static zval *zend_native_call_read_r_operand(
 				|| operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 			&& operand->slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 			&& UNEXPECTED(Z_TYPE_P(value) == IS_UNDEF)) {
-		if (operand->index >= (uint32_t) caller->func->op_array.last_var) {
-			return NULL;
-		}
-		zend_error(E_WARNING, "Undefined variable $%s",
-			ZSTR_VAL(caller->func->op_array.vars[operand->index]));
+		/* zend_native_direct_operand() bounded the index. */
+		value = zend_native_undefined_cv(caller, EX_NUM_TO_VAR(operand->index));
 		if (EG(exception) != NULL) {
 			return NULL;
 		}
-		value = &EG(uninitialized_zval);
 	}
 	if (value != NULL && Z_ISREF_P(value)) {
 		value = Z_REFVAL_P(value);
@@ -2475,14 +2464,10 @@ static zval *zend_native_call_read_r_operand(
 	return value;
 }
 
+/* The bounded frame slot of a CV, TMP or VAR operand; NULL otherwise. */
 static zval *zend_native_call_source_slot(
 	zend_execute_data *caller, const zend_mir_source_operand_ref *operand)
 {
-	if (operand == NULL
-			|| (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA)) {
-		return NULL;
-	}
 	return zend_native_direct_operand(caller, operand, false);
 }
 
@@ -2498,7 +2483,7 @@ static void zend_native_call_consume_source_slot(
 				&& operand->slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)) {
 		return;
 	}
-	slot = zend_native_call_source_slot(caller, operand);
+	slot = zend_native_direct_operand(caller, operand, false);
 	if (slot != NULL && !Z_ISUNDEF_P(slot)) {
 		zval_ptr_dtor(slot);
 		ZVAL_UNDEF(slot);
@@ -6289,34 +6274,6 @@ zend_native_call_fast_dynamic_method_init(
 		caller, call, target, run_time_cache);
 }
 
-/* A literal, CV, temporary or VAR operand of a fast send; *temporary
- * tells whether the send consumes the slot. NULL for any other operand. */
-static zval *zend_native_call_fast_send_operand(
-	zend_execute_data *caller, const zend_mir_source_operand_ref *operand,
-	bool *temporary)
-{
-	const zend_op_array *op_array = &caller->func->op_array;
-
-	*temporary = false;
-	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-		return &op_array->literals[operand->index];
-	}
-	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-			&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
-		return NULL;
-	}
-	if (operand->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-		return ZEND_CALL_VAR_NUM(caller, operand->index);
-	}
-	if (operand->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-			|| operand->slot_kind == ZEND_MIR_SOURCE_SLOT_VAR) {
-		*temporary = true;
-		return ZEND_CALL_VAR_NUM(caller,
-			(uint32_t) op_array->last_var + operand->index);
-	}
-	return NULL;
-}
-
 /*
  * ZEND_SEND_ARRAY of a packed array without holes to a target taking every
  * sent element by value: each element, dereferenced, is copied into the
@@ -6346,13 +6303,14 @@ static bool zend_native_call_fast_send_packed(
 	bool temporary;
 	bool length_temporary = false;
 
-	source = zend_native_call_fast_send_operand(
+	/* A temporary or VAR source is consumed by the send. */
+	source = zend_native_source_operand(
 		caller, &argument->source_operand, &temporary);
 	if (source == NULL) {
 		return false;
 	}
 	if (slice) {
-		length_source = zend_native_call_fast_send_operand(
+		length_source = zend_native_source_operand(
 			caller, &argument->auxiliary_operand, &length_temporary);
 		if (length_source == NULL) {
 			return false;
@@ -7856,8 +7814,7 @@ static zval *zend_native_direct_operand(
 	const zend_mir_source_operand_ref *operand,
 	bool allow_literal)
 {
-	zend_op_array *op_array;
-	uint32_t physical_slot;
+	const zend_op_array *op_array;
 
 	if (execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
@@ -7865,32 +7822,16 @@ static zval *zend_native_direct_operand(
 		return NULL;
 	}
 	op_array = &execute_data->func->op_array;
-	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-		return allow_literal && operand->index < op_array->last_literal
-			? &op_array->literals[operand->index] : NULL;
-	}
-	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-			&& operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
+	if (operand->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			? !allow_literal || operand->index >= op_array->last_literal
+			: (operand->kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| operand->kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+				&& operand->index >= (operand->slot_kind
+						== ZEND_MIR_SOURCE_SLOT_CV
+					? (uint32_t) op_array->last_var : op_array->T)) {
 		return NULL;
 	}
-	switch (operand->slot_kind) {
-		case ZEND_MIR_SOURCE_SLOT_CV:
-			if (operand->index >= (uint32_t) op_array->last_var) {
-				return NULL;
-			}
-			physical_slot = operand->index;
-			break;
-		case ZEND_MIR_SOURCE_SLOT_TMP:
-		case ZEND_MIR_SOURCE_SLOT_VAR:
-			if (operand->index >= op_array->T) {
-				return NULL;
-			}
-			physical_slot = (uint32_t) op_array->last_var + operand->index;
-			break;
-		default:
-			return NULL;
-	}
-	return ZEND_CALL_VAR_NUM(execute_data, physical_slot);
+	return zend_native_source_operand(execute_data, operand, NULL);
 }
 
 static zend_result zend_native_direct_transfer_argument(
