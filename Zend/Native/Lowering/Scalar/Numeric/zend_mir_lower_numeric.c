@@ -81,6 +81,59 @@ static bool zend_mir_numeric_resolve_fact(
 	return true;
 }
 
+/*
+ * The overlay source view that numeric providers read lists SSA uses and
+ * definitions in opline order, so the sites of one opline form a range that
+ * starts at the first site whose opline is not before it.
+ */
+static bool zend_mir_numeric_first_use(
+	const zend_mir_lowering_source_view *source, uint32_t count,
+	uint32_t opline_index, uint32_t *first_out)
+{
+	uint32_t left = 0;
+	uint32_t right = count;
+
+	while (left < right) {
+		const uint32_t middle = left + (right - left) / 2;
+		zend_mir_source_ssa_use_ref use;
+
+		if (!source->ssa_use_at(source->context, middle, &use)) {
+			return false;
+		}
+		if (use.opline_index < opline_index) {
+			left = middle + 1;
+		} else {
+			right = middle;
+		}
+	}
+	*first_out = left;
+	return true;
+}
+
+static bool zend_mir_numeric_first_definition(
+	const zend_mir_lowering_source_view *source, uint32_t count,
+	uint32_t opline_index, uint32_t *first_out)
+{
+	uint32_t left = 0;
+	uint32_t right = count;
+
+	while (left < right) {
+		const uint32_t middle = left + (right - left) / 2;
+		zend_mir_source_ssa_def_ref definition;
+
+		if (!source->ssa_def_at(source->context, middle, &definition)) {
+			return false;
+		}
+		if (definition.opline_index < opline_index) {
+			left = middle + 1;
+		} else {
+			right = middle;
+		}
+	}
+	*first_out = left;
+	return true;
+}
+
 static bool zend_mir_numeric_validate_use(
 	const zend_mir_lowering_source_view *source,
 	const zend_mir_source_opcode_ref *source_opcode,
@@ -88,6 +141,7 @@ static bool zend_mir_numeric_validate_use(
 	bool typed)
 {
 	uint32_t matching_uses = 0;
+	uint32_t count;
 	uint32_t index;
 
 	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
@@ -97,14 +151,21 @@ static bool zend_mir_numeric_validate_use(
 			|| source->ssa_use_at == NULL) {
 		return false;
 	}
-	for (index = 0; index < source->ssa_use_count(source->context); index++) {
+	count = source->ssa_use_count(source->context);
+	if (!zend_mir_numeric_first_use(
+			source, count, source_opcode->opline_index, &index)) {
+		return false;
+	}
+	for (; index < count; index++) {
 		zend_mir_source_ssa_use_ref use;
 
 		if (!source->ssa_use_at(source->context, index, &use)) {
 			return false;
 		}
-		if (use.ssa_variable_id == operand->ssa_variable_id
-				&& use.opline_index == source_opcode->opline_index) {
+		if (use.opline_index != source_opcode->opline_index) {
+			break;
+		}
+		if (use.ssa_variable_id == operand->ssa_variable_id) {
 			/* $x * $x uses one value as both operands. */
 			if (typed && use.operand_index != operand_index) {
 				continue;
@@ -122,21 +183,29 @@ static bool zend_mir_numeric_validate_definition(
 	const zend_mir_source_opcode_ref *source_opcode)
 {
 	uint32_t matching_definitions = 0;
+	uint32_t count;
 	uint32_t index;
 
 	if (source == NULL || source->ssa_def_count == NULL
 			|| source->ssa_def_at == NULL) {
 		return false;
 	}
-	for (index = 0; index < source->ssa_def_count(source->context); index++) {
+	count = source->ssa_def_count(source->context);
+	if (!zend_mir_numeric_first_definition(
+			source, count, source_opcode->opline_index, &index)) {
+		return false;
+	}
+	for (; index < count; index++) {
 		zend_mir_source_ssa_def_ref definition;
 
 		if (!source->ssa_def_at(source->context, index, &definition)) {
 			return false;
 		}
+		if (definition.opline_index != source_opcode->opline_index) {
+			break;
+		}
 		if (definition.ssa_variable_id
-				== source_opcode->result.ssa_variable_id
-				&& definition.opline_index == source_opcode->opline_index) {
+				== source_opcode->result.ssa_variable_id) {
 			if (++matching_definitions != 1) {
 				return false;
 			}
