@@ -84,6 +84,7 @@ struct _zend_mir_integration {
 	zend_mir_ssa_site *overlay_ssa_defs;
 	zend_mir_source_opcode_ref *overlay_opcodes;
 	uint8_t *overlay_opcode_valid;
+	uint32_t *overlay_throw_tails;
 	uint32_t overlay_ssa_use_count;
 	uint32_t overlay_ssa_def_count;
 	uint32_t overlay_fact_count;
@@ -2536,27 +2537,14 @@ static bool zend_mir_close_scalar_overlay(
  * the native block.  Identify the tail so the source-view overlay can hide
  * its opcodes, outgoing edge, and matching PHI input.
  */
-static bool zend_mir_expression_throw_tail(
-	const zend_mir_integration *integration, uint32_t block_id,
-	uint32_t *throw_index, uint32_t *block_end)
+static bool zend_mir_scan_expression_throw_tail(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t block_id,
+	uint32_t *throw_index)
 {
-	const zend_op_array *op_array;
-	const zend_ssa *ssa;
-	const zend_basic_block *block;
+	const zend_basic_block *block = &ssa->cfg.blocks[block_id];
+	const uint32_t end = block->start + block->len;
 	uint32_t index;
-	uint32_t end;
 
-	if (integration == NULL || throw_index == NULL || block_end == NULL) {
-		return false;
-	}
-	op_array = zend_mir_source_op_array(&integration->source);
-	ssa = zend_mir_source_ssa(&integration->source);
-	if (op_array == NULL || ssa == NULL
-			|| block_id >= (uint32_t) ssa->cfg.blocks_count) {
-		return false;
-	}
-	block = &ssa->cfg.blocks[block_id];
-	end = block->start + block->len;
 	if (end > op_array->last) {
 		return false;
 	}
@@ -2566,11 +2554,34 @@ static bool zend_mir_expression_throw_tail(
 					== ZEND_THROW_IS_EXPR
 				&& index + 1 < end) {
 			*throw_index = index;
-			*block_end = end;
 			return true;
 		}
 	}
 	return false;
+}
+
+/* Reads the expression THROW of each block that prepare_overlay found. */
+static bool zend_mir_expression_throw_tail(
+	const zend_mir_integration *integration, uint32_t block_id,
+	uint32_t *throw_index, uint32_t *block_end)
+{
+	const zend_ssa *ssa;
+	const zend_basic_block *block;
+
+	if (integration == NULL || throw_index == NULL || block_end == NULL
+			|| integration->overlay_throw_tails == NULL) {
+		return false;
+	}
+	ssa = zend_mir_source_ssa(&integration->source);
+	if (block_id >= (uint32_t) ssa->cfg.blocks_count
+			|| integration->overlay_throw_tails[block_id]
+				== ZEND_MIR_ID_INVALID) {
+		return false;
+	}
+	block = &ssa->cfg.blocks[block_id];
+	*throw_index = integration->overlay_throw_tails[block_id];
+	*block_end = block->start + block->len;
+	return true;
 }
 
 static bool zend_mir_prepare_overlay(
@@ -2663,15 +2674,28 @@ static bool zend_mir_prepare_overlay(
 	zend_mir_index_cv_reference_bindings(op_array, reference_bound);
 	integration->overlay_synthetic_one_literal =
 		integration->source.literal_count;
+	integration->overlay_throw_tails = zend_mir_lowering_calloc(
+		ssa->cfg.blocks_count == 0 ? 1 : (uint32_t) ssa->cfg.blocks_count,
+		sizeof(*integration->overlay_throw_tails));
+	if (integration->overlay_throw_tails == NULL) {
+		free(crosses_boundary);
+		free(reference_bound);
+		free(crosses_exception_continuation);
+		return false;
+	}
 	for (block_index = 0;
 			block_index < (uint32_t) ssa->cfg.blocks_count; block_index++) {
 		uint32_t throw_index;
 		uint32_t block_end;
 
-		if (!zend_mir_expression_throw_tail(
-				integration, block_index, &throw_index, &block_end)) {
+		integration->overlay_throw_tails[block_index] = ZEND_MIR_ID_INVALID;
+		if (!zend_mir_scan_expression_throw_tail(
+				op_array, ssa, block_index, &throw_index)) {
 			continue;
 		}
+		integration->overlay_throw_tails[block_index] = throw_index;
+		block_end = ssa->cfg.blocks[block_index].start
+			+ ssa->cfg.blocks[block_index].len;
 		for (index = throw_index + 1; index < block_end; index++) {
 			integration->overlay_suppressed_opcodes[index] = 1;
 		}
@@ -5228,6 +5252,7 @@ static void zend_mir_release(zend_mir_integration *integration)
 	free(integration->overlay_inferred_fact_valid);
 	free(integration->overlay_inferred_facts);
 	free(integration->overlay_fact_modes);
+	free(integration->overlay_throw_tails);
 	free(integration->overlay_opcode_valid);
 	free(integration->overlay_opcodes);
 	free(integration->overlay_ssa_defs);
