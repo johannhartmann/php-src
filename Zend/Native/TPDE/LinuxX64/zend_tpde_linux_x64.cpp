@@ -3334,6 +3334,36 @@ public:
 				static_cast<int32_t>(type));
 		}
 	}
+	/*
+	 * Consumes a temporary another owner keeps alive, as
+	 * zend_native_container_shared() and zend_native_release_shared() do
+	 * together: an uncounted value needs nothing, a counted one drops a
+	 * reference, and the last owner (or, with require_array, any value
+	 * but an array) takes slow before anything changed.
+	 */
+	void emit_consume_shared(AsmReg base, int32_t offset, tpde::Label slow,
+			bool require_array = false) {
+		auto released = text_writer.label_create();
+		if (require_array) {
+			ASM(CMP8mi, FE_MEM(base, 0, FE_NOREG,
+				offset + static_cast<int32_t>(offsetof(zval, u1.v.type))),
+				IS_ARRAY);
+			generate_raw_jump(Jump::jne, slow);
+		}
+		ScratchReg counted{this};
+		const AsmReg counted_reg = counted.alloc_gp();
+		ASM(TEST8mi, FE_MEM(base, 0, FE_NOREG,
+			offset + static_cast<int32_t>(offsetof(zval, u1.v.type_flags))),
+			IS_TYPE_REFCOUNTED);
+		generate_raw_jump(Jump::je, released);
+		ASM(MOV64rm, counted_reg, FE_MEM(base, 0, FE_NOREG, offset));
+		ASM(CMP32mi, FE_MEM(counted_reg, 0, FE_NOREG, static_cast<int32_t>(
+			offsetof(zend_refcounted_h, refcount))), 1);
+		generate_raw_jump(Jump::jbe, slow);
+		ASM(SUB32mi, FE_MEM(counted_reg, 0, FE_NOREG, static_cast<int32_t>(
+			offsetof(zend_refcounted_h, refcount))), 1);
+		label_place(released);
+	}
 	void store_exact_type_word(AsmReg base, int32_t offset,
 			zend_mir_scalar_type_mask type, AsmReg value_reg) {
 		store_type_word(base, offset, zend_tpde_zval_type(type), value_reg);
@@ -11129,6 +11159,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
 			&& adaptor->machine_value_is_register_authoritative(
 				node.operands[0]);
+		/* A register long, double or boolean is defined, no reference
+		 * and owns nothing: its type tests are decided here. */
+		const bool scalar_source = register_source
+			&& (adaptor->machine_kind(node.operands[0])
+					== ZEND_TPDE_MACHINE_VALUE_I64
+				|| adaptor->machine_kind(node.operands[0])
+					== ZEND_TPDE_MACHINE_VALUE_F64
+				|| adaptor->machine_kind(node.operands[0])
+					== ZEND_TPDE_MACHINE_VALUE_BOOL);
 
 		if (register_source) {
 			const zend_tpde_machine_value_kind source_kind =
@@ -11198,7 +11237,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(source_offset)));
 		}
-		if (!literal_source
+		if (!literal_source && !scalar_source
 				&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
 			ASM(CMP32ri, source_type_reg, IS_UNDEF);
 			generate_raw_jump(Jump::je, slow);
@@ -11227,7 +11266,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					generate_raw_jump(Jump::je, slow);
 				}
 			});
-		} else if (!literal_source
+		} else if (!literal_source && !scalar_source
 				&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 					|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
 			ASM(CMP8ri, source_type_reg, IS_REFERENCE);
@@ -11239,22 +11278,25 @@ bool ZendCompilerX64::compile_inst_impl(
 		 * native refcount write.  Keep that ownership transition on the
 		 * semantic cold path.
 		 */
-		ASM(TEST32ri, source_type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		auto source_mutable = text_writer.label_create();
-		generate_raw_jump(Jump::je, source_mutable);
-		ASM(MOV32rm, probe_reg,
-			FE_MEM(source_payload_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, u.type_info))));
-		ASM(TEST32ri, probe_reg, GC_IMMUTABLE);
-		generate_raw_jump(Jump::jne, slow);
-		label_place(source_mutable);
+		if (!scalar_source) {
+			ASM(TEST32ri, source_type_reg,
+				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+			auto source_mutable = text_writer.label_create();
+			generate_raw_jump(Jump::je, source_mutable);
+			ASM(TEST32mi,
+				FE_MEM(source_payload_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_refcounted_h, u.type_info))),
+				GC_IMMUTABLE);
+			generate_raw_jump(Jump::jne, slow);
+			label_place(source_mutable);
+		}
 		if (result_storage != ZEND_MIR_ID_INVALID) {
-			ASM(MOV32rm, probe_reg,
+			ASM(CMP32mi,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
-						result_offset + offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, probe_reg, IS_DOUBLE);
+						result_offset + offsetof(zval, u1.type_info))),
+				IS_DOUBLE);
 			generate_raw_jump(Jump::ja, slow);
 		}
 		ASM(LEA64rm, target_reg,
@@ -11359,16 +11401,15 @@ bool ZendCompilerX64::compile_inst_impl(
 				1);
 		}
 		label_place(target_released);
-		ASM(MOV64rr, low_word_reg, source_payload_reg);
 		const uint32_t source_refcount_increments =
 			(!move_source ? 1 : 0)
 			+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
-		if (source_refcount_increments != 0) {
+		if (source_refcount_increments != 0 && !scalar_source) {
 			ASM(TEST32ri, source_type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			auto value_owned = text_writer.label_create();
 			generate_raw_jump(Jump::je, value_owned);
 			ASM(ADD32mi,
-				FE_MEM(low_word_reg, 0, FE_NOREG,
+				FE_MEM(source_payload_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 						offsetof(zend_refcounted_h, refcount))),
 				source_refcount_increments);
@@ -11376,7 +11417,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		ASM(MOV64mr,
 			FE_MEM(target_reg, 0, FE_NOREG, 0),
-			low_word_reg);
+			source_payload_reg);
 		ASM(MOV32mr,
 			FE_MEM(target_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))),
@@ -11385,7 +11426,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(result_offset)),
-				low_word_reg);
+				source_payload_reg);
 			ASM(MOV32mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
@@ -11393,12 +11434,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				source_type_reg);
 		}
 		if (move_source) {
-			ASM(MOV32ri, source_type_reg, IS_UNDEF);
-			ASM(MOV32mr,
+			ASM(MOV32mi,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
 					source_offset + offsetof(zval, u1.type_info))),
-				source_type_reg);
+				IS_UNDEF);
 		}
 		if (!register_source) {
 			/* Nothing to publish on the cold edge: leave directly. */
@@ -12494,16 +12534,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (access == ElementAccess::Read && node.has_result
 				&& adaptor->machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_I64) {
-			/* An integer result needs an integer element. */
-			ValuePart is_long{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_zval_is_long(
-					address(element_reg, 0), is_long)) {
-				return -1;
-			}
-			const AsmReg is_long_reg = is_long.cur_reg_or_load(this);
-			ASM(TEST64rr, is_long_reg, is_long_reg);
-			is_long.reset(this);
-			generate_raw_jump(Jump::je, slow);
+			/* An integer result needs an integer element
+			 * (zend_native_zval_is_long()), tested in memory. */
+			ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
 			auto [result_ref, result] = result_ref_single(node.result);
 			if (!EncodeBase::encode_zend_native_load_u64(
 					address(element_reg, 0), result)) {
@@ -12921,16 +12956,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& result_offset <= INT32_MAX - sizeof(zval);
 		auto result = result_ref(node.result);
 		if (result_long) {
-			ValuePart is_long{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_zval_is_long(
-					GenericValuePart{GenericValuePart::Expr{element_reg, 0}},
-					is_long)) {
-				return -1;
-			}
-			const AsmReg is_long_reg = is_long.cur_reg_or_load(this);
-			ASM(TEST64rr, is_long_reg, is_long_reg);
-			is_long.reset(this);
-			generate_raw_jump(Jump::je, slow);
+			/* zend_native_zval_is_long(), tested in memory. */
+			ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
 			auto value = result.part(0);
 			if (!EncodeBase::encode_zend_native_load_u64(
 					GenericValuePart{GenericValuePart::Expr{element_reg, 0}},
@@ -13123,22 +13152,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::jne, slow);
 		}
 		if (temporary) {
-			auto value_address = GenericValuePart{GenericValuePart::Expr{
-				frame_reg, static_cast<int64_t>(value_offset)}};
-			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_container_shared(
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(value_offset)}}, shared)) {
-				return -1;
-			}
-			const AsmReg shared_reg = shared.cur_reg_or_load(this);
-			ASM(TEST64rr, shared_reg, shared_reg);
-			shared.reset(this);
-			generate_raw_jump(Jump::je, slow);
-			if (!EncodeBase::encode_zend_native_release_shared(
-					std::move(value_address))) {
-				return -1;
-			}
+			emit_consume_shared(frame_reg,
+				static_cast<int32_t>(value_offset), slow);
 		}
 		/* IS_FALSE + matched is IS_FALSE or IS_TRUE. */
 		ASM(LEA32rm, type_reg,
@@ -13418,21 +13433,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::jne, slow);
 		}
 		if (temporary) {
-			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_container_shared(
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(value_offset)}}, shared)) {
-				return -1;
-			}
-			const AsmReg shared_reg = shared.cur_reg_or_load(this);
-			ASM(TEST64rr, shared_reg, shared_reg);
-			shared.reset(this);
-			generate_raw_jump(Jump::je, slow);
-			if (!EncodeBase::encode_zend_native_release_shared(
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(value_offset)}})) {
-				return -1;
-			}
+			emit_consume_shared(frame_reg,
+				static_cast<int32_t>(value_offset), slow);
 		}
 		if (negated) {
 			ASM(XOR32ri, matched_reg, 1);
@@ -13604,19 +13606,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::jne, slow);
 		}
 		if (temporary) {
-			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_container_shared(
-					address(frame_reg, array_offset), shared)) {
-				return -1;
-			}
-			const AsmReg shared_reg = shared.cur_reg_or_load(this);
-			ASM(TEST64rr, shared_reg, shared_reg);
-			shared.reset(this);
-			generate_raw_jump(Jump::je, slow);
-			if (!EncodeBase::encode_zend_native_release_shared(
-					address(frame_reg, array_offset))) {
-				return -1;
-			}
+			emit_consume_shared(frame_reg,
+				static_cast<int32_t>(array_offset), slow);
 		}
 		{
 			ScratchReg type{this};
@@ -13692,24 +13683,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 		auto frame_scratch = frame_register(std::move(frame));
 		auto frame_reg = frame_scratch.cur_reg();
-		auto holder = [&]() {
-			return GenericValuePart{GenericValuePart::Expr{frame_reg,
-				static_cast<int64_t>(holder_offset)}};
-		};
-		ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (!EncodeBase::encode_zend_native_iterator_shared(
-				holder(), shared)) {
-			return -1;
-		}
-		const AsmReg shared_reg = shared.cur_reg_or_load(this);
+		/* zend_native_iterator_shared() and the release together. */
 		ScratchReg decision{this};
-		auto decision_reg = decision.alloc_gp();
-		ASM(TEST64rr, shared_reg, shared_reg);
-		shared.reset(this);
-		generate_raw_jump(Jump::je, slow);
-		if (!EncodeBase::encode_zend_native_release_shared(holder())) {
-			return -1;
-		}
+		decision.alloc_gp();
+		emit_consume_shared(frame_reg,
+			static_cast<int32_t>(holder_offset), slow, true);
 		finish_guarded(slow, done, std::move(decision), frame_scratch,
 			successors);
 		return 1;
@@ -13872,19 +13850,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::jne, slow);
 		}
 		if (temporary) {
-			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_container_shared(
-					value_address(), shared)) {
-				return -1;
-			}
-			const AsmReg shared_reg = shared.cur_reg_or_load(this);
-			ASM(TEST64rr, shared_reg, shared_reg);
-			shared.reset(this);
-			generate_raw_jump(Jump::je, slow);
-			if (!EncodeBase::encode_zend_native_release_shared(
-					value_address())) {
-				return -1;
-			}
+			emit_consume_shared(frame_reg,
+				static_cast<int32_t>(value_offset), slow);
 		}
 		ASM(MOV64mr,
 			FE_MEM(frame_reg, 0, FE_NOREG,
