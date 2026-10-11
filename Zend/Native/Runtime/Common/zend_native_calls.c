@@ -4785,6 +4785,15 @@ zend_native_call_fast_receive_prepare(
 		}
 		receive->defaults[index] = value;
 	}
+	receive->inline_defaults_from = (uint16_t) op_array->num_args;
+	while (receive->inline_defaults_from > 0) {
+		index = receive->inline_defaults_from - 1;
+		if (receive->defaults[index] == NULL
+				|| (receive->ast_mask & (UINT32_C(1) << index)) != 0) {
+			break;
+		}
+		receive->inline_defaults_from--;
+	}
 	receive->state = ZEND_NATIVE_CALL_FAST_RECEIVE_INLINE;
 	return receive;
 }
@@ -4792,15 +4801,15 @@ zend_native_call_fast_receive_prepare(
 static zend_always_inline bool zend_native_call_class_persistent(
 	const zend_class_entry *ce);
 
-/* Whether the class-typed parameter accepted this argument's class before. */
+/* Whether the class-typed parameter accepted this argument's class before;
+ * an object's class is never NULL, an unset entry is. */
 static zend_always_inline bool zend_native_call_fast_receive_class_hit(
 	const zend_native_call_fast_receive *receive, uint32_t index,
 	const zval *argument)
 {
 	return (receive->class_mask & (UINT32_C(1) << index)) != 0
 		&& Z_TYPE_P(argument) == IS_OBJECT
-		&& Z_OBJCE_P(argument) == receive->classes[index]
-		&& receive->classes[index] != NULL;
+		&& Z_OBJCE_P(argument) == receive->classes[index];
 }
 
 /*
@@ -4815,12 +4824,14 @@ static void zend_native_call_fast_receive_record_classes(
 	const uint32_t supplied = ZEND_CALL_NUM_ARGS(callee);
 	uint32_t mask = receive->class_mask;
 
+	/* class_mask names parameters only. */
+	ZEND_ASSERT(mask >> receive->num_args == 0);
 	while (mask != 0) {
 		const uint32_t index = (uint32_t) __builtin_ctz(mask);
 		const zval *argument = ZEND_CALL_ARG(callee, index + 1);
 
 		mask &= mask - 1;
-		if (index >= supplied || index >= receive->num_args) {
+		if (index >= supplied) {
 			break;
 		}
 		if (Z_TYPE_P(argument) == IS_OBJECT
@@ -9773,12 +9784,6 @@ static bool zend_native_call_fast_receive_frame(
 			return false;
 		}
 	}
-	for (index = supplied; index < declared; index++) {
-		if (receive->defaults[index] == NULL
-				|| (receive->ast_mask & (UINT32_C(1) << index)) != 0) {
-			return false;
-		}
-	}
 	callee->opline = op_array->opcodes + received;
 	if (supplied > declared) {
 		zend_native_call_fast_copy_extra_args(callee, op_array, supplied);
@@ -9903,6 +9908,9 @@ uint32_t zend_native_call_fast_do(
 	const bool discard = result_offset == UINT32_MAX;
 	zval discarded;
 	uint32_t status = ZEND_NATIVE_RETURNED;
+	/* A dynamic site's Init left the target's run-time cache in the
+	 * frame's return value slot. */
+	void **dynamic_run_time_cache = (void **) callee->return_value;
 
 	caller->call = callee->prev_execute_data;
 	callee->return_value = discard
@@ -9917,7 +9925,7 @@ uint32_t zend_native_call_fast_do(
 			? zend_native_call_fast_receive_frame(callee,
 				(const zend_native_call_fast_receive *)
 					callee->run_time_cache,
-				RUN_TIME_CACHE(&callee->func->op_array))
+				dynamic_run_time_cache)
 			: zend_native_call_fast_receive_frame(callee,
 				header->fast_receive, header->fast_run_time_cache != NULL
 					? header->fast_run_time_cache

@@ -38,7 +38,11 @@ typedef enum _zend_native_call_fast_receive_state {
 } zend_native_call_fast_receive_state;
 
 typedef struct _zend_native_call_fast_receive {
-	uint32_t state;
+	uint16_t state;
+	/* The fewest supplied arguments from which every missing parameter
+	 * takes an inline literal default (num_args when none may be
+	 * missing). */
+	uint16_t inline_defaults_from;
 	uint32_t num_args;
 	/* Bit n: parameter n names a class, which type_masks cannot express. */
 	uint32_t class_mask;
