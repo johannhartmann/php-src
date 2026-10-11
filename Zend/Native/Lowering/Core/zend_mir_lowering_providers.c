@@ -82,6 +82,8 @@ struct _zend_mir_integration {
 	uint8_t *overlay_inferred_fact_valid;
 	zend_mir_ssa_site *overlay_ssa_uses;
 	zend_mir_ssa_site *overlay_ssa_defs;
+	zend_mir_source_opcode_ref *overlay_opcodes;
+	uint8_t *overlay_opcode_valid;
 	uint32_t overlay_ssa_use_count;
 	uint32_t overlay_ssa_def_count;
 	uint32_t overlay_fact_count;
@@ -2949,10 +2951,10 @@ static void zend_mir_unused_operand(zend_mir_source_operand_ref *operand)
 	operand->ssa_variable_id = ZEND_MIR_ID_INVALID;
 }
 
-static bool zend_mir_overlay_view_opcode_at(
-	const void *context, uint32_t index, zend_mir_source_opcode_ref *out)
+static bool zend_mir_overlay_decode_opcode(
+	const zend_mir_integration *integration, uint32_t index,
+	zend_mir_source_opcode_ref *out)
 {
-	const zend_mir_integration *integration = context;
 	const zend_ssa *ssa;
 	const zend_ssa_op *ssa_op;
 
@@ -3053,6 +3055,24 @@ static bool zend_mir_overlay_view_opcode_at(
 			integration, ssa_op->result_use);
 	}
 	return true;
+}
+
+static bool zend_mir_overlay_view_opcode_at(
+	const void *context, uint32_t index, zend_mir_source_opcode_ref *out)
+{
+	const zend_mir_integration *integration = context;
+
+	if (integration == NULL || out == NULL) {
+		return false;
+	}
+	if (integration->overlay_opcodes == NULL) {
+		return zend_mir_overlay_decode_opcode(integration, index, out);
+	}
+	if (index >= integration->source.opcode_count) {
+		return false;
+	}
+	*out = integration->overlay_opcodes[index];
+	return integration->overlay_opcode_valid[index] != 0;
 }
 
 static uint32_t zend_mir_overlay_view_ssa_count(const void *context)
@@ -3406,6 +3426,9 @@ done:
 static bool zend_mir_source_view(
 	zend_mir_integration *integration)
 {
+	uint32_t opcode_count;
+	uint32_t index;
+
 	if (integration == NULL
 			|| !zend_mir_zend_source_view(
 				&integration->source, &integration->base_source_view)
@@ -3433,6 +3456,24 @@ static bool zend_mir_source_view(
 	integration->source_view.phi_input_count =
 		zend_mir_overlay_view_phi_input_count;
 	integration->source_view.phi_input_at = zend_mir_overlay_view_phi_input_at;
+	/* The overlay is final once prepared, so every lowering pass reads the
+	 * same decode of an opcode: decode each one once. */
+	opcode_count = integration->source.opcode_count;
+	integration->overlay_opcodes = zend_mir_lowering_calloc(
+		opcode_count == 0 ? 1 : opcode_count,
+		sizeof(*integration->overlay_opcodes));
+	integration->overlay_opcode_valid = zend_mir_lowering_calloc(
+		opcode_count == 0 ? 1 : opcode_count,
+		sizeof(*integration->overlay_opcode_valid));
+	if (integration->overlay_opcodes == NULL
+			|| integration->overlay_opcode_valid == NULL) {
+		return false;
+	}
+	for (index = 0; index < opcode_count; index++) {
+		integration->overlay_opcode_valid[index] =
+			zend_mir_overlay_decode_opcode(integration, index,
+				&integration->overlay_opcodes[index]);
+	}
 	return true;
 }
 
@@ -5055,6 +5096,8 @@ static void zend_mir_release(zend_mir_integration *integration)
 	free(integration->overlay_inferred_fact_valid);
 	free(integration->overlay_inferred_facts);
 	free(integration->overlay_fact_modes);
+	free(integration->overlay_opcode_valid);
+	free(integration->overlay_opcodes);
 	free(integration->overlay_ssa_defs);
 	free(integration->overlay_ssa_uses);
 	free(integration->overlay_phi_inputs);

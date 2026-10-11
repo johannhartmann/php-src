@@ -970,13 +970,16 @@ static bool zend_mir_index_frame_arguments(
 		uint32_t argument_number;
 		uint32_t ssa_variable_id;
 
-		if (!source->source_opcode_at(source->context, index, &opcode)
-				|| opcode.opline_index != index) {
-			return false;
-		}
-		if (opcode.zend_opcode_number != ZEND_RECV
-				&& opcode.zend_opcode_number != ZEND_RECV_INIT) {
+		/* The call view decodes this op_array and keeps its opcodes. */
+		if (op_array->opcodes[index].opcode != ZEND_RECV
+				&& op_array->opcodes[index].opcode != ZEND_RECV_INIT) {
 			continue;
+		}
+		if (!source->source_opcode_at(source->context, index, &opcode)
+				|| opcode.opline_index != index
+				|| (opcode.zend_opcode_number != ZEND_RECV
+					&& opcode.zend_opcode_number != ZEND_RECV_INIT)) {
+			return false;
 		}
 		argument_number = op_array->opcodes[index].op1.num;
 		ssa_variable_id = opcode.result.ssa_variable_id;
