@@ -3343,7 +3343,50 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 	 * freeze the terminal branch as an implicit two-edge register merge.  The
 	 * adaptor will materialize the corresponding TPDE PHI; keeping the shape in
 	 * the plan also lets machine-CFG construction omit the boxed branch diamond.
+	 * The definition reaching the branch from a predecessor is that block's
+	 * last writer of the temporary; both are frozen for the adaptor.
 	 */
+	std::vector<uint32_t> block_instruction_offsets;
+	std::vector<uint32_t> block_instructions;
+	auto last_block_writer = [&](uint32_t block, zend_mir_storage_id storage) {
+		if (block_instruction_offsets.empty()) {
+			std::vector<int32_t> instruction_blocks(plan->instruction_count);
+			block_instruction_offsets.assign(plan->block_count + 1, 0);
+			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+				instruction_blocks[i] = zend_tpde_block_index(plan,
+					zend_tpde_instruction_record_at(
+						plan, &plan->instructions[i]).block_id);
+				if (instruction_blocks[i] >= 0) {
+					++block_instruction_offsets[
+						static_cast<uint32_t>(instruction_blocks[i]) + 1];
+				}
+			}
+			for (uint32_t b = 0; b < plan->block_count; ++b) {
+				block_instruction_offsets[b + 1] +=
+					block_instruction_offsets[b];
+			}
+			block_instructions.resize(
+				block_instruction_offsets[plan->block_count]);
+			std::vector<uint32_t> fill(block_instruction_offsets.begin(),
+				block_instruction_offsets.end() - 1);
+			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+				if (instruction_blocks[i] >= 0) {
+					block_instructions[fill[static_cast<uint32_t>(
+						instruction_blocks[i])]++] = i;
+				}
+			}
+		}
+		for (uint32_t offset = block_instruction_offsets[block + 1];
+				offset-- > block_instruction_offsets[block];) {
+			const zend_tpde_instruction &writer =
+				plan->instructions[block_instructions[offset]];
+			if (writer.has_value_operation
+					&& writer.value_operation.result_storage_id == storage) {
+				return static_cast<int32_t>(block_instructions[offset]);
+			}
+		}
+		return int32_t{-1};
+	};
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &branch = plan->instructions[index];
 		const zend_mir_instruction_record branch_record =
@@ -3381,56 +3424,50 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 		}
 		bool supported = true;
 		bool short_circuit_edge = false;
+		uint32_t producers[2]{};
 		for (uint32_t predecessor_offset = predecessor_begin;
 				predecessor_offset < predecessor_end;
 				++predecessor_offset) {
-			const uint32_t predecessor =
-				plan->block_predecessors[predecessor_offset];
-			int32_t incoming = -1;
-			for (uint32_t candidate = plan->instruction_count;
-					candidate-- > 0;) {
-				const zend_tpde_instruction &producer =
-					plan->instructions[candidate];
-				const zend_mir_instruction_record producer_record =
-					zend_tpde_instruction_record_at(plan, &producer);
-				if (!producer.has_value_operation
-						|| zend_tpde_block_index(
-							plan, producer_record.block_id)
-							!= static_cast<int32_t>(predecessor)
-						|| producer.value_operation.result_storage_id
-							!= branch.value_operation.op1_storage_id) {
-					continue;
-				}
-				const bool register_edge =
-					producer_record.opcode
-							== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-					&& (producer.value_operation.source_opcode
-							== ZEND_JMPZ_EX
-						|| producer.value_operation.source_opcode
-							== ZEND_JMPNZ_EX)
-					&& (producer.machine_control_flow_flags
-						& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH)
-						!= 0;
-				const bool register_result =
-					(producer.machine_control_flow_flags
-						& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT)
-						!= 0
-					&& register_boolean_results[candidate] != 0;
-				if (!register_edge && !register_result) {
-					continue;
-				}
-				incoming = static_cast<int32_t>(candidate);
-				short_circuit_edge = short_circuit_edge || register_edge;
-				break;
-			}
-			if (incoming < 0) {
+			const int32_t candidate = last_block_writer(
+				plan->block_predecessors[predecessor_offset],
+				branch.value_operation.op1_storage_id);
+			if (candidate < 0) {
 				supported = false;
 				break;
 			}
+			const zend_tpde_instruction &producer =
+				plan->instructions[static_cast<uint32_t>(candidate)];
+			const zend_mir_instruction_record producer_record =
+				zend_tpde_instruction_record_at(plan, &producer);
+			const bool register_edge =
+				producer_record.opcode
+						== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& (producer.value_operation.source_opcode
+						== ZEND_JMPZ_EX
+					|| producer.value_operation.source_opcode
+						== ZEND_JMPNZ_EX)
+				&& (producer.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH)
+					!= 0;
+			const bool register_result =
+				(producer.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT)
+					!= 0
+				&& register_boolean_results[
+					static_cast<uint32_t>(candidate)] != 0;
+			if (!register_edge && !register_result) {
+				supported = false;
+				break;
+			}
+			producers[predecessor_offset - predecessor_begin] =
+				static_cast<uint32_t>(candidate) + 1;
+			short_circuit_edge = short_circuit_edge || register_edge;
 		}
 		if (supported && short_circuit_edge) {
 			branch.machine_control_flow_flags |=
 				ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_MERGE;
+			branch.register_merge_producer_plus_one[0] = producers[0];
+			branch.register_merge_producer_plus_one[1] = producers[1];
 		}
 	}
 }

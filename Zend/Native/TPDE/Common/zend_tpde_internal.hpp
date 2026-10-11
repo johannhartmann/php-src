@@ -616,6 +616,9 @@ struct zend_tpde_instruction {
 	uint32_t operation_reference_index;
 	bool local_abi_transport;
 	uint8_t machine_control_flow_flags;
+	/* A REGISTER_MERGE branch: 1 + the instruction defining its temporary
+	 * at the end of each of its two predecessors, in predecessor order. */
+	uint32_t register_merge_producer_plus_one[2];
 };
 
 struct zend_tpde_array_read {

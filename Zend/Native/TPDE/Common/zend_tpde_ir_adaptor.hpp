@@ -5411,51 +5411,44 @@ public:
 				INVALID_VALUE_REF, INVALID_VALUE_REF};
 			bool supported = true;
 			for (uint32_t n = 0; n < inputs.size(); ++n) {
-				const uint32_t predecessor =
-					plan_->block_predecessors[predecessor_begin + n];
-				for (uint32_t candidate = plan_->instruction_count;
-						candidate-- > 0;) {
-					const zend_tpde_instruction &producer =
-						plan_->instructions[candidate];
-					const zend_mir_instruction_record producer_record =
-						instruction_record_at(candidate);
-					if (!producer.has_value_operation
-							|| block_index(producer_record.block_id)
-								!= static_cast<int32_t>(predecessor)
-							|| producer.value_operation.result_storage_id
-								!= instruction.value_operation.op1_storage_id) {
-						continue;
-					}
-					const bool register_edge =
-						producer_record.opcode
-								== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-						&& (producer.value_operation.source_opcode
-								== ZEND_JMPZ_EX
-							|| producer.value_operation.source_opcode
-								== ZEND_JMPNZ_EX)
-						&& (producer.machine_control_flow_flags
-							& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH)
-							!= 0;
-					const bool register_result =
-						(producer.machine_control_flow_flags
-							& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT)
-							!= 0
-						&& register_boolean_results[candidate]
-							!= INVALID_VALUE_REF;
-					if (!register_edge && !register_result) {
-						continue;
-					}
-					const IRValueRef selected =
-						active_instruction_results()[candidate];
-					if (selected != INVALID_VALUE_REF
-							&& exact_type(selected)
-								== ZEND_MIR_SCALAR_TYPE_I1
-							&& machine_kind(selected)
-								== ZEND_TPDE_MACHINE_VALUE_BOOL
-							&& machine_value_has_register_definition(selected)) {
-						inputs[n] = selected;
-					}
+				const uint32_t candidate_plus_one =
+					instruction.register_merge_producer_plus_one[n];
+				if (candidate_plus_one == 0
+						|| candidate_plus_one > plan_->instruction_count) {
+					supported = false;
 					break;
+				}
+				const uint32_t candidate = candidate_plus_one - 1;
+				const zend_tpde_instruction &producer =
+					plan_->instructions[candidate];
+				const zend_mir_instruction_record producer_record =
+					instruction_record_at(candidate);
+				const bool register_edge =
+					producer_record.opcode
+							== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+					&& (producer.value_operation.source_opcode
+							== ZEND_JMPZ_EX
+						|| producer.value_operation.source_opcode
+							== ZEND_JMPNZ_EX)
+					&& (producer.machine_control_flow_flags
+						& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH)
+						!= 0;
+				const bool register_result =
+					(producer.machine_control_flow_flags
+						& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT)
+						!= 0
+					&& register_boolean_results[candidate]
+						!= INVALID_VALUE_REF;
+				const IRValueRef selected = register_edge || register_result
+					? active_instruction_results()[candidate]
+					: INVALID_VALUE_REF;
+				if (selected != INVALID_VALUE_REF
+						&& exact_type(selected)
+							== ZEND_MIR_SCALAR_TYPE_I1
+						&& machine_kind(selected)
+							== ZEND_TPDE_MACHINE_VALUE_BOOL
+						&& machine_value_has_register_definition(selected)) {
+					inputs[n] = selected;
 				}
 				if (inputs[n] == INVALID_VALUE_REF) {
 					supported = false;
