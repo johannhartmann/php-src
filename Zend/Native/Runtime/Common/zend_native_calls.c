@@ -7134,9 +7134,10 @@ zend_execute_data *zend_native_call_expand_user_arguments(
  * Pushes the pending Zend call frame of a legacy source call: it may extend
  * the VM stack, and the generated caller remains current after it returns.
  * zend_native_call_invoke_finish_source() re-enters native code, restores
- * the caller on every outcome and releases the frame.
+ * the caller on every outcome and releases the frame. Returns the entry
+ * cell of the pushed target, which an invoke in the same helper reuses.
  */
-static void zend_native_call_begin(
+static zend_native_entry_cell *zend_native_call_begin(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
 	const zend_native_user_call_descriptor *descriptor)
@@ -7418,6 +7419,7 @@ static void zend_native_call_begin(
 	}
 	call->prev_execute_data = caller->call;
 	caller->call = call;
+	return cell;
 }
 
 void zend_native_call_set_integer_argument(
@@ -9230,7 +9232,7 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
 				&& descriptor->do_opcode != ZEND_CALLABLE_CONVERT_PARTIAL)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	zend_native_call_begin(caller, cell, descriptor);
+	cell = zend_native_call_begin(caller, cell, descriptor);
 	for (index = 0; index < descriptor->argument_count
 			&& EG(exception) == NULL; index++) {
 		if (zend_native_call_set_source_argument(
