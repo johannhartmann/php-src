@@ -439,7 +439,11 @@ class ZendCompilerX64 final
 			const int32_t resume_offset = static_cast<int32_t>(
 				offsetof(zend_native_execution_context, deopt_resume));
 			ASM(CMP8mi, FE_MEM(context_reg, 0, FE_NOREG, resume_offset), 0);
-			generate_raw_jump(Jump::je, normal);
+			/* A resuming entry dispatches out of the hot code. */
+			auto resume = text_writer.label_create();
+			generate_raw_jump(Jump::jne, resume);
+			cold_begin();
+			label_place(resume);
 			ASM(MOV8mi, FE_MEM(context_reg, 0, FE_NOREG, resume_offset), 0);
 			ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 1);
 			/* A landing enters an operation's cold block, past the fast
@@ -483,6 +487,7 @@ class ZendCompilerX64 final
 		}
 		label_place(invalid);
 		emit_status_return(ZEND_NATIVE_EXCEPTION);
+		cold_end();
 		label_place(normal);
 		ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 0);
 		return true;
@@ -566,7 +571,7 @@ class ZendCompilerX64 final
 			return false;
 		}
 		auto block = text_writer.label_create();
-		generate_raw_jump(Jump::jmp, block);
+		cold_begin();
 		label_place(deopt_resume_labels_[resume]);
 		/* The stub uses scratch registers and explicit stores only: the
 		 * path that reaches the block does not run it, so TPDE's value
@@ -664,6 +669,8 @@ class ZendCompilerX64 final
 			}
 		}
 		frame.reset();
+		generate_raw_jump(Jump::jmp, block);
+		cold_end();
 		label_place(block);
 		return true;
 	}
@@ -1545,14 +1552,13 @@ public:
 						exact);
 					generate_raw_jump(Jump::jne, fallback);
 				} else if (guard == ZEND_NATIVE_ARG_GUARD_NUMBER) {
-					auto number = text_writer.label_create();
+					/* IS_LONG and IS_DOUBLE are adjacent. */
+					static_assert(IS_DOUBLE == IS_LONG + 1);
 					ASM(MOVZXr32m8, type_reg,
 						FE_MEM(frame_reg, 0, FE_NOREG, type_offset));
-					ASM(CMP32ri, type_reg, IS_LONG);
-					generate_raw_jump(Jump::je, number);
-					ASM(CMP32ri, type_reg, IS_DOUBLE);
-					generate_raw_jump(Jump::jne, fallback);
-					label_place(number);
+					ASM(SUB32ri, type_reg, IS_LONG);
+					ASM(CMP32ri, type_reg, IS_DOUBLE - IS_LONG);
+					generate_raw_jump(Jump::ja, fallback);
 				} else if (guard == ZEND_NATIVE_ARG_GUARD_BOOL) {
 					ASM(MOVZXr32m8, type_reg,
 						FE_MEM(frame_reg, 0, FE_NOREG, type_offset));
@@ -2685,15 +2691,21 @@ public:
 			: ZEND_NATIVE_HELPER_HASH_NEXT_INDEX_INSERT;
 		auto set_insert_arguments = [&] {
 			FeRegGP value_reg = key_kind == KeyKind::Append ? FE_SI : FE_DX;
+			/* A literal key and value share one literal table load. */
+			const bool shared_literals = key_kind == KeyKind::String
+				&& value_kind == ValueKind::Literal;
 			if (key_kind == KeyKind::String) {
-				load_literals(FE_SI);
-				ASM(MOV64rm, FE_SI, FE_MEM(FE_SI, 0, FE_NOREG,
+				const FeRegGP literals_reg = shared_literals ? FE_DX : FE_SI;
+				load_literals(literals_reg);
+				ASM(MOV64rm, FE_SI, FE_MEM(literals_reg, 0, FE_NOREG,
 					static_cast<int32_t>(key_value)));
 			} else if (key_kind == KeyKind::Long) {
 				ASM(MOV64ri, FE_SI, static_cast<int64_t>(key_value));
 			}
 			if (value_kind == ValueKind::Literal) {
-				load_literals(value_reg);
+				if (!shared_literals) {
+					load_literals(value_reg);
+				}
 				ASM(LEA64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
 					static_cast<int32_t>(value_offset)));
 			} else {
@@ -2727,9 +2739,11 @@ public:
 						ASM(MOV64rr, FE_DI, FE_AX);
 						emit_symbol_call(runtime_symbol(
 							ZEND_NATIVE_HELPER_HASH_REAL_INIT_MIXED));
+						ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+							result_disp));
+					} else {
+						ASM(MOV64rr, FE_DI, FE_AX);
 					}
-					ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-						result_disp));
 					set_insert_arguments();
 					emit_symbol_call(runtime_symbol(insert));
 					after_insert();
@@ -4450,13 +4464,13 @@ public:
 				(ZEND_CALL_FRAME_SLOT + argument) * sizeof(zval)
 				+ offsetof(zval, u1.type_info));
 			if (plan->entry_variant_numeric) {
-				auto number = text_writer.label_create();
+				/* A long falls through; a double is tested out of line. */
 				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset), IS_LONG);
-				generate_raw_jump(Jump::je, number);
-				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset),
-					IS_DOUBLE);
-				generate_raw_jump(Jump::jne, general);
-				label_place(number);
+				emit_cold_branch(Jump::jne, text_writer.label_create(), [&] {
+					ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset),
+						IS_DOUBLE);
+					generate_raw_jump(Jump::jne, general);
+				});
 			} else {
 				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset), IS_LONG);
 				generate_raw_jump(Jump::jne, general);
@@ -4717,10 +4731,22 @@ void ZendCompilerX64::emit_integer_dispatch(
 	const zend_tpde_integer_dispatch_kind kind =
 		zend_tpde_integer_dispatch(
 			branch_cases, branch_case_count, &cases, &low, &range);
+	/* A constant that sign-extends from 32 bits is an immediate. */
+	auto fits_int32 = [](uint64_t constant) {
+		return static_cast<int64_t>(constant)
+			== static_cast<int64_t>(static_cast<int32_t>(constant));
+	};
+	auto emit_cmp = [&](uint64_t expected) {
+		if (fits_int32(expected)) {
+			ASM(CMP64ri, value_reg, static_cast<int32_t>(expected));
+		} else {
+			materialize_constant(&expected,
+				tpde::x64::PlatformConfig::GP_BANK, 8, temp_reg);
+			ASM(CMP64rr, value_reg, temp_reg);
+		}
+	};
 	auto emit_compare = [&](uint64_t expected, tpde::Label target) {
-		materialize_constant(&expected,
-			tpde::x64::PlatformConfig::GP_BANK, 8, temp_reg);
-		ASM(CMP64rr, value_reg, temp_reg);
+		emit_cmp(expected);
 		generate_raw_jump(Jump::je, target);
 	};
 	if (kind == ZEND_TPDE_INTEGER_DISPATCH_LINEAR) {
@@ -4734,14 +4760,17 @@ void ZendCompilerX64::emit_integer_dispatch(
 	}
 
 	const uint64_t low_bits = static_cast<uint64_t>(low);
-	materialize_constant(&low_bits,
-		tpde::x64::PlatformConfig::GP_BANK, 8, temp_reg);
-	ASM(SUB64rr, value_reg, temp_reg);
-	if (kind == ZEND_TPDE_INTEGER_DISPATCH_JUMP_TABLE) {
-		const uint64_t high_index = range - 1;
-		materialize_constant(&high_index,
+	if (low_bits == 0) {
+		/* No bias. */
+	} else if (fits_int32(low_bits)) {
+		ASM(SUB64ri, value_reg, static_cast<int32_t>(low_bits));
+	} else {
+		materialize_constant(&low_bits,
 			tpde::x64::PlatformConfig::GP_BANK, 8, temp_reg);
-		ASM(CMP64rr, value_reg, temp_reg);
+		ASM(SUB64rr, value_reg, temp_reg);
+	}
+	if (kind == ZEND_TPDE_INTEGER_DISPATCH_JUMP_TABLE) {
+		emit_cmp(range - 1);
 		generate_raw_jump(Jump::ja, default_label);
 		auto &table = text_writer.create_jump_table(
 			static_cast<uint32_t>(range), value_reg, temp_reg);
@@ -4972,8 +5001,7 @@ bool ZendCompilerX64::emit_materializations(
 				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
 			ScratchReg type_info{this};
 			auto type_info_reg = type_info.alloc_gp();
-			ASM(MOV64rr, type_info_reg, boolean_payload_reg);
-			ASM(ADD64ri, type_info_reg, IS_FALSE);
+			ASM(LEA32rm, type_info_reg, FE_MEM(boolean_payload_reg, 0, FE_NOREG, IS_FALSE));
 			ASM(MOV32mr,
 				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
 				type_info_reg);
@@ -5385,12 +5413,12 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 		generate_raw_jump(Jump::jb, scalar_helper);
 		ASM(XOR32rr, truth_reg, truth_reg);
 		ASM(CMP32ri, type_reg, IS_TRUE);
-		generate_raw_set(Jump::je, truth_reg);
+		generate_raw_set(Jump::je, truth_reg, false);
 		generate_raw_jump(Jump::jmp, decided);
 		label_place(is_long);
 		ASM(XOR32rr, truth_reg, truth_reg);
 		ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, operand), 0);
-		generate_raw_set(Jump::jne, truth_reg);
+		generate_raw_set(Jump::jne, truth_reg, false);
 		label_place(decided);
 		if (scalar_layout.has_result) {
 			const int32_t result =
@@ -5735,7 +5763,6 @@ bool ZendCompilerX64::compile_inst_impl(
 		ScratchReg masked_type{this};
 		auto masked_type_reg = masked_type.alloc_gp();
 		auto cold_transfer = text_writer.label_create();
-		auto hot_branch = text_writer.label_create();
 		const auto spilled = spill_before_branch();
 		begin_branch_region();
 		emit_observer_exit(cold_transfer);
@@ -5743,8 +5770,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			ASM(CMP8ri, guarded_type_regs[index], static_cast<int32_t>(guarded_expected_types[index]));
 			generate_raw_jump(Jump::jne, cold_transfer);
 		}
-		generate_raw_jump(Jump::jmp, hot_branch);
 
+		/* The transfer to the cold block: out of the hot code, which
+		 * falls into its branch. */
+		cold_begin();
 		label_place(cold_transfer);
 		for (uint32_t index = 0; index < guarded_count; ++index) {
 			ASM(MOV64mr,
@@ -5758,7 +5787,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		generate_branch_to_block(
 			Jump::jmp, cold, branch_needs_split(cold), false);
-		label_place(hot_branch);
+		cold_end();
 		generate_branch_to_block(Jump::jmp, hot, false, true);
 		end_branch_region();
 		release_spilled_regs(spilled);
@@ -5817,8 +5846,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					break;
 				case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
 					if (input_type == ZEND_MIR_SCALAR_TYPE_I1) {
-						ASM(MOV32rr, value_reg, source_reg);
-						ASM(ADD32ri, value_reg, IS_FALSE);
+						ASM(LEA32rm, value_reg, FE_MEM(source_reg, 0, FE_NOREG, IS_FALSE));
 					} else if (input_type == ZEND_MIR_SCALAR_TYPE_I64) {
 						ASM(MOV32ri, value_reg, IS_LONG);
 					} else {
@@ -9256,31 +9284,26 @@ bool ZendCompilerX64::compile_inst_impl(
 						> INT32_MAX) {
 				return false;
 			}
-			ScratchReg type{this};
-			auto type_reg = type.alloc_gp();
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offset + offsetof(zval, u1.type_info))));
+			const auto type_byte = FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offset + offsetof(zval, u1.type_info)));
 			if (guard.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				auto matched_boolean = text_writer.label_create();
+				/* IS_FALSE and IS_TRUE differ only in bit 0. */
+				static_assert((IS_FALSE | 1) == IS_TRUE);
+				ScratchReg type{this};
+				auto type_reg = type.alloc_gp();
+				ASM(MOVZXr32m8, type_reg, type_byte);
+				ASM(AND32ri, type_reg, ~1);
 				ASM(CMP32ri, type_reg, IS_FALSE);
-				generate_raw_jump(Jump::je, matched_boolean);
-				ASM(CMP32ri, type_reg, IS_TRUE);
 				generate_raw_jump(Jump::jne, mismatch);
-				type.reset();
-				label_place(matched_boolean);
 			} else {
-				ASM(CMP32ri, type_reg,
-					static_cast<int32_t>(expected_type));
+				ASM(CMP8mi, type_byte, static_cast<int32_t>(expected_type));
 				generate_raw_jump(Jump::jne, mismatch);
-				type.reset();
 			}
 		}
-		auto matched = text_writer.label_create();
-		generate_raw_jump(Jump::jmp, matched);
 		frame.reset();
 		frame_ref.reset();
+		/* A mismatch retries the call from the cold area. */
+		cold_begin();
 		label_place(mismatch);
 		{
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
@@ -9289,7 +9312,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				::tpde::CCAssignment{});
 			return_builder.ret_local_path();
 		}
-		label_place(matched);
+		cold_end();
 		return true;
 	}
 	if (node.kind == Adaptor::InstKind::ZvalReferenceResolve) {
@@ -9606,8 +9629,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
 				ScratchReg kind{this};
 				auto kind_reg = kind.alloc_gp();
-				ASM(MOV32rr, kind_reg, value_reg);
-				ASM(ADD32ri, kind_reg, IS_FALSE);
+				ASM(LEA32rm, kind_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
 				ASM(MOV32mr, FE_MEM(canonical_frame_register(), 0,
 					FE_NOREG, type_offset), kind_reg);
 			} else {
@@ -9689,8 +9711,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						input_reg);
 				}
 				if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-					ASM(MOV64rr, store_type_reg, input_reg);
-					ASM(ADD64ri, store_type_reg, IS_FALSE);
+					ASM(LEA32rm, store_type_reg, FE_MEM(input_reg, 0, FE_NOREG, IS_FALSE));
 					ASM(MOV32mr,
 						FE_MEM(store_slot_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -9782,8 +9803,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), value_reg);
 			}
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				ASM(MOV64rr, old_type_reg, value_reg);
-				ASM(ADD64ri, old_type_reg, IS_FALSE);
+				ASM(LEA32rm, old_type_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
 				ASM(MOV32mr,
 					FE_MEM(slot_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zval, u1.type_info))),
@@ -10806,8 +10826,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
 				ScratchReg type_info{this};
 				auto type_info_reg = type_info.alloc_gp();
-				ASM(MOV64rr, type_info_reg, payload_reg);
-				ASM(ADD64ri, type_info_reg, IS_FALSE);
+				ASM(LEA32rm, type_info_reg, FE_MEM(payload_reg, 0, FE_NOREG, IS_FALSE));
 				ASM(MOV32mr,
 					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
 						static_cast<int32_t>(
@@ -11147,9 +11166,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						source.load_to_reg());
 				}
 				if (source_kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-					ASM(MOV64rr, source_type_reg,
-						source_payload_reg);
-					ASM(ADD32ri, source_type_reg, IS_FALSE);
+					ASM(LEA32rm, source_type_reg, FE_MEM(source_payload_reg, 0, FE_NOREG, IS_FALSE));
 				} else {
 					if (!emit_machine_zval_type_info(
 							source_kind, source_payload_reg,
@@ -13328,7 +13345,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP64rm, value_type_reg,
 						FE_MEM(frame_reg, 0, FE_NOREG, value_disp));
 				}
-				generate_raw_set(Jump::je, match_reg);
+				generate_raw_set(Jump::je, match_reg, false);
 			} else {
 				ASM(MOV32ri, match_reg, 1);
 			}
@@ -14038,16 +14055,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(MOV32rm, count_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
-		ASM(MOV32rm, limit_reg,
+		ASM(CMP32rm, count_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, nTableSize))));
-		ASM(CMP32rr, count_reg, limit_reg);
 		generate_raw_jump(Jump::jae, slow);
-		ASM(MOV64rm, limit_reg,
+		ASM(CMP64rm, count_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(HashTable, nNextFreeElement))));
-		ASM(CMP64rr, count_reg, limit_reg);
 		generate_raw_jump(Jump::jne, slow);
 
 		if (!scalar_value) {
@@ -14073,12 +14088,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::jne, slow);
 		}
 
-		ASM(MOV64rm, element_reg,
+		static_assert(sizeof(zval) == 16);
+		ASM(MOV64rr, element_reg, count_reg);
+		ASM(SHL64ri, element_reg, 4);
+		ASM(ADD64rm, element_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, arPacked))));
-		ASM(SHL64ri, count_reg, 4);
-		ASM(ADD64rr, element_reg, count_reg);
-		ASM(SHR64ri, count_reg, 4);
 		if (scalar_value) {
 			auto [value_ref, value] = val_ref_single(node.operands[
 				node.packed_append_value_operand_index]);
@@ -14292,10 +14307,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					generate_raw_jump(Jump::je, array);
 					ASM(CMP32ri, type_reg, IS_TRUE);
 					generate_raw_jump(Jump::ja, slow);
+					generate_raw_set(Jump::je, truth_reg, false);
 					ASM(TEST32rr, type_reg, type_reg);
 					generate_raw_jump(Jump::je, slow);
-					ASM(CMP32ri, type_reg, IS_TRUE);
-					generate_raw_set(Jump::je, truth_reg);
 					generate_raw_jump(Jump::jmp, decided);
 					const bool releases_operand =
 						mir.value_operation.op1.slot_kind
@@ -14313,11 +14327,11 @@ bool ZendCompilerX64::compile_inst_impl(
 						operand));
 					ASM(CMP64mi, FE_MEM(type_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zend_string, len))), 1);
-					generate_raw_set(Jump::ja, truth_reg);
+					generate_raw_set(Jump::ja, truth_reg, false);
 					generate_raw_jump(Jump::jne, decided);
 					ASM(CMP8mi, FE_MEM(type_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zend_string, val))), '0');
-					generate_raw_set(Jump::jne, truth_reg);
+					generate_raw_set(Jump::jne, truth_reg, false);
 					generate_raw_jump(Jump::jmp, decided);
 					label_place(array);
 					if (releases_operand) {
@@ -14332,11 +14346,11 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(CMP32mi, FE_MEM(type_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(HashTable,
 							nNumOfElements))), 0);
-					generate_raw_set(Jump::jne, truth_reg);
+					generate_raw_set(Jump::jne, truth_reg, false);
 					generate_raw_jump(Jump::jmp, decided);
 					label_place(integer);
 					ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, operand), 0);
-					generate_raw_set(Jump::jne, truth_reg);
+					generate_raw_set(Jump::jne, truth_reg, false);
 					label_place(decided);
 					if (boolean.negate) {
 						ASM(XOR32ri, truth_reg, 1);
@@ -14977,8 +14991,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							break;
 					}
 					if (result_slot) {
-						ASM(MOV32rr, parity_reg, value_reg);
-						ASM(ADD32ri, parity_reg, IS_FALSE);
+						ASM(LEA32rm, parity_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
 						ASM(MOV32mr,
 							FE_MEM(frame_reg, 0, FE_NOREG, result_offset
 								+ static_cast<int32_t>(
@@ -14994,8 +15007,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							auto payload_reg = payload.alloc_reg();
 							auto type_info_reg = type_info.alloc_reg();
 							ASM(MOV64rr, payload_reg, value_reg);
-							ASM(MOV32rr, type_info_reg, value_reg);
-							ASM(ADD32ri, type_info_reg, IS_FALSE);
+							ASM(LEA32rm, type_info_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
 							payload.set_modified();
 							type_info.set_modified();
 						} else {
@@ -15218,8 +15230,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							: Jump::jne;
 						ASM(CMP64rr, left_reg, right_reg);
 						generate_raw_set(condition, left_reg);
-						ASM(MOV32rr, result_type_reg, left_reg);
-						ASM(ADD32ri, result_type_reg, IS_FALSE);
+						ASM(LEA32rm, result_type_reg, FE_MEM(left_reg, 0, FE_NOREG, IS_FALSE));
 						break;
 					}
 				}
@@ -15546,8 +15557,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (boolean_result) {
 				ScratchReg result_type{this};
 				auto result_type_reg = result_type.alloc_gp();
-				ASM(MOV64rr, result_type_reg, result_reg);
-				ASM(ADD64ri, result_type_reg, IS_FALSE);
+				ASM(LEA32rm, result_type_reg, FE_MEM(result_reg, 0, FE_NOREG, IS_FALSE));
 				ASM(MOV32mr,
 					FE_MEM(frame_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
@@ -15572,8 +15582,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto type_info_reg = type_info.alloc_reg();
 			ASM(MOV64rr, payload_reg, result_reg);
 			if (boolean_result) {
-				ASM(MOV32rr, type_info_reg, result_reg);
-				ASM(ADD32ri, type_info_reg, IS_FALSE);
+				ASM(LEA32rm, type_info_reg, FE_MEM(result_reg, 0, FE_NOREG, IS_FALSE));
 			} else {
 				ASM(MOV32ri, type_info_reg, IS_LONG);
 			}
@@ -17645,6 +17654,28 @@ bool ZendCompilerX64::compile_inst_impl(
 					const uint32_t opcode = operation.extended_value;
 					const int32_t type_info =
 						static_cast<int32_t>(offsetof(zval, u1.type_info));
+					/* A literal key or value has a compile-time type (and an
+					 * integer one its value): only the arm it can take is
+					 * emitted. */
+					const zend_tpde_plan *dim_plan = adaptor->plan();
+					auto literal_at = [&](bool literal, int32_t offset)
+							-> const zval * {
+						const uint32_t index =
+							static_cast<uint32_t>(offset) / sizeof(zval);
+						return literal && dim_plan->source_literals != nullptr
+								&& index < dim_plan->source_literal_count
+							? &dim_plan->source_literals[index] : nullptr;
+					};
+					const zval *key_constant =
+						literal_at(key_literal, key_offset);
+					const zval *value_constant =
+						literal_at(value_literal, value_offset);
+					const bool long_key = key_constant != nullptr
+						&& Z_TYPE_P(key_constant) == IS_LONG;
+					const bool string_key = key_constant != nullptr
+						&& Z_TYPE_P(key_constant) == IS_STRING;
+					const bool long_value = value_constant != nullptr
+						&& Z_TYPE_P(value_constant) == IS_LONG;
 					const auto spilled = spill_before_branch(true);
 					auto slow = text_writer.label_create();
 					auto done = text_writer.label_create();
@@ -17674,7 +17705,8 @@ bool ZendCompilerX64::compile_inst_impl(
 						auto key_length_reg = key_length.alloc_gp();
 						auto key_byte_reg = key_byte.alloc_gp();
 						AsmReg literals_reg = frame_reg;
-						if (key_literal || value_literal) {
+						if ((key_literal && !long_key)
+								|| (value_literal && !long_value)) {
 							literals_reg = literals.alloc_gp();
 							ASM(MOV64rm, literals_reg,
 								FE_MEM(frame_reg, 0, FE_NOREG,
@@ -17716,39 +17748,52 @@ bool ZendCompilerX64::compile_inst_impl(
 							FE_MEM(element_reg, 0, FE_NOREG,
 								static_cast<int32_t>(offsetof(HashTable, u))),
 							HASH_FLAG_PACKED);
-						generate_raw_jump(Jump::je, hash_key);
-						/* Existing element by integer key. */
-						ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
-							key_offset + type_info), IS_LONG);
-						generate_raw_jump(Jump::jne, slow);
-						ASM(MOV64rm, left_reg,
-							FE_MEM(key_base, 0, FE_NOREG, key_offset));
-						ASM(MOV32rm, left_type_reg,
-							FE_MEM(element_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									HashTable, nNumUsed))));
-						ASM(CMP64rr, left_reg, left_type_reg);
-						generate_raw_jump(Jump::jae, slow);
-						ASM(SHL64ri, left_reg, 4);
-						ASM(ADD64rm, left_reg,
-							FE_MEM(element_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									HashTable, arPacked))));
-						ASM(MOV64rr, element_reg, left_reg);
-						generate_raw_jump(Jump::jmp, have_element);
+						generate_raw_jump(Jump::je,
+							long_key ? slow : hash_key);
+						if (string_key) {
+							/* A string key takes no packed element. */
+							generate_raw_jump(Jump::jmp, slow);
+						} else {
+							/* Existing element by integer key. */
+							if (long_key) {
+								ASM(MOV64ri, left_reg,
+									static_cast<int64_t>(Z_LVAL_P(key_constant)));
+							} else {
+								ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
+									key_offset + type_info), IS_LONG);
+								generate_raw_jump(Jump::jne, slow);
+								ASM(MOV64rm, left_reg,
+									FE_MEM(key_base, 0, FE_NOREG, key_offset));
+							}
+							ASM(MOV32rm, left_type_reg,
+								FE_MEM(element_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										HashTable, nNumUsed))));
+							ASM(CMP64rr, left_reg, left_type_reg);
+							generate_raw_jump(Jump::jae, slow);
+							ASM(SHL64ri, left_reg, 4);
+							ASM(ADD64rm, left_reg,
+								FE_MEM(element_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										HashTable, arPacked))));
+							ASM(MOV64rr, element_reg, left_reg);
+							generate_raw_jump(Jump::jmp, have_element);
+						}
 						/*
 						 * Existing element by string key in a hash: probe with the
 						 * key's cached hash; the same string or equal bytes match.
 						 */
 						label_place(hash_key);
-						{
+						if (!long_key) {
 							auto probe = text_writer.label_create();
 							auto next = text_writer.label_create();
 							auto compare = text_writer.label_create();
 							auto found = text_writer.label_create();
-							ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
-								key_offset + type_info), IS_STRING);
-							generate_raw_jump(Jump::jne, slow);
+							if (!string_key) {
+								ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
+									key_offset + type_info), IS_STRING);
+								generate_raw_jump(Jump::jne, slow);
+							}
 							/* right: key, left_type: hash, right_type: index,
 							 * left: bucket, element: HashTable. */
 							ASM(MOV64rm, right_reg,
@@ -17837,17 +17882,25 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(MOVZXr32m8, left_type_reg,
 							FE_MEM(element_reg, 0, FE_NOREG, type_info));
 						ASM(MOV64rm, left_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
-						ASM(MOVZXr32m8, right_type_reg,
-							FE_MEM(value_base, 0, FE_NOREG,
-								value_offset + type_info));
-						ASM(MOV64rm, right_reg,
-							FE_MEM(value_base, 0, FE_NOREG, value_offset));
+						if (long_value) {
+							ASM(MOV32ri, right_type_reg, IS_LONG);
+							ASM(MOV64ri, right_reg, static_cast<int64_t>(
+								Z_LVAL_P(value_constant)));
+						} else {
+							ASM(MOVZXr32m8, right_type_reg,
+								FE_MEM(value_base, 0, FE_NOREG,
+									value_offset + type_info));
+							ASM(MOV64rm, right_reg,
+								FE_MEM(value_base, 0, FE_NOREG, value_offset));
+						}
 						auto mixed = text_writer.label_create();
 						auto store = text_writer.label_create();
 						ASM(CMP32ri, left_type_reg, IS_LONG);
 						generate_raw_jump(Jump::jne, mixed);
-						ASM(CMP32ri, right_type_reg, IS_LONG);
-						generate_raw_jump(Jump::jne, mixed);
+						if (!long_value) {
+							ASM(CMP32ri, right_type_reg, IS_LONG);
+							generate_raw_jump(Jump::jne, mixed);
+						}
 						if (opcode == ZEND_ADD) {
 							ASM(ADD64rr, left_reg, right_reg);
 						} else if (opcode == ZEND_SUB) {
@@ -18204,20 +18257,27 @@ bool ZendCompilerX64::compile_inst_impl(
 			{
 				ScratchReg mask{this};
 				auto mask_reg = mask.alloc_gp();
-				ASM(MOV64rm, mask_reg,
-					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_execute_data, func))));
-				ASM(MOV64rm, mask_reg,
-					FE_MEM(mask_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_function, common.arg_info))));
-				ASM(MOV32rm, mask_reg,
-					FE_MEM(mask_reg, 0, FE_NOREG,
-						-static_cast<int32_t>(sizeof(zend_arg_info))
-							+ static_cast<int32_t>(
-								offsetof(zend_arg_info, type)
-									+ offsetof(zend_type, type_mask))));
+				/* The compiled function's return type is fixed. */
+				const uint32_t return_mask =
+					adaptor->plan()->source_return_type_mask;
+				if (return_mask != 0) {
+					ASM(MOV32ri, mask_reg, static_cast<int32_t>(return_mask));
+				} else {
+					ASM(MOV64rm, mask_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_execute_data, func))));
+					ASM(MOV64rm, mask_reg,
+						FE_MEM(mask_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_function, common.arg_info))));
+					ASM(MOV32rm, mask_reg,
+						FE_MEM(mask_reg, 0, FE_NOREG,
+							-static_cast<int32_t>(sizeof(zend_arg_info))
+								+ static_cast<int32_t>(
+									offsetof(zend_arg_info, type)
+										+ offsetof(zend_type, type_mask))));
+				}
 				ASM(BT32rr, mask_reg, verified_type.cur_reg());
 				generate_raw_jump(Jump::jb, done);
 			}
@@ -18679,11 +18739,10 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto value_reg = value.alloc_gp();
 			auto probe_reg = probe.alloc_gp();
 			auto constant_reg = constant.alloc_gp();
-			ASM(MOV64rr, slot_reg,
-				check_undefined_cv
-					? canonical_frame_register() : frame_scratch.cur_reg());
-			ASM(ADD64ri, slot_reg,
-				static_cast<int32_t>(layout.operand_offset));
+			ASM(LEA64rm, slot_reg,
+				FE_MEM(check_undefined_cv
+						? canonical_frame_register() : frame_scratch.cur_reg(),
+					0, FE_NOREG, static_cast<int32_t>(layout.operand_offset)));
 			ASM(MOVZXr32m8, type_reg,
 				FE_MEM(slot_reg, 0, FE_NOREG,
 					static_cast<int32_t>(
@@ -18712,81 +18771,95 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			generate_raw_jump(Jump::jmp, fallback_label);
 
-			label_place(long_label);
-			ASM(MOV64rm, value_reg,
-				FE_MEM(slot_reg, 0, FE_NOREG, 0));
-			emit_integer_dispatch(
-				layout.cases, layout.case_count, case_labels,
-				value_reg, constant_reg, default_label);
+			/* SWITCH_STRING never takes the integer dispatch, SWITCH_LONG
+			 * never the string one. */
+			if (layout.source_opcode != ZEND_SWITCH_STRING) {
+				label_place(long_label);
+				ASM(MOV64rm, value_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				emit_integer_dispatch(
+					layout.cases, layout.case_count, case_labels,
+					value_reg, constant_reg, default_label);
+			}
 
-			label_place(string_label);
-			ASM(MOV64rm, value_reg,
-				FE_MEM(slot_reg, 0, FE_NOREG, 0));
-			for (uint32_t case_index = 0;
-					case_index < layout.case_count; ++case_index) {
-				const zend_tpde_multi_branch_case &branch_case =
-					layout.cases[case_index];
-				if (branch_case.string_key != nullptr) {
-					auto next_case = text_writer.label_create();
-					const uint64_t length = branch_case.string_length;
-					ASM(MOV64rm, probe_reg,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_string, len))));
-					materialize_constant(
-						&length, tpde::x64::PlatformConfig::GP_BANK,
-						8, constant_reg);
-					ASM(CMP64rr, probe_reg, constant_reg);
-					generate_raw_jump(Jump::jne, next_case);
-					size_t offset = 0;
-					while (offset < branch_case.string_length) {
-						const uint32_t width =
-							branch_case.string_length - offset >= 8 ? 8
-							: branch_case.string_length - offset >= 4 ? 4
-							: branch_case.string_length - offset >= 2 ? 2 : 1;
-						const size_t byte_offset =
-							offsetof(zend_string, val) + offset;
-						if (byte_offset > INT32_MAX) {
+			if (layout.source_opcode != ZEND_SWITCH_LONG) {
+				label_place(string_label);
+				ASM(MOV64rm, value_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				/* The length once; the bytes compare in memory with
+				 * immediates where they fit. */
+				const AsmReg length_reg = type_reg;
+				ASM(MOV64rm, length_reg,
+					FE_MEM(value_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_string, len))));
+				for (uint32_t case_index = 0;
+						case_index < layout.case_count; ++case_index) {
+					const zend_tpde_multi_branch_case &branch_case =
+						layout.cases[case_index];
+					if (branch_case.string_key != nullptr) {
+						auto next_case = text_writer.label_create();
+						const uint64_t length = branch_case.string_length;
+						if (length > INT32_MAX) {
 							return false;
 						}
-						uint64_t expected = 0;
-						memcpy(&expected, branch_case.string_key + offset,
-							width);
-						switch (width) {
-							case 8:
-								ASM(MOV64rm, probe_reg,
-									FE_MEM(value_reg, 0, FE_NOREG,
-										static_cast<int32_t>(byte_offset)));
-								break;
-							case 4:
-								ASM(MOV32rm, probe_reg,
-									FE_MEM(value_reg, 0, FE_NOREG,
-										static_cast<int32_t>(byte_offset)));
-								break;
-							case 2:
-								ASM(MOVZXr32m16, probe_reg,
-									FE_MEM(value_reg, 0, FE_NOREG,
-										static_cast<int32_t>(byte_offset)));
-								break;
-							default:
-								ASM(MOVZXr32m8, probe_reg,
-									FE_MEM(value_reg, 0, FE_NOREG,
-										static_cast<int32_t>(byte_offset)));
-								break;
-						}
-						materialize_constant(
-							&expected, tpde::x64::PlatformConfig::GP_BANK,
-							width, constant_reg);
-						ASM(CMP64rr, probe_reg, constant_reg);
+						ASM(CMP64ri, length_reg, static_cast<int32_t>(length));
 						generate_raw_jump(Jump::jne, next_case);
-						offset += width;
+						size_t offset = 0;
+						while (offset < branch_case.string_length) {
+							const uint32_t width =
+								branch_case.string_length - offset >= 8 ? 8
+								: branch_case.string_length - offset >= 4 ? 4
+								: branch_case.string_length - offset >= 2 ? 2 : 1;
+							const size_t byte_offset =
+								offsetof(zend_string, val) + offset;
+							if (byte_offset > INT32_MAX) {
+								return false;
+							}
+							uint64_t expected = 0;
+							memcpy(&expected, branch_case.string_key + offset,
+								width);
+							const auto bytes = FE_MEM(value_reg, 0, FE_NOREG,
+								static_cast<int32_t>(byte_offset));
+							switch (width) {
+								case 8:
+									if (static_cast<int64_t>(expected)
+											== static_cast<int64_t>(
+												static_cast<int32_t>(expected))) {
+										ASM(CMP64mi, bytes,
+											static_cast<int32_t>(expected));
+									} else {
+										materialize_constant(&expected,
+											tpde::x64::PlatformConfig::GP_BANK,
+											8, constant_reg);
+										ASM(CMP64rm, constant_reg, bytes);
+									}
+									break;
+								case 4:
+									ASM(CMP32mi, bytes,
+										static_cast<int32_t>(
+											static_cast<uint32_t>(expected)));
+									break;
+								case 2:
+									ASM(CMP16mi, bytes,
+										static_cast<int16_t>(
+											static_cast<uint16_t>(expected)));
+									break;
+								default:
+									ASM(CMP8mi, bytes,
+										static_cast<int8_t>(
+											static_cast<uint8_t>(expected)));
+									break;
+							}
+							generate_raw_jump(Jump::jne, next_case);
+							offset += width;
+						}
+						generate_raw_jump(
+							Jump::jmp, case_labels[case_index]);
+						label_place(next_case);
 					}
-					generate_raw_jump(
-						Jump::jmp, case_labels[case_index]);
-					label_place(next_case);
 				}
+				generate_raw_jump(Jump::jmp, default_label);
 			}
-			generate_raw_jump(Jump::jmp, default_label);
 
 			for (uint32_t i = 0; i < case_labels.size(); ++i) {
 				label_place(case_labels[i]);
@@ -19181,13 +19254,13 @@ bool ZendCompilerX64::compile_inst_impl(
 						generate_raw_jump(Jump::jae, end);
 					}
 
-					ASM(MOV64rm, element_reg,
+					static_assert(sizeof(zval) == 16);
+					ASM(MOV64rr, element_reg, position_reg);
+					ASM(SHL64ri, element_reg, 4);
+					ASM(ADD64rm, element_reg,
 						FE_MEM(array_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
 								offsetof(HashTable, arPacked))));
-					ASM(SHL64ri, position_reg, 4);
-					ASM(ADD64rr, element_reg, position_reg);
-					ASM(SHR64ri, position_reg, 4);
 					if (layout.has_key) {
 						ASM(MOV64rr, key_payload_reg, position_reg);
 						ASM(MOV32ri, key_type_reg, IS_LONG);
@@ -24229,8 +24302,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (type == IS_FALSE) {
 				ScratchReg kind{this};
 				auto kind_reg = kind.alloc_gp();
-				mov(kind_reg, value_reg, 8);
-				ASM(ADD64ri, kind_reg, IS_FALSE);
+				ASM(LEA32rm, kind_reg,
+					FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
 				ASM(MOV32mr, FE_MEM(pointer_reg, 0, FE_NOREG, 8), kind_reg);
 			} else {
 				ASM(MOV32mi, FE_MEM(pointer_reg, 0, FE_NOREG, 8),
@@ -24500,8 +24573,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					ScratchReg type_info{this};
 					auto type_info_reg = type_info.alloc_gp();
 					if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-						mov(type_info_reg, value_reg, 8);
-						ASM(ADD64ri, type_info_reg, IS_FALSE);
+						ASM(LEA32rm, type_info_reg,
+							FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
 					} else if (zend_tpde_machine_value_zval_type(kind)
 							!= IS_UNDEF) {
 						if (!emit_machine_zval_type_info(

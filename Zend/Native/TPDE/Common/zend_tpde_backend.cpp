@@ -6115,6 +6115,10 @@ bool initialize_plan(
 		|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0;
 	plan->source_num_args =
 		source_op_array != nullptr ? source_op_array->num_args : 0;
+	plan->source_return_type_mask = source_op_array != nullptr
+			&& (source_op_array->fn_flags & ZEND_ACC_HAS_RETURN_TYPE) != 0
+			&& source_op_array->arg_info != nullptr
+		? source_op_array->arg_info[-1].type.type_mask : 0;
 	const uint32_t released_vars = source_op_array == nullptr ? 0
 		: static_cast<uint32_t>(source_op_array->last_var);
 	plan->fast_call_eligible = zend_tpde_linux_inline_forms

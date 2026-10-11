@@ -2392,6 +2392,10 @@ struct zend_tpde_plan {
 	 * variadic parameter (zend_native_call_receive_variadic()). */
 	bool fast_call_variadic;
 	uint32_t source_num_args;
+	/* The declared return type's type_mask (arg_info[-1]), 0 without one:
+	 * immutable for the compiled op_array, so VERIFY_RETURN_TYPE tests it
+	 * as an immediate. */
+	uint32_t source_return_type_mask;
 	/* The fewest arguments the entry takes: one past the last parameter
 	 * without a default. */
 	uint32_t fast_call_min_arguments;
