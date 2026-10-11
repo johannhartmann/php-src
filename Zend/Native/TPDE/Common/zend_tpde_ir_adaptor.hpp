@@ -5079,6 +5079,33 @@ public:
 			}
 			return resolved;
 		};
+		/*
+		 * Instructions a Zend entry emits as the register definition of their
+		 * own MIR result without listing it among the instruction results: a
+		 * scalar operation with a machine result and a selected machine COPY.
+		 * A boxed-identity COPY of such a value reads that register.
+		 */
+		std::vector<uint8_t> entry_register_definitions(
+			plan_->instruction_count, 0);
+		auto entry_register_definition = [&](IRValueRef value) {
+			const uint32_t raw = static_cast<uint32_t>(value);
+			if (function_mode_ != FunctionMode::ZendEntry
+					|| value == INVALID_VALUE_REF
+					|| derived_value(value) != nullptr
+					|| raw < MIR_VALUE_BASE
+					|| raw - MIR_VALUE_BASE >= plan_->value_count
+					|| plan_->value_definition_instructions == nullptr
+					|| !machine_value_is_register_authoritative(value)) {
+				return false;
+			}
+			const int32_t definition =
+				plan_->value_definition_instructions[raw - MIR_VALUE_BASE];
+			return definition >= 0
+				&& static_cast<uint32_t>(definition)
+					< entry_register_definitions.size()
+				&& entry_register_definitions[
+					static_cast<uint32_t>(definition)] != 0;
+		};
 		auto resolve_copy_input = [&](zend_mir_value_id value_id,
 				uint32_t use_block, uint32_t use_instruction) {
 				const int32_t value_index =
@@ -5086,10 +5113,15 @@ public:
 				if (value_index < 0) {
 					return value_ref(value_id);
 				}
-				return resolve_materializable_scalar(
+				const IRValueRef resolved = resolve_materializable_scalar(
 					static_cast<uint32_t>(value_index), use_block,
 					use_instruction, 0,
 					resolve_materializable_scalar);
+				if (resolved == INVALID_VALUE_REF
+						&& entry_register_definition(value_ref(value_id))) {
+					return value_ref(value_id);
+				}
+				return resolved;
 			};
 		auto phi_edge_value_ref = [&](zend_mir_value_id value_id,
 				uint32_t predecessor_block) {
@@ -7267,6 +7299,20 @@ public:
 					&& record.opcode < ZEND_MIR_OPCODE_SCALAR_DROP) {
 				continue;
 			}
+			if (machine_result
+					&& ((record.opcode
+								>= ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+							&& record.opcode < ZEND_MIR_OPCODE_SCALAR_DROP
+							&& !instruction.fused_into_branch)
+						|| ((record.opcode == ZEND_MIR_OPCODE_COPY
+								|| record.opcode
+									== ZEND_MIR_OPCODE_CANONICALIZE
+								|| record.opcode
+									== ZEND_MIR_OPCODE_I1_TO_I64)
+							&& record.representation
+								!= ZEND_MIR_REPRESENTATION_ZVAL))) {
+				entry_register_definitions[i] = 1;
+			}
 			/* Pi nodes over canonical zvals preserve source SSA topology.
 			 * They are registerless only after the same physical-location proof
 			 * used for boxed PHIs. */
@@ -7282,8 +7328,10 @@ public:
 									copy_input))
 								|| entry_argument_has_register_definition(
 									copy_input)
+								|| entry_register_definition(copy_input)
 								|| constant(copy_input, &copy_constant_bits))) {
 					/* Emit the selected machine copy below. */
+					entry_register_definitions[i] = 1;
 				} else {
 					const zend_mir_storage_id result_storage =
 						canonical_storage(result);
