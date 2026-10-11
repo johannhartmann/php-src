@@ -406,7 +406,11 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 	zend_native_frame_entry_t entry, zend_execute_data *execute_data,
 	bool observer_already_started, zend_native_execution_state *state)
 {
-	zend_native_execution_context context;
+	/* Without observers every entry's context is the shared one, which
+	 * generated code only reads (see zend_native_execute_frame_entered()). */
+	zend_native_execution_context *context =
+		(zend_native_execution_context *)
+			zend_native_execution_context_shared();
 	volatile uint32_t phase = 0;
 	volatile bool frame_returned = false;
 
@@ -418,17 +422,17 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 #ifdef HAVE_DTRACE
 	state->dtrace_frame_started = false;
 #endif
-	zend_native_execution_context_init(&context);
+	ZEND_ASSERT(!context->observers_enabled && !context->deopt_resume);
 	if (state->original_return_value == NULL) {
 		ZVAL_UNDEF(&state->discarded_return);
 		execute_data->return_value = &state->discarded_return;
 	}
 	zend_try {
 		state->status = !zend_native_execute_frame_received(execute_data)
-				&& zend_native_frame_prepare(execute_data) == FAILURE
+				&& zend_native_frame_receive(execute_data) == FAILURE
 			? (EG(exception) != NULL
 				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT)
-			: entry(execute_data, &context);
+			: entry(execute_data, context);
 		if (EXPECTED(zend_native_execute_frame_plain_return(
 				execute_data, state->status))) {
 			/* What the general processing below does for it. */
@@ -874,7 +878,7 @@ zend_native_status zend_native_execute_frame_entered(
 		&frame.record, zend_native_execute_frame_entered_unwind);
 
 	state.status = !zend_native_execute_frame_received(execute_data)
-			&& zend_native_frame_prepare(execute_data) == FAILURE
+			&& zend_native_frame_receive(execute_data) == FAILURE
 		? (EG(exception) != NULL
 			? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT)
 		: entry(execute_data, context);

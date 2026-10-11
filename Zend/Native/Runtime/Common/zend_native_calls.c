@@ -1876,24 +1876,14 @@ static zend_always_inline bool zend_native_frame_argument_passes(
 	return true;
 }
 
-zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
+zend_result zend_native_frame_receive(zend_execute_data *execute_data)
 {
-	zend_op_array *op_array;
-	uint32_t supplied;
+	zend_op_array *op_array = &execute_data->func->op_array;
+	const uint32_t supplied = ZEND_CALL_NUM_ARGS(execute_data);
 	uint32_t ordinal;
 
-	if (execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)) {
-		return FAILURE;
-	}
-	if (ZEND_NATIVE_FRAME_PREPARED(execute_data)) {
-		return SUCCESS;
-	}
-	op_array = &execute_data->func->op_array;
-	supplied = ZEND_CALL_NUM_ARGS(execute_data);
-	if (op_array->num_args != 0 && op_array->arg_info == NULL) {
-		return FAILURE;
-	}
+	ZEND_ASSERT(ZEND_USER_CODE(execute_data->func->type)
+		&& (op_array->num_args == 0 || op_array->arg_info != NULL));
 	/* RECV opcodes validate in declaration order. In particular, a bad
 	 * supplied argument wins over a later missing argument. */
 	for (ordinal = 0; ordinal < op_array->num_args; ordinal++) {
@@ -1915,11 +1905,11 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 			zend_missing_arg_error(execute_data);
 			return FAILURE;
 		}
-		if (receive->opcode != ZEND_RECV_INIT
-				|| receive->op1.num != ordinal + 1
-				|| receive->op2_type != IS_CONST) {
-			return FAILURE;
-		}
+		/* The compiler emits one RECV or RECV_INIT per parameter, in
+		 * order, a RECV_INIT with its literal default. */
+		ZEND_ASSERT(receive->opcode == ZEND_RECV_INIT
+			&& receive->op1.num == ordinal + 1
+			&& receive->op2_type == IS_CONST);
 		default_value = RT_CONSTANT(receive, receive->op2);
 		if (Z_TYPE_P(default_value) == IS_CONSTANT_AST) {
 			ZVAL_COPY(argument, default_value);
@@ -1995,6 +1985,23 @@ zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
 	return SUCCESS;
 }
 
+/* zend_native_frame_prepare() for a frame of a user function. */
+static zend_always_inline zend_result zend_native_frame_prepare_user(
+	zend_execute_data *execute_data)
+{
+	return ZEND_NATIVE_FRAME_PREPARED(execute_data)
+		? SUCCESS : zend_native_frame_receive(execute_data);
+}
+
+zend_result zend_native_frame_prepare(zend_execute_data *execute_data)
+{
+	if (execute_data == NULL || execute_data->func == NULL
+			|| !ZEND_USER_CODE(execute_data->func->type)) {
+		return FAILURE;
+	}
+	return zend_native_frame_prepare_user(execute_data);
+}
+
 zend_result zend_native_call_prepare_dynamic_frame(
 	zend_native_direct_activation *activation)
 {
@@ -2027,7 +2034,7 @@ zend_result zend_native_call_prepare_dynamic_frame(
 	activation->raw_arguments_owned = false;
 	activation->frame_initialized = true;
 	EG(current_execute_data) = execute_data;
-	if (zend_native_frame_prepare(execute_data) == FAILURE) {
+	if (zend_native_frame_prepare_user(execute_data) == FAILURE) {
 		return FAILURE;
 	}
 	activation->frame_requires_finish = true;
@@ -2221,7 +2228,7 @@ static uint32_t zend_native_call_invoke_user(
 		EG(current_execute_data) = callee;
 		activation->raw_arguments_owned = false;
 		activation->frame_initialized = true;
-		if (!simple && zend_native_frame_prepare(callee) == FAILURE) {
+		if (!simple && zend_native_frame_prepare_user(callee) == FAILURE) {
 			return 1;
 		}
 		activation->frame_requires_finish = true;
@@ -2401,7 +2408,7 @@ static uint32_t zend_native_call_fast_prepare(zend_execute_data *callee)
 	EG(current_execute_data) = caller;
 	zend_init_func_execute_data(
 		callee, &callee->func->op_array, callee->return_value);
-	return zend_native_frame_prepare(callee) == SUCCESS
+	return zend_native_frame_prepare_user(callee) == SUCCESS
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 }
 
@@ -5056,13 +5063,22 @@ static bool zend_native_call_fast_site_persistent(
 /* Arms a site published or re-armed now with the callee's run-time cache
  * of this request: a persistent site holds its target, but not the cache,
  * until zend_native_call_persistent_sites_invalidate(), which resetting its
- * cell runs. */
+ * cell runs. A re-arm keeps every fact zend_native_call_fast_site_persistent()
+ * reads (a closure caller's copies are closures, too): a site its
+ * publication armed request-local stays so, and only one armed persistent,
+ * whose persistent sites were invalidated since, is asked again. */
 static void zend_native_call_fast_site_arm(
 	const zend_op_array *caller,
 	const zend_native_user_call_descriptor *descriptor,
-	zend_native_user_call_site_header *header, void **run_time_cache)
+	zend_native_user_call_site_header *header, void **run_time_cache,
+	bool published)
 {
-	if (!zend_native_call_fast_site_persistent(caller, descriptor, header)) {
+	if ((!published
+				&& (header->fast_flags & ZEND_NATIVE_CALL_FAST_PERSISTENT)
+					== 0)
+			|| !zend_native_call_fast_site_persistent(
+				caller, descriptor, header)) {
+		header->fast_flags &= ~ZEND_NATIVE_CALL_FAST_PERSISTENT;
 		header->fast_run_time_cache = run_time_cache;
 		header->fast_epoch = zend_native_call_resolution_cache_epoch;
 		return;
@@ -5070,6 +5086,7 @@ static void zend_native_call_fast_site_arm(
 	if (header->fast_cell != NULL) {
 		header->fast_cell->fast_persistent_sites = true;
 	}
+	header->fast_flags |= ZEND_NATIVE_CALL_FAST_PERSISTENT;
 	header->fast_run_time_cache = NULL;
 	header->fast_epoch = zend_native_call_resolution_cache_epoch | UINT32_MAX;
 }
@@ -5285,7 +5302,7 @@ static void zend_native_call_fast_publish_internal(
 	header->fast_flags = ZEND_NATIVE_CALL_FAST_INTERNAL | static_mode;
 	header->fast_do_entry = (void *) zend_native_call_fast_do_internal;
 	zend_native_call_fast_site_arm(
-		&caller->func->op_array, descriptor, header, NULL);
+		&caller->func->op_array, descriptor, header, NULL, true);
 }
 
 static void zend_native_call_fast_publish(
@@ -5528,7 +5545,7 @@ static void zend_native_call_fast_publish(
 		}
 	}
 	zend_native_call_fast_site_arm(
-		&caller->func->op_array, descriptor, header, run_time_cache);
+		&caller->func->op_array, descriptor, header, run_time_cache, true);
 }
 
 /*
@@ -8595,7 +8612,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	if (context->observers_enabled) {
 		result.entry = zend_native_call_direct_observed_entry;
 	} else if (!trivial_frame
-			&& zend_native_frame_prepare(call) == FAILURE) {
+			&& zend_native_frame_prepare_user(call) == FAILURE) {
 		zend_native_execution_cleanup_frame(call);
 		activation->frame_initialized = false;
 		goto finish;
@@ -10298,7 +10315,7 @@ bool zend_native_call_fast_rearm(
 	}
 	header->fast_checked_epoch = zend_native_call_resolution_cache_epoch;
 	zend_native_call_fast_site_arm(&caller->func->op_array, descriptor,
-		header, header->fast_run_time_cache);
+		header, header->fast_run_time_cache, false);
 	return true;
 }
 

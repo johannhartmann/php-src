@@ -756,6 +756,9 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
  * notify observers, invoke the callee, or establish an inner bailout catcher.
  */
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
+/* zend_native_frame_prepare() for a user frame that
+ * ZEND_NATIVE_FRAME_PREPARED() does not pass. */
+zend_result zend_native_frame_receive(zend_execute_data *execute_data);
 /*
  * Initialize one raw published dynamic user frame and then apply
  * zend_native_frame_prepare(). The resolver guarantees an initialized RTC, so
@@ -925,6 +928,8 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 /* A by-name site of an internal function: the Do runs its handler as
  * ZEND_DO_ICALL does (zend_native_call_fast_do_internal()). */
 #define ZEND_NATIVE_CALL_FAST_INTERNAL UINT32_C(256)
+/* The site was armed persistent (zend_native_call_fast_site_arm()). */
+#define ZEND_NATIVE_CALL_FAST_PERSISTENT UINT32_C(512)
 
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
