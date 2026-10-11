@@ -77,7 +77,8 @@ struct _zend_mir_integration {
 	zend_mir_ssa_site *overlay_ssa_defs;
 	zend_mir_source_opcode_ref *overlay_opcodes;
 	uint8_t *overlay_opcode_valid;
-	uint32_t *overlay_throw_tails;
+	/* Borrowed from the source: oplines after an expression THROW. */
+	const uint8_t *overlay_throw_tails;
 	uint32_t overlay_ssa_use_count;
 	uint32_t overlay_ssa_def_count;
 	uint32_t overlay_fact_count;
@@ -2527,57 +2528,28 @@ static bool zend_mir_close_scalar_overlay(
 }
 
 /*
- * Zend keeps THROW opcodes used as expressions in the same SSA block as the
- * synthetic value/JMP tail.  That false continuation is useful while Zend
- * computes live ranges, but it is not an executable edge: THROW always ends
- * the native block.  Identify the tail so the source-view overlay can hide
- * its opcodes, outgoing edge, and matching PHI input.
+ * Whether a block ends in the never-executed tail of an expression THROW:
+ * its last opline lies in the tail the frontend marked. The source-view
+ * overlay hides the tail's opcodes, its outgoing edge and the matching PHI
+ * input.
  */
-static bool zend_mir_scan_expression_throw_tail(
-	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t block_id,
-	uint32_t *throw_index)
-{
-	const zend_basic_block *block = &ssa->cfg.blocks[block_id];
-	const uint32_t end = block->start + block->len;
-	uint32_t index;
-
-	if (end > op_array->last) {
-		return false;
-	}
-	for (index = block->start; index < end; index++) {
-		if (op_array->opcodes[index].opcode == ZEND_THROW
-				&& op_array->opcodes[index].extended_value
-					== ZEND_THROW_IS_EXPR
-				&& index + 1 < end) {
-			*throw_index = index;
-			return true;
-		}
-	}
-	return false;
-}
-
-/* Reads the expression THROW of each block that prepare_overlay found. */
 static bool zend_mir_expression_throw_tail(
-	const zend_mir_integration *integration, uint32_t block_id,
-	uint32_t *throw_index, uint32_t *block_end)
+	const zend_mir_integration *integration, uint32_t block_id)
 {
 	const zend_ssa *ssa;
 	const zend_basic_block *block;
 
-	if (integration == NULL || throw_index == NULL || block_end == NULL
-			|| integration->overlay_throw_tails == NULL) {
+	if (integration == NULL || integration->overlay_throw_tails == NULL) {
 		return false;
 	}
 	ssa = zend_mir_source_ssa(&integration->source);
-	if (block_id >= (uint32_t) ssa->cfg.blocks_count
-			|| integration->overlay_throw_tails[block_id]
-				== ZEND_MIR_ID_INVALID) {
+	if (block_id >= (uint32_t) ssa->cfg.blocks_count) {
 		return false;
 	}
 	block = &ssa->cfg.blocks[block_id];
-	*throw_index = integration->overlay_throw_tails[block_id];
-	*block_end = block->start + block->len;
-	return true;
+	return block->len != 0
+		&& block->start + block->len <= integration->source.opcode_count
+		&& integration->overlay_throw_tails[block->start + block->len - 1];
 }
 
 static bool zend_mir_prepare_overlay(
@@ -2585,7 +2557,6 @@ static bool zend_mir_prepare_overlay(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa)
 {
-	uint32_t block_index;
 	uint32_t index;
 	uint8_t *crosses_exception_continuation;
 	uint8_t *reference_bound;
@@ -2670,30 +2641,12 @@ static bool zend_mir_prepare_overlay(
 	zend_mir_index_cv_reference_bindings(op_array, reference_bound);
 	integration->overlay_synthetic_one_literal =
 		integration->source.literal_count;
-	integration->overlay_throw_tails = zend_mir_lowering_calloc(
-		ssa->cfg.blocks_count == 0 ? 1 : (uint32_t) ssa->cfg.blocks_count,
-		sizeof(*integration->overlay_throw_tails));
-	if (integration->overlay_throw_tails == NULL) {
-		free(crosses_boundary);
-		free(reference_bound);
-		free(crosses_exception_continuation);
-		return false;
-	}
-	for (block_index = 0;
-			block_index < (uint32_t) ssa->cfg.blocks_count; block_index++) {
-		uint32_t throw_index;
-		uint32_t block_end;
-
-		integration->overlay_throw_tails[block_index] = ZEND_MIR_ID_INVALID;
-		if (!zend_mir_scan_expression_throw_tail(
-				op_array, ssa, block_index, &throw_index)) {
-			continue;
-		}
-		integration->overlay_throw_tails[block_index] = throw_index;
-		block_end = ssa->cfg.blocks[block_index].start
-			+ ssa->cfg.blocks[block_index].len;
-		for (index = throw_index + 1; index < block_end; index++) {
-			integration->overlay_suppressed_opcodes[index] = 1;
+	integration->overlay_throw_tails =
+		zend_mir_zend_source_expression_throw_tails(&integration->source);
+	if (integration->overlay_throw_tails != NULL) {
+		for (index = 0; index < op_array->last; index++) {
+			integration->overlay_suppressed_opcodes[index] |=
+				integration->overlay_throw_tails[index];
 		}
 	}
 	for (index = 0; index < op_array->last; index++) {
@@ -3366,12 +3319,8 @@ static bool zend_mir_overlay_view_edge_is_executable(
 	const zend_mir_integration *integration,
 	const zend_mir_source_edge_ref *edge)
 {
-	uint32_t throw_index;
-	uint32_t block_end;
-
 	return integration != NULL && edge != NULL
-		&& !zend_mir_expression_throw_tail(
-			integration, edge->from_block_id, &throw_index, &block_end);
+		&& !zend_mir_expression_throw_tail(integration, edge->from_block_id);
 }
 
 static uint32_t zend_mir_overlay_view_edge_count(const void *context)
@@ -3399,13 +3348,9 @@ static bool zend_mir_overlay_view_phi_input_is_executable(
 	const zend_mir_integration *integration,
 	const zend_mir_source_phi_input_ref *input)
 {
-	uint32_t throw_index;
-	uint32_t block_end;
-
 	return integration != NULL && input != NULL
 		&& !zend_mir_expression_throw_tail(
-			integration, input->predecessor_block_id,
-			&throw_index, &block_end);
+			integration, input->predecessor_block_id);
 }
 
 static uint32_t zend_mir_overlay_view_phi_input_count(const void *context)
@@ -5241,7 +5186,6 @@ static void zend_mir_release(zend_mir_integration *integration)
 	free(integration->overlay_inferred_fact_valid);
 	free(integration->overlay_inferred_facts);
 	free(integration->overlay_fact_modes);
-	free(integration->overlay_throw_tails);
 	free(integration->overlay_opcode_valid);
 	free(integration->overlay_opcodes);
 	free(integration->overlay_ssa_defs);

@@ -1136,51 +1136,6 @@ static int zend_mir_compare_u32(const void *left, const void *right)
 	return a < b ? -1 : a > b;
 }
 
-/*
- * Zend deliberately keeps the synthetic value/JMP tail following a THROW
- * expression in the same SSA block.  It is useful to Zend's live-range
- * analysis, but THROW is still the owning native terminator, so none of the
- * tail opcodes may be staged as executable value operations.
- */
-static bool zend_mir_mark_expression_throw_tails(
-	const zend_op_array *op_array, const zend_ssa *ssa, uint8_t *tails)
-{
-	uint32_t block_index;
-
-	if (op_array == NULL || ssa == NULL || tails == NULL
-			|| ssa->cfg.blocks == NULL || ssa->cfg.blocks_count == 0) {
-		return false;
-	}
-	for (block_index = 0;
-			block_index < ssa->cfg.blocks_count; block_index++) {
-		const zend_basic_block *block = &ssa->cfg.blocks[block_index];
-		uint32_t index;
-		uint32_t end;
-		bool terminated = false;
-
-		if ((block->flags & ZEND_BB_REACHABLE) == 0) {
-			continue;
-		}
-		if (block->start > op_array->last
-				|| block->len > op_array->last - block->start) {
-			return false;
-		}
-		end = block->start + block->len;
-		for (index = block->start; index < end; index++) {
-			if (terminated) {
-				tails[index] = 1;
-				continue;
-			}
-			if (op_array->opcodes[index].opcode == ZEND_THROW
-					&& op_array->opcodes[index].extended_value
-						== ZEND_THROW_IS_EXPR) {
-				terminated = true;
-			}
-		}
-	}
-	return true;
-}
-
 static bool zend_mir_freeze_suspend_liveness(
 	const zend_op_array *op_array,
 	const zend_ssa *ssa,
@@ -1652,7 +1607,7 @@ bool zend_mir_emit_executable_values(
 	uint32_t *ssa_by_storage;
 	uint32_t *argument_by_ssa;
 	uint8_t *machine_defined_values;
-	uint8_t *expression_throw_tails = NULL;
+	const uint8_t *expression_throw_tails = NULL;
 	zend_mir_value_mutator *value_mutator;
 	zend_mir_mutator *mutator;
 	uint32_t operation_count = 0;
@@ -1762,15 +1717,13 @@ bool zend_mir_emit_executable_values(
 				mir_block_by_source, source_block_count)) {
 		goto done;
 	}
-	if (op_array->last != 0) {
-		expression_throw_tails = zend_mir_value_calloc(
-			op_array->last, sizeof(*expression_throw_tails));
-		if (expression_throw_tails == NULL
-				|| !zend_mir_mark_expression_throw_tails(
-					op_array, semantic_ssa, expression_throw_tails)) {
-			goto done;
-		}
-	}
+	/*
+	 * Zend keeps the synthetic value/JMP tail after a THROW expression in the
+	 * THROW's block. THROW still ends the native block, so none of the tail
+	 * opcodes may be staged as executable value operations.
+	 */
+	expression_throw_tails = zend_mir_zend_source_expression_throw_tails(
+		lowering_context->zend_source);
 	for (index = 0; index < view->instruction_count(view->context); index++) {
 		zend_mir_instruction_record instruction;
 		uint32_t value_index;
@@ -2185,7 +2138,6 @@ bool zend_mir_emit_executable_values(
 
 done:
 	free(mir_block_by_source);
-	free(expression_throw_tails);
 	free(machine_defined_values);
 	free(ssa_by_storage);
 	free(control_instruction_by_source);

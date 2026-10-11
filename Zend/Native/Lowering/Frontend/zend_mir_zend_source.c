@@ -23,6 +23,9 @@ typedef struct _zend_mir_frontend_call_inventory {
 	uint32_t parameter_mode_capacity;
 	uint32_t base_value_fact_count;
 	uint32_t result_fact_count;
+	/* Per opline: in the tail after an expression THROW; NULL when no block
+	 * has one. */
+	uint8_t *expression_throw_tails;
 } zend_mir_frontend_call_inventory;
 
 typedef struct _zend_mir_frontend_phi_index {
@@ -147,6 +150,7 @@ static void zend_mir_frontend_release_call_inventory(
 	if (inventory == NULL) {
 		return;
 	}
+	free(inventory->expression_throw_tails);
 	free(inventory->arguments);
 	free(inventory->parameter_modes);
 	free(inventory->targets);
@@ -2797,6 +2801,65 @@ static void zend_mir_frontend_attach_call_inventory(
 	source->calls_enabled = true;
 }
 
+/*
+ * Zend keeps THROW opcodes used as expressions in the same SSA block as the
+ * synthetic value/JMP tail that follows them. The tail is useful to Zend's
+ * live-range analysis, but THROW always ends the native block: the tail
+ * oplines never execute and its outgoing edge is not executable. Marks the
+ * oplines after the first expression THROW of every block, reachable or
+ * not, in one per-opline table that the call inventory, the source-view
+ * overlay and the value lowering share. *tails_out stays NULL when no block
+ * has a tail.
+ */
+static bool zend_mir_frontend_mark_expression_throw_tails(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint8_t **tails_out)
+{
+	uint8_t *tails = NULL;
+	uint32_t block_index;
+
+	*tails_out = NULL;
+	for (block_index = 0; block_index < (uint32_t) ssa->cfg.blocks_count;
+			block_index++) {
+		const zend_basic_block *block = &ssa->cfg.blocks[block_index];
+		const uint32_t end = (uint32_t) block->start + (uint32_t) block->len;
+		uint32_t index;
+
+		if (end > op_array->last) {
+			continue;
+		}
+		for (index = (uint32_t) block->start; index + 1 < end; index++) {
+			if (op_array->opcodes[index].opcode != ZEND_THROW
+					|| op_array->opcodes[index].extended_value
+						!= ZEND_THROW_IS_EXPR) {
+				continue;
+			}
+			if (tails == NULL) {
+				tails = calloc(op_array->last, sizeof(*tails));
+				if (tails == NULL) {
+					return false;
+				}
+			}
+			memset(&tails[index + 1], 1, end - index - 1);
+			break;
+		}
+	}
+	*tails_out = tails;
+	return true;
+}
+
+const uint8_t *zend_mir_zend_source_expression_throw_tails(
+	const zend_mir_zend_source *source)
+{
+	const zend_mir_frontend_call_inventory *inventory;
+
+	if (!zend_mir_source_is_initialized(source)
+			|| source->call_inventory == NULL) {
+		return NULL;
+	}
+	inventory = source->call_inventory;
+	return inventory->expression_throw_tails;
+}
+
 static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 	zend_mir_zend_source *source, const zend_script *script,
 	const zend_op_array *op_array, const zend_ssa *ssa,
@@ -2805,7 +2868,7 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 	zend_mir_frontend_call_inventory *inventory;
 	zend_mir_source_call_site_id *stack;
 	uint8_t *discarded_sites = NULL;
-	uint32_t throw_tail_block = ZEND_MIR_ID_INVALID;
+	const uint8_t *throw_tails;
 	uint32_t stack_count = 0;
 	uint32_t index;
 
@@ -2841,7 +2904,9 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 		op_array->last == 0 ? 1 : op_array->last,
 		sizeof(*inventory->arguments));
 	if (inventory->sites == NULL || inventory->targets == NULL
-			|| inventory->arguments == NULL) {
+			|| inventory->arguments == NULL
+			|| !zend_mir_frontend_mark_expression_throw_tails(
+				op_array, ssa, &inventory->expression_throw_tails)) {
 		free(discarded_sites);
 		free(stack);
 		zend_mir_frontend_release_call_inventory(inventory);
@@ -2852,6 +2917,7 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			ZEND_MIR_ID_INVALID);
 		return ZEND_MIR_LOWERING_FAILED;
 	}
+	throw_tails = inventory->expression_throw_tails;
 
 	for (index = 0; index < op_array->last; index++) {
 		const zend_op *opline = &op_array->opcodes[index];
@@ -2861,7 +2927,7 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 					& ZEND_BB_REACHABLE) == 0) {
 			continue;
 		}
-		if (block_id == throw_tail_block && stack_count == 0) {
+		if (throw_tails != NULL && throw_tails[index] && stack_count == 0) {
 			continue;
 		}
 		if (opline->opcode == ZEND_THROW
@@ -2891,7 +2957,6 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			if (!retain_new) {
 				stack_count = 0;
 			}
-			throw_tail_block = block_id;
 			continue;
 		}
 		if (zend_mir_frontend_is_call_init(opline->opcode)) {
@@ -2939,7 +3004,7 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 				}
 			}
 			stack[stack_count++] = inventory->site_count++;
-			if (block_id == throw_tail_block) {
+			if (throw_tails != NULL && throw_tails[index]) {
 				discarded_sites[site->id] = 1;
 			}
 			continue;

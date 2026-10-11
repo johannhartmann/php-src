@@ -120,6 +120,14 @@ bool zend_mir_zend_source_return_source_zval(
 	const zend_mir_zend_source *source,
 	uint32_t return_opline_index);
 
+/*
+ * Per opline of the source's op_array: whether it follows an expression
+ * THROW in its block, a tail that never executes. NULL when no block has
+ * such a tail.
+ */
+const uint8_t *zend_mir_zend_source_expression_throw_tails(
+	const zend_mir_zend_source *source);
+
 /* Resolve the innermost source-backed catch entry for a throwing opline. */
 bool zend_mir_zend_source_exception_handler(
 	const zend_mir_zend_source *source,
