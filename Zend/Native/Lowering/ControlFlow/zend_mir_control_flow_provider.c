@@ -479,10 +479,15 @@ bool zend_mir_emit_terminator(
 		&& kind != ZEND_MIR_BRANCH_FINALLY_CALL
 		&& kind != ZEND_MIR_BRANCH_ITERATOR
 		&& kind != ZEND_MIR_BRANCH_MULTIWAY;
+#if !defined(NDEBUG)
+	/* Validation proved the edge count against the same terminator: the
+	 * block's last non-NOP opcode, which lowering reaches as the branch it
+	 * stops at, or a non-branch when it finds none. */
 	if (!zend_mir_branch_edge_count_is_valid(
 			kind, opcode == NULL ? 0 : opcode->zend_opcode_number, edge_count)) {
 		return false;
 	}
+#endif
 	if (kind == ZEND_MIR_BRANCH_THROW) {
 		zend_mir_effect_summary summary;
 		zend_mir_frame_state_id frame_id;

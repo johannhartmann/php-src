@@ -373,8 +373,10 @@ static bool zend_mir_frontend_cfg_dominates(
 	const zend_cfg *cfg, uint32_t dominator, uint32_t block);
 static bool zend_mir_frontend_cfg_has_protected_root(
 	const zend_cfg *cfg, uint32_t block);
+#if !defined(NDEBUG)
 static bool zend_mir_frontend_cfg_has_valid_roots(
 	const zend_cfg *cfg, bool allow_protected_regions);
+#endif
 static bool zend_mir_frontend_build_phi_index(
 	zend_mir_zend_source *source,
 	const zend_op_array *original_op_array,
@@ -464,14 +466,18 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg(
 		for (j = 0; j < block->predecessors_count; j++) {
 			uint32_t offset = (uint32_t) block->predecessor_offset + j;
 			int predecessor = ssa->cfg.predecessors[offset];
+#if !defined(NDEBUG)
 			uint32_t successor;
 			bool reciprocal = false;
+#endif
 			if (predecessor < 0
 					|| (uint32_t) predecessor >= ssa->cfg.blocks_count
 					|| (ssa->cfg.blocks[predecessor].flags
 						& ZEND_BB_REACHABLE) == 0) {
 				goto malformed;
 			}
+#if !defined(NDEBUG)
+			/* Zend's CFG builder records every edge in both lists. */
 			for (successor = 0;
 				successor < ssa->cfg.blocks[predecessor].successors_count;
 				successor++) {
@@ -484,12 +490,17 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg(
 			if (!reciprocal) {
 				goto malformed;
 			}
+#endif
 		}
+#if !defined(NDEBUG)
+		/* The block map is the inverse of the blocks' ranges by
+		 * construction; release builds only keep the map in range below. */
 		for (j = 0; j < block->len; j++) {
 			if (ssa->cfg.map[block->start + j] != i) {
 				goto malformed;
 			}
 		}
+#endif
 		if (edges > UINT32_MAX - block->successors_count) {
 			goto malformed;
 		}
@@ -553,10 +564,14 @@ static zend_mir_lowering_status zend_mir_frontend_validate_cfg(
 	if (edges != ssa->cfg.edges_count) {
 		goto malformed;
 	}
+#if !defined(NDEBUG)
+	/* Zend's dominator tree has no cycles, and the idom range check above
+	 * already rejects a chain that leaves the CFG. */
 	if (!zend_mir_frontend_cfg_has_valid_roots(
 			&ssa->cfg, allow_protected_regions)) {
 		goto malformed;
 	}
+#endif
 	for (i = 0; i < op_array->last; i++) {
 		if (ssa->cfg.map[i] >= ssa->cfg.blocks_count) {
 			goto malformed;
@@ -1069,6 +1084,7 @@ static bool zend_mir_frontend_cfg_dominates(
 	return false;
 }
 
+#if !defined(NDEBUG)
 static bool zend_mir_frontend_cfg_has_valid_roots(
 	const zend_cfg *cfg, bool allow_protected_regions)
 {
@@ -1143,6 +1159,7 @@ static bool zend_mir_frontend_cfg_has_valid_roots(
 	free(states);
 	return result;
 }
+#endif
 
 static bool zend_mir_frontend_cfg_has_protected_root(
 	const zend_cfg *cfg, uint32_t block)
