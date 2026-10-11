@@ -749,28 +749,6 @@ static bool zend_native_compiler_module_finalize(
 		&& zend_mir_module_finalize(module);
 }
 
-static bool zend_native_compiler_verify_stage1(
-	void *context, const zend_mir_view *view,
-	zend_mir_diagnostic_sink *diagnostics)
-{
-	zend_native_compiler_module_context *module_context = context;
-
-	return module_context->compiler->fault
-			!= ZEND_NATIVE_COMPILE_FAULT_STAGE1_VERIFY
-		&& zend_mir_verify_stage1(view, diagnostics);
-}
-
-static bool zend_native_compiler_verify_stage2(
-	void *context, const zend_mir_view *view,
-	zend_mir_diagnostic_sink *diagnostics)
-{
-	zend_native_compiler_module_context *module_context = context;
-
-	return module_context->compiler->fault
-			!= ZEND_NATIVE_COMPILE_FAULT_STAGE2_VERIFY
-		&& zend_mir_verify_scalar_module(view, diagnostics);
-}
-
 static zend_native_compiled_function *zend_native_compiler_find_function(
 	const zend_native_compiler *compiler, const zend_op_array *op_array)
 {
@@ -1879,8 +1857,6 @@ static bool zend_native_compiler_lower_function(
 	module_ops.mutator = zend_native_compiler_module_mutator;
 	module_ops.view = zend_native_compiler_module_view;
 	module_ops.finalize = zend_native_compiler_module_finalize;
-	module_ops.verify_stage1 = zend_native_compiler_verify_stage1;
-	module_ops.verify_stage2 = zend_native_compiler_verify_stage2;
 	memset(&diagnostics, 0, sizeof(diagnostics));
 	diagnostics.context = compiler;
 	diagnostics.emit = zend_native_compiler_emit_mir_diagnostic;

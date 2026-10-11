@@ -30,8 +30,7 @@
  *     compiler_mode?: "ignore_user_functions",
  *     stack_probe?: true,
  *     fault?: null|"compile_bailout"|"ssa_failure"|"lower_failure"|
- *         "module_oom"|"finalize_failure"|"stage1_verifier_failure"|
- *         "stage2_verifier_failure"|"dump_failure"|"mapping_failure"|
+ *         "module_oom"|"finalize_failure"|"dump_failure"|"mapping_failure"|
  *         "entry_publish_failure"
  * }
  *

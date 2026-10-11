@@ -5194,33 +5194,6 @@ static bool zend_mir_lowering_module_finalize(
 		integration->target_module_ops.context, module);
 }
 
-static bool zend_mir_lowering_verify_stage1(
-	void *context, const zend_mir_view *view,
-	zend_mir_diagnostic_sink *diagnostics)
-{
-	zend_mir_integration *integration = context;
-	if (integration->deferred_finalize) {
-		/* Calls and catch entries are published before structural verification. */
-		return true;
-	}
-
-	return integration->target_module_ops.verify_stage1(
-		integration->target_module_ops.context, view, diagnostics);
-}
-
-static bool zend_mir_verify_stage2(
-	void *context, const zend_mir_view *view,
-	zend_mir_diagnostic_sink *diagnostics)
-{
-	zend_mir_integration *integration = context;
-	if (integration->deferred_finalize) {
-		return true;
-	}
-
-	return integration->target_module_ops.verify_stage2(
-		integration->target_module_ops.context, view, diagnostics);
-}
-
 static void zend_mir_prepare_module_ops(
 	zend_mir_integration *integration,
 	const zend_mir_lowering_module_ops *target)
@@ -5233,8 +5206,6 @@ static void zend_mir_prepare_module_ops(
 	integration->module_ops.mutator = zend_mir_module_mutator;
 	integration->module_ops.view = zend_mir_module_view;
 	integration->module_ops.finalize = zend_mir_lowering_module_finalize;
-	integration->module_ops.verify_stage1 = zend_mir_lowering_verify_stage1;
-	integration->module_ops.verify_stage2 = zend_mir_verify_stage2;
 }
 
 static void zend_mir_release(zend_mir_integration *integration)

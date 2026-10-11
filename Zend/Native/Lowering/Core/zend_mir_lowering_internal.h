@@ -80,10 +80,6 @@ typedef struct _zend_mir_lowering_module_ops {
 	zend_mir_mutator *(*mutator)(void *context, zend_mir_module *module);
 	const zend_mir_view *(*view)(void *context, const zend_mir_module *module);
 	bool (*finalize)(void *context, zend_mir_module *module);
-	bool (*verify_stage1)(void *context, const zend_mir_view *view,
-		zend_mir_diagnostic_sink *diagnostics);
-	bool (*verify_stage2)(void *context, const zend_mir_view *view,
-		zend_mir_diagnostic_sink *diagnostics);
 } zend_mir_lowering_module_ops;
 
 typedef struct _zend_mir_lowering_dispatch_entry {

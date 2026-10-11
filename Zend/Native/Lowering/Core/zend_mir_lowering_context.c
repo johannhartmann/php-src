@@ -49,8 +49,7 @@ bool zend_mir_lowering_context_init(zend_mir_lowering_context *context,
 			|| !registry->complete || module_ops == NULL
 			|| module_ops->create == NULL || module_ops->destroy == NULL
 			|| module_ops->mutator == NULL || module_ops->view == NULL
-			|| module_ops->finalize == NULL || module_ops->verify_stage1 == NULL
-			|| module_ops->verify_stage2 == NULL
+			|| module_ops->finalize == NULL
 			|| !zend_mir_id_is_valid(module_id)
 			|| !zend_mir_id_is_valid(function_symbol_id)
 			|| (limits != NULL && !zend_mir_lowering_limits_are_valid(limits))) {

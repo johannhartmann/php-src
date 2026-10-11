@@ -1291,18 +1291,8 @@ zend_mir_lowering_result zend_mir_lower_control_flow_zend_source(
 			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE1_VERIFY_FAILED);
 	}
 #if !defined(NDEBUG)
-	if (!context->module_ops.verify_stage1(
-			context->module_ops.context, view, context->diagnostics)) {
-		return zend_mir_abort(
-			context, module, &storage, &phi_analysis,
-			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE1_VERIFY_FAILED);
-	}
-	if (!context->module_ops.verify_stage2(
-			context->module_ops.context, view, context->diagnostics)) {
-		return zend_mir_abort(
-			context, module, &storage, &phi_analysis,
-			ZEND_MIR_LOWERING_FAILED, ZEND_MIRL_STAGE2_VERIFY_FAILED);
-	}
+	/* The structural and scalar checks of the whole module run on the final
+	 * composition, after calls and value operations are published. */
 	if (!zend_mir_verify_control_flow_tables(
 			view, context->source, &storage.public_map, context->diagnostics)) {
 		return zend_mir_abort(
