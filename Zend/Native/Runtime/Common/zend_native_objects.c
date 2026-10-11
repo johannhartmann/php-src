@@ -33,14 +33,6 @@ typedef struct _zend_native_explicit_object_operation {
 	uint32_t source_position_id;
 } zend_native_explicit_object_operation;
 
-static zend_always_inline bool zend_native_object_decode_explicit_operand(
-	zend_execute_data *execute_data, uint64_t encoded,
-	uint8_t *operand_type, znode_op *operand)
-{
-	return zend_native_decode_explicit_operand(
-		execute_data, encoded, operand_type, operand);
-}
-
 static bool zend_native_object_init_explicit_operation(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -55,11 +47,11 @@ static bool zend_native_object_init_explicit_operation(
 		&& ZEND_USER_CODE(execute_data->func->type)
 		&& source_position_id < execute_data->func->op_array.last);
 	(void) source_opcode;
-	if (!zend_native_object_decode_explicit_operand(
+	if (!zend_native_decode_explicit_operand(
 				execute_data, op1, &operation->op1_type, &operation->op1)
-			|| !zend_native_object_decode_explicit_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, op2, &operation->op2_type, &operation->op2)
-			|| !zend_native_object_decode_explicit_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, result,
 				&operation->result_type, &operation->result)) {
 		return false;
@@ -82,42 +74,16 @@ static bool zend_native_object_init_explicit_assignment(
 	return zend_native_object_init_explicit_operation(
 			execute_data, op1, op2, result, extended_value, source_opcode,
 			source_position_id, expected_opcode, operation)
-		&& zend_native_object_decode_explicit_operand(
+		&& zend_native_decode_explicit_operand(
 			execute_data, auxiliary, &operation->auxiliary_type,
 			&operation->auxiliary)
 		&& operation->auxiliary_type != IS_UNUSED;
 }
 
-static zval *zend_native_object_slot(
-	zend_execute_data *execute_data, uint8_t type, znode_op operand)
-{
-	type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
-	if (type != IS_CV && type != IS_VAR && type != IS_TMP_VAR) {
-		return NULL;
-	}
-	return ZEND_CALL_VAR(execute_data, operand.var);
-}
-
-static zval *zend_native_object_read_explicit(
-	zend_execute_data *execute_data, uint8_t type, znode_op operand)
-{
-	zval *value;
-
-	if (type == IS_CONST) {
-		return operand.constant < execute_data->func->op_array.last_literal
-			? &execute_data->func->op_array.literals[operand.constant] : NULL;
-	}
-	value = zend_native_object_slot(execute_data, type, operand);
-	if (value != NULL && type == IS_VAR && Z_TYPE_P(value) == IS_INDIRECT) {
-		value = Z_INDIRECT_P(value);
-	}
-	return value;
-}
-
 static zval *zend_native_object_read_r_explicit(
 	zend_execute_data *execute_data, uint8_t type, znode_op operand)
 {
-	zval *value = zend_native_object_read_explicit(
+	zval *value = zend_native_operand_read(
 		execute_data, type, operand);
 
 	if (value != NULL && type == IS_CV
@@ -132,7 +98,7 @@ static zval *zend_native_object_read_r_source_explicit(
 	const zend_native_explicit_object_operation *operation,
 	uint8_t type, znode_op operand)
 {
-	zval *value = zend_native_object_read_explicit(
+	zval *value = zend_native_operand_read(
 		execute_data, type, operand);
 
 	/* Only the warning of an undefined CV can raise; helpers are entered
@@ -158,7 +124,7 @@ static zval *zend_native_object_receiver_explicit(
 	if (operation->op1_type == IS_UNUSED) {
 		receiver = &execute_data->This;
 	} else {
-		receiver = zend_native_object_read_explicit(
+		receiver = zend_native_operand_read(
 			execute_data, operation->op1_type, operation->op1);
 	}
 	if (receiver != NULL && Z_ISREF_P(receiver)) {
@@ -217,23 +183,6 @@ static void zend_native_object_replace(zval *target, zval *value)
 	ZVAL_COPY_DEREF(target, value);
 }
 
-static void zend_native_object_consume(
-	zend_execute_data *execute_data, uint8_t type, znode_op operand,
-	const zval *preserve)
-{
-	zval *slot;
-
-	type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
-	if (type != IS_TMP_VAR && type != IS_VAR) {
-		return;
-	}
-	slot = zend_native_object_slot(execute_data, type, operand);
-	if (slot != NULL && slot != preserve && !Z_ISUNDEF_P(slot)) {
-		zval_ptr_dtor_nogc(slot);
-		ZVAL_UNDEF(slot);
-	}
-}
-
 static void zend_native_object_consume_fetch_receiver(
 	zend_execute_data *execute_data, uint8_t type, znode_op operand,
 	zval *result)
@@ -242,11 +191,11 @@ static void zend_native_object_consume_fetch_receiver(
 
 	type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
 	if (type != IS_VAR) {
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, type, operand, result);
 		return;
 	}
-	slot = zend_native_object_slot(execute_data, type, operand);
+	slot = zend_native_operand_slot(execute_data, type, operand);
 	if (slot == NULL || slot == result || Z_ISUNDEF_P(slot)) {
 		return;
 	}
@@ -293,7 +242,7 @@ zend_native_status zend_native_throw_source_zval(
 			|| execute_data == NULL || execute_data->func == NULL
 			|| !ZEND_USER_CODE(execute_data->func->type)
 			|| source_position_id >= execute_data->func->op_array.last
-			|| !zend_native_object_decode_explicit_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, encoded_operand, &operand_type, &operand)
 			|| (operand_type != IS_CONST
 				&& operand_type != IS_TMP_VAR
@@ -304,7 +253,7 @@ zend_native_status zend_native_throw_source_zval(
 	}
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
-	value = zend_native_object_read_explicit(
+	value = zend_native_operand_read(
 		execute_data, operand_type, operand);
 	if (value == NULL) {
 		zend_throw_error(NULL, "Malformed native throw operand");
@@ -323,14 +272,14 @@ zend_native_status zend_native_throw_source_zval(
 	}
 	if (Z_TYPE_P(value) != IS_OBJECT) {
 		zend_throw_error(NULL, "Can only throw objects");
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operand_type, operand, NULL);
 		return zend_native_throw_exception_status(
 			execute_data, source_position_id);
 	}
 	Z_TRY_ADDREF_P(value);
 	zend_throw_exception_object(value);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operand_type, operand, NULL);
 	return zend_native_throw_exception_status(
 		execute_data, source_position_id);
@@ -343,9 +292,9 @@ static zend_native_status zend_native_declare_anon_class(
 	zend_class_entry *class_entry;
 	zend_string *runtime_key;
 	zval *class_slot;
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
-	zval *runtime_key_value = zend_native_object_read_explicit(
+	zval *runtime_key_value = zend_native_operand_read(
 		execute_data, operation->op1_type, operation->op1);
 
 	if (result == NULL || operation->op1_type != IS_CONST
@@ -363,7 +312,7 @@ static zend_native_status zend_native_declare_anon_class(
 	class_entry = Z_CE_P(class_slot);
 	if ((class_entry->ce_flags & ZEND_ACC_LINKED) == 0) {
 		zval *parent = operation->op2_type == IS_CONST
-			? zend_native_object_read_explicit(
+			? zend_native_operand_read(
 				execute_data, operation->op2_type, operation->op2)
 			: NULL;
 		zend_string *parent_name;
@@ -393,7 +342,7 @@ static zend_native_status zend_native_declare_function(
 {
 	zend_op_array *op_array;
 	zend_function *function;
-	zval *name = zend_native_object_read_explicit(
+	zval *name = zend_native_operand_read(
 		execute_data, operation->op1_type, operation->op1);
 
 	if (execute_data->func == NULL
@@ -426,7 +375,7 @@ static zend_native_status zend_native_declare_class(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zval *class_name = zend_native_object_read_explicit(
+	zval *class_name = zend_native_operand_read(
 		execute_data, operation->op1_type, operation->op1);
 	zend_string *parent_name = NULL;
 
@@ -439,7 +388,7 @@ static zend_native_status zend_native_declare_class(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (operation->op2_type == IS_CONST) {
-		zval *parent = zend_native_object_read_explicit(
+		zval *parent = zend_native_operand_read(
 			execute_data, operation->op2_type, operation->op2);
 
 		if (parent == NULL || Z_TYPE_P(parent) != IS_STRING) {
@@ -476,9 +425,9 @@ static zend_native_status zend_native_declare_class_delayed(
 		zend_throw_error(NULL, "Malformed delayed native class declaration");
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	lowercase_name = zend_native_object_read_explicit(
+	lowercase_name = zend_native_operand_read(
 		execute_data, operation->op1_type, operation->op1);
-	parent = zend_native_object_read_explicit(
+	parent = zend_native_operand_read(
 		execute_data, operation->op2_type, operation->op2);
 	if (lowercase_name == NULL || parent == NULL
 			|| Z_TYPE_P(lowercase_name) != IS_STRING
@@ -513,7 +462,7 @@ static zend_native_status zend_native_declare_lambda(
 	zend_function *function;
 	zend_class_entry *called_scope;
 	zend_object *receiver = NULL;
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 
 	if (result == NULL || execute_data->func == NULL
@@ -549,11 +498,11 @@ static zend_native_status zend_native_bind_lexical(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zval *closure = zend_native_object_read_explicit(
+	zval *closure = zend_native_operand_read(
 		execute_data, operation->op1_type, operation->op1);
 	zval *variable = (operation->extended_value
 			& (ZEND_BIND_REF | ZEND_BIND_IMPLICIT)) != 0
-		? zend_native_object_read_explicit(
+		? zend_native_operand_read(
 			execute_data, operation->op2_type, operation->op2)
 		: zend_native_object_read_r_source_explicit(
 			execute_data, operation, operation->op2_type, operation->op2);
@@ -591,7 +540,7 @@ static zend_native_status zend_native_bind_static(
 {
 	zend_op_array *op_array = &execute_data->func->op_array;
 	HashTable *static_variables = ZEND_MAP_PTR_GET(op_array->static_variables_ptr);
-	zval *variable = zend_native_object_slot(
+	zval *variable = zend_native_operand_slot(
 		execute_data, operation->op1_type, operation->op1);
 	zval *value;
 	uint32_t offset = operation->extended_value
@@ -636,7 +585,7 @@ static zend_native_status zend_native_bind_static(
 			} else {
 				ZVAL_DEREF(initial);
 				ZVAL_COPY(&reference->val, initial);
-				zend_native_object_consume(execute_data,
+				zend_native_operand_free(execute_data,
 					operation->op2_type, operation->op2, NULL);
 			}
 			reference->sources.ptr = NULL;
@@ -648,7 +597,7 @@ static zend_native_status zend_native_bind_static(
 			Z_ADDREF_P(value);
 			zval_ptr_dtor(variable);
 			ZVAL_REF(variable, Z_REF_P(value));
-			zend_native_object_consume(execute_data,
+			zend_native_operand_free(execute_data,
 				operation->op2_type, operation->op2, NULL);
 		}
 	} else {
@@ -760,7 +709,7 @@ static zend_native_status zend_native_object_fetch_explicit(
 		zend_native_object_receiver_explicit(execute_data, operation);
 	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
@@ -788,7 +737,7 @@ static zend_native_status zend_native_object_fetch_explicit(
 			(void) zend_native_object_bad_receiver(
 				receiver, property, operation->opcode);
 		}
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
 		zend_native_object_consume_fetch_receiver(
 			execute_data, operation->op1_type, operation->op1, result);
@@ -798,7 +747,7 @@ static zend_native_status zend_native_object_fetch_explicit(
 		execute_data, operation, property, &temporary);
 	if (name == NULL) {
 		ZVAL_UNDEF(result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
 		zend_native_object_consume_fetch_receiver(
 			execute_data, operation->op1_type, operation->op1, result);
@@ -866,7 +815,7 @@ static zend_native_status zend_native_object_fetch_explicit(
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
 	zend_native_object_consume_fetch_receiver(
 		execute_data, operation->op1_type, operation->op1, result);
@@ -883,7 +832,7 @@ static zend_native_status zend_native_object_assign_explicit(
 		execute_data, operation, operation->auxiliary_type,
 		operation->auxiliary);
 	zval *result = operation->result_type == IS_UNUSED ? NULL
-		: zend_native_object_slot(
+		: zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
@@ -901,7 +850,7 @@ static zend_native_status zend_native_object_assign_explicit(
 	if (operation->op1_type == IS_UNUSED) {
 		receiver = &execute_data->This;
 	} else {
-		receiver = zend_native_object_read_explicit(
+		receiver = zend_native_operand_read(
 			execute_data, operation->op1_type, operation->op1);
 	}
 	if (receiver != NULL && Z_ISREF_P(receiver)) {
@@ -917,12 +866,12 @@ static zend_native_status zend_native_object_assign_explicit(
 		}
 		status = zend_native_object_bad_receiver(
 			receiver, property, operation->opcode);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->auxiliary_type,
 			operation->auxiliary, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return status;
 	}
@@ -961,11 +910,11 @@ static zend_native_status zend_native_object_assign_explicit(
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->auxiliary_type, operation->auxiliary, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -978,11 +927,11 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 		zend_native_object_receiver_explicit(execute_data, operation);
 	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
-	zval *value = zend_native_object_read_explicit(
+	zval *value = zend_native_operand_read(
 		execute_data, operation->auxiliary_type, operation->auxiliary);
 	zval *assigned = &EG(uninitialized_zval);
 	zval *result = operation->result_type == IS_UNUSED ? NULL
-		: zend_native_object_slot(
+		: zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 	zend_property_info *property_info = NULL;
 	zend_refcounted *garbage = NULL;
@@ -1008,12 +957,12 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 		}
 		status = zend_native_object_bad_receiver(
 			receiver, property, operation->opcode);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->auxiliary_type,
 			operation->auxiliary, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return status;
 	}
@@ -1120,11 +1069,11 @@ reference_assigned:
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->auxiliary_type, operation->auxiliary, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -1148,7 +1097,7 @@ static zend_native_status zend_native_object_assign_op_explicit(
 	zval *read;
 	zend_object *object;
 	zval *result = operation->result_type == IS_UNUSED ? NULL
-		: zend_native_object_slot(
+		: zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
@@ -1178,12 +1127,12 @@ static zend_native_status zend_native_object_assign_op_explicit(
 		}
 		status = zend_native_object_bad_receiver(
 			receiver, property, operation->opcode);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->auxiliary_type,
 			operation->auxiliary, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return status;
 	}
@@ -1261,11 +1210,11 @@ done:
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->auxiliary_type, operation->auxiliary, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -1298,9 +1247,9 @@ static zend_native_status zend_native_object_unset_explicit(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (Z_TYPE_P(receiver) != IS_OBJECT) {
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, NULL);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, NULL);
 		return zend_native_object_status();
 	}
@@ -1313,9 +1262,9 @@ static zend_native_status zend_native_object_unset_explicit(
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, NULL);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, NULL);
 	return zend_native_object_status();
 }
@@ -1328,7 +1277,7 @@ static zend_native_status zend_native_object_isset_explicit(
 		zend_native_object_receiver_explicit(execute_data, operation);
 	zval *property = zend_native_object_read_r_explicit(
 		execute_data, operation->op2_type, operation->op2);
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
@@ -1370,9 +1319,9 @@ static zend_native_status zend_native_object_isset_explicit(
 		}
 	}
 	ZVAL_BOOL(result, isempty ^ found);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -1384,10 +1333,10 @@ static zend_native_status zend_native_object_incdec_explicit(
 {
 	zval *receiver =
 		zend_native_object_receiver_explicit(execute_data, operation);
-	zval *property = zend_native_object_read_explicit(
+	zval *property = zend_native_operand_read(
 		execute_data, operation->op2_type, operation->op2);
 	zval *result = operation->result_type == IS_UNUSED ? NULL
-		: zend_native_object_slot(
+		: zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 	zend_string *temporary = NULL;
 	zend_string *name;
@@ -1426,9 +1375,9 @@ static zend_native_status zend_native_object_incdec_explicit(
 		}
 		status = zend_native_object_bad_receiver(
 			receiver, property, operation->opcode);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return status;
 	}
@@ -1503,9 +1452,9 @@ complete:
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -1517,7 +1466,7 @@ static zend_native_status zend_native_object_instanceof(
 	/* An undefined CV warns, as ZEND_INSTANCEOF reads BP_VAR_R. */
 	zval *value = zend_native_object_read_r_explicit(
 		execute_data, operation->op1_type, operation->op1);
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zend_class_entry *class_entry = NULL;
 
@@ -1536,7 +1485,7 @@ static zend_native_status zend_native_object_instanceof(
 			? (void **) ((char *) execute_data->run_time_cache
 				+ operation->extended_value)
 			: NULL;
-		zval *name = zend_native_object_read_explicit(
+		zval *name = zend_native_operand_read(
 			execute_data, operation->op2_type, operation->op2);
 
 		class_entry = cache_slot != NULL ? *cache_slot : NULL;
@@ -1554,7 +1503,7 @@ static zend_native_status zend_native_object_instanceof(
 	} else if (operation->op2_type == IS_UNUSED) {
 		class_entry = zend_fetch_class(NULL, operation->op2.num);
 	} else {
-		zval *class_value = zend_native_object_read_explicit(
+		zval *class_value = zend_native_operand_read(
 			execute_data, operation->op2_type, operation->op2);
 		if (class_value != NULL && Z_TYPE_P(class_value) == IS_PTR) {
 			class_entry = Z_PTR_P(class_value);
@@ -1562,7 +1511,7 @@ static zend_native_status zend_native_object_instanceof(
 	}
 	ZVAL_BOOL(result, Z_TYPE_P(value) == IS_OBJECT && class_entry != NULL
 		&& instanceof_function(Z_OBJCE_P(value), class_entry));
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -1573,7 +1522,7 @@ static zend_native_status zend_native_object_clone_explicit(
 {
 	zval *value =
 		zend_native_object_receiver_r_explicit(execute_data, operation);
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zend_object *clone;
 	zend_function *clone_method;
@@ -1589,7 +1538,7 @@ static zend_native_status zend_native_object_clone_explicit(
 		ZVAL_UNDEF(result);
 		zend_type_error("clone(): Argument #1 ($object) must be of type object, %s given",
 			zend_zval_value_name(value));
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -1597,7 +1546,7 @@ static zend_native_status zend_native_object_clone_explicit(
 		ZVAL_UNDEF(result);
 		zend_throw_error(NULL, "Trying to clone an uncloneable object of class %s",
 			ZSTR_VAL(Z_OBJCE_P(value)->name));
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -1609,7 +1558,7 @@ static zend_native_status zend_native_object_clone_explicit(
 			zend_bad_method_call(
 				clone_method, clone_method->common.function_name, scope);
 			ZVAL_UNDEF(result);
-			zend_native_object_consume(
+			zend_native_operand_free(
 				execute_data, operation->op1_type, operation->op1, result);
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -1617,12 +1566,12 @@ static zend_native_status zend_native_object_clone_explicit(
 	clone = Z_OBJ_HT_P(value)->clone_obj(Z_OBJ_P(value));
 	if (clone == NULL) {
 		ZVAL_UNDEF(result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
 	ZVAL_OBJ(result, clone);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -1634,7 +1583,7 @@ static zend_class_entry *zend_native_class_operand_explicit(
 	zend_string *lower_name = NULL;
 
 	if (type == IS_CONST) {
-		class_name = zend_native_object_read_explicit(
+		class_name = zend_native_operand_read(
 			execute_data, type, operand);
 		if (class_name == NULL || Z_TYPE_P(class_name) != IS_STRING) {
 			zend_type_error("Class name must be a valid object or a string");
@@ -1652,7 +1601,7 @@ static zend_class_entry *zend_native_class_operand_explicit(
 	if (type == IS_UNUSED) {
 		return zend_fetch_class(NULL, operand.num);
 	}
-	class_name = zend_native_object_read_explicit(
+	class_name = zend_native_operand_read(
 		execute_data, type, operand);
 	if (class_name == NULL || Z_TYPE_P(class_name) != IS_PTR
 			|| Z_CE_P(class_name) == NULL) {
@@ -1676,7 +1625,7 @@ static zend_string *zend_native_static_name_explicit(
 	const zend_native_explicit_object_operation *operation,
 	zend_string **temporary)
 {
-	zval *name = zend_native_object_read_explicit(
+	zval *name = zend_native_operand_read(
 		execute_data, operation->op1_type, operation->op1);
 
 	*temporary = NULL;
@@ -1826,7 +1775,7 @@ static zend_native_status zend_native_static_fetch_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation, int fetch_type)
 {
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zend_property_info *property_info;
 	zend_string *temporary;
@@ -1865,9 +1814,9 @@ static zend_native_status zend_native_static_fetch_explicit(
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -1879,11 +1828,11 @@ static zend_native_status zend_native_static_assign_explicit(
 	zend_property_info *property_info;
 	zend_string *temporary = NULL;
 	zval *property;
-	zval *value = zend_native_object_read_explicit(
+	zval *value = zend_native_operand_read(
 		execute_data, operation->auxiliary_type, operation->auxiliary);
 	zval *assigned;
 	zval *result = operation->result_type == IS_UNUSED ? NULL
-		: zend_native_object_slot(
+		: zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 	zend_refcounted *garbage = NULL;
 	bool strict = ZEND_CALL_USES_STRICT_TYPES(execute_data);
@@ -1904,12 +1853,12 @@ static zend_native_status zend_native_static_assign_explicit(
 		if (result != NULL) {
 			ZVAL_UNDEF(result);
 		}
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->auxiliary_type,
 			operation->auxiliary, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
@@ -2008,13 +1957,13 @@ static zend_native_status zend_native_static_assign_explicit(
 			ZVAL_UNDEF(value);
 		}
 	} else {
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->auxiliary_type,
 			operation->auxiliary, result);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -2030,7 +1979,7 @@ static zend_native_status zend_native_static_update_explicit(
 		execute_data, operation, BP_VAR_RW, &property_info, &temporary);
 	zval *right;
 	zval *result = operation->result_type == IS_UNUSED ? NULL
-		: zend_native_object_slot(
+		: zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 
 	if (property == NULL || property_info == NULL) {
@@ -2041,13 +1990,13 @@ static zend_native_status zend_native_static_update_explicit(
 			ZVAL_UNDEF(result);
 		}
 		if (assign_op) {
-			zend_native_object_consume(
+			zend_native_operand_free(
 				execute_data, operation->auxiliary_type,
 				operation->auxiliary, result);
 		}
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op2_type, operation->op2, result);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
@@ -2083,13 +2032,13 @@ done:
 		zend_tmp_string_release(temporary);
 	}
 	if (assign_op) {
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->auxiliary_type,
 			operation->auxiliary, result);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -2102,7 +2051,7 @@ static zend_native_status zend_native_static_isset_explicit(
 	zend_string *temporary = NULL;
 	zval *property = zend_native_static_property_explicit(
 		execute_data, operation, BP_VAR_IS, &property_info, &temporary);
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	bool isempty = (operation->extended_value & ZEND_ISEMPTY) != 0;
 	bool value;
@@ -2121,9 +2070,9 @@ static zend_native_status zend_native_static_isset_explicit(
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -2144,9 +2093,9 @@ static zend_native_status zend_native_static_unset_explicit(
 	if (temporary != NULL) {
 		zend_tmp_string_release(temporary);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, NULL);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, NULL);
 	return zend_native_object_status();
 }
@@ -2158,7 +2107,7 @@ static zend_native_status zend_native_class_constant_explicit(
 	zend_class_entry *class_entry;
 	zval *name_value = NULL;
 	zend_string *name = NULL;
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zval *value = NULL;
 	void **cache_slot = NULL;
@@ -2206,7 +2155,7 @@ static zend_native_status zend_native_class_constant_explicit(
 		goto complete;
 	}
 	name_value = operation->op2_type == IS_CONST
-		? zend_native_object_read_explicit(
+		? zend_native_operand_read(
 			execute_data, operation->op2_type, operation->op2)
 		: zend_native_object_read_r_source_explicit(
 			execute_data, operation,
@@ -2294,9 +2243,9 @@ static zend_native_status zend_native_class_constant_explicit(
 cached:
 	ZVAL_COPY_OR_DUP(result, value);
 complete:
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -2305,7 +2254,7 @@ static zend_native_status zend_native_fetch_class_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zval *class_name = NULL;
 	zend_class_entry *class_entry = NULL;
@@ -2317,7 +2266,7 @@ static zend_native_status zend_native_fetch_class_explicit(
 	if (operation->op2_type == IS_UNUSED) {
 		class_entry = zend_fetch_class(NULL, operation->op1.num);
 	} else if (operation->op2_type == IS_CONST) {
-		class_name = zend_native_object_read_explicit(
+		class_name = zend_native_operand_read(
 			execute_data, operation->op2_type, operation->op2);
 		if (Z_TYPE_P(class_name) == IS_STRING) {
 			zend_string *lower_name = NULL;
@@ -2334,7 +2283,7 @@ static zend_native_status zend_native_fetch_class_explicit(
 				"Class name must be a valid object or a string");
 		}
 	} else {
-		class_name = zend_native_object_read_explicit(
+		class_name = zend_native_operand_read(
 			execute_data, operation->op2_type, operation->op2);
 		while (class_name != NULL && Z_ISREF_P(class_name)) {
 			class_name = Z_REFVAL_P(class_name);
@@ -2361,7 +2310,7 @@ static zend_native_status zend_native_fetch_class_explicit(
 	} else {
 		ZVAL_UNDEF(result);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op2_type, operation->op2, result);
 	return zend_native_object_status();
 }
@@ -2370,7 +2319,7 @@ static zend_native_status zend_native_fetch_class_name_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zend_class_entry *scope;
 
@@ -2385,7 +2334,7 @@ static zend_native_status zend_native_fetch_class_name_explicit(
 
 		if (object == NULL) {
 			ZVAL_UNDEF(result);
-			zend_native_object_consume(
+			zend_native_operand_free(
 				execute_data, operation->op1_type, operation->op1, NULL);
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -2397,12 +2346,12 @@ static zend_native_status zend_native_fetch_class_name_explicit(
 			zend_type_error("Cannot use \"::class\" on %s",
 				object == NULL ? "an invalid value" : zend_zval_value_name(object));
 			ZVAL_UNDEF(result);
-			zend_native_object_consume(
+			zend_native_operand_free(
 				execute_data, operation->op1_type, operation->op1, NULL);
 			return ZEND_NATIVE_EXCEPTION;
 		}
 		ZVAL_STR_COPY(result, Z_OBJCE_P(object)->name);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
 	}
@@ -2458,7 +2407,7 @@ static zend_native_status zend_native_get_class_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 	zval *object;
 
@@ -2485,7 +2434,7 @@ static zend_native_status zend_native_get_class_explicit(
 		return ZEND_NATIVE_RETURNED;
 	}
 
-	object = zend_native_object_read_explicit(
+	object = zend_native_operand_read(
 		execute_data, operation->op1_type, operation->op1);
 	while (object != NULL && Z_ISREF_P(object)) {
 		object = Z_REFVAL_P(object);
@@ -2505,7 +2454,7 @@ static zend_native_status zend_native_get_class_explicit(
 		}
 		ZVAL_UNDEF(result);
 	}
-	zend_native_object_consume(
+	zend_native_operand_free(
 		execute_data, operation->op1_type, operation->op1, result);
 	return zend_native_object_status();
 }
@@ -2514,7 +2463,7 @@ static zend_native_status zend_native_fetch_this_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_object_operation *operation)
 {
-	zval *result = zend_native_object_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, operation->result_type, operation->result);
 
 	if (result == NULL || Z_TYPE(execute_data->This) != IS_OBJECT) {
@@ -2825,7 +2774,7 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 	if (fetch_type == BP_VAR_W
 			&& (operation.op1_type == IS_CONST
 				|| operation.op1_type == IS_TMP_VAR)) {
-		result_slot = zend_native_object_slot(
+		result_slot = zend_native_operand_slot(
 			execute_data, operation.result_type, operation.result);
 		if (result_slot == NULL) {
 			return ZEND_NATIVE_EXCEPTION;
@@ -2833,9 +2782,9 @@ zend_native_status zend_native_execute_object_fetch_func_arg(
 		zend_throw_error(NULL,
 			"Cannot use temporary expression in write context");
 		ZVAL_UNDEF(result_slot);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation.op2_type, operation.op2, NULL);
-		zend_native_object_consume(
+		zend_native_operand_free(
 			execute_data, operation.op1_type, operation.op1, NULL);
 		return zend_native_object_status();
 	}

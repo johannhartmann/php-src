@@ -30,6 +30,54 @@
 ZEND_COLD zval *zend_native_undefined_cv(
 	zend_execute_data *execute_data, uint32_t var);
 
+/* The frame slot of a CV, TMP or VAR operand; NULL for a literal or an
+ * unused operand. */
+static zend_always_inline zval *zend_native_operand_slot(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand)
+{
+	if (type != IS_CV && type != IS_VAR && type != IS_TMP_VAR) {
+		return NULL;
+	}
+	return ZEND_CALL_VAR(execute_data, operand.var);
+}
+
+/* An operand's value: its literal, or its slot with a VAR's INDIRECT
+ * followed. NULL for an unused operand. */
+static zend_always_inline zval *zend_native_operand_read(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand)
+{
+	zval *value;
+
+	if (type == IS_CONST) {
+		ZEND_ASSERT(operand.constant
+			< (uint32_t) execute_data->func->op_array.last_literal);
+		return &execute_data->func->op_array.literals[operand.constant];
+	}
+	value = zend_native_operand_slot(execute_data, type, operand);
+	if (value != NULL && type == IS_VAR && Z_TYPE_P(value) == IS_INDIRECT) {
+		value = Z_INDIRECT_P(value);
+	}
+	return value;
+}
+
+/* FREE_OP of a TMP or VAR operand, unless its slot is preserve (a result
+ * that reuses it): the value dies without a GC root check. */
+static inline void zend_native_operand_free(
+	zend_execute_data *execute_data, uint8_t type, znode_op operand,
+	const zval *preserve)
+{
+	zval *slot;
+
+	if (type != IS_TMP_VAR && type != IS_VAR) {
+		return;
+	}
+	slot = ZEND_CALL_VAR(execute_data, operand.var);
+	if (slot != preserve && !Z_ISUNDEF_P(slot)) {
+		zval_ptr_dtor_nogc(slot);
+		ZVAL_UNDEF(slot);
+	}
+}
+
 static zend_always_inline bool zend_native_decode_explicit_operand(
 	const zend_execute_data *execute_data, uint64_t encoded,
 	uint8_t *operand_type, znode_op *operand)

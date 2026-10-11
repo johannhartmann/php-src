@@ -34,9 +34,6 @@ typedef struct _zend_native_explicit_value_operation {
 	uint32_t source_position_id;
 } zend_native_explicit_value_operation;
 
-static zval *zend_native_value_slot(
-	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand);
-
 /*
  * Decode one encoded explicit operand to its zval without building a
  * zend_native_explicit_value_operation. CONST, CV and TMP only; VAR and
@@ -82,14 +79,6 @@ void zend_native_zval_copy_deref_or_dup(zval *target, const zval *source)
 	ZVAL_COPY_OR_DUP(target, source);
 }
 
-static zend_always_inline bool zend_native_value_decode_explicit_operand(
-	zend_execute_data *execute_data, uint64_t encoded,
-	uint8_t *operand_type, znode_op *operand)
-{
-	return zend_native_decode_explicit_operand(
-		execute_data, encoded, operand_type, operand);
-}
-
 static zend_always_inline bool zend_native_value_init_explicit_operation(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,
@@ -100,11 +89,11 @@ static zend_always_inline bool zend_native_value_init_explicit_operation(
 	ZEND_ASSERT(source_opcode == expected_opcode);
 	ZEND_ASSERT(source_position_id < execute_data->func->op_array.last);
 	(void) expected_opcode;
-	if (!zend_native_value_decode_explicit_operand(
+	if (!zend_native_decode_explicit_operand(
 				execute_data, op1, &operation->op1_type, &operation->op1)
-			|| !zend_native_value_decode_explicit_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, op2, &operation->op2_type, &operation->op2)
-			|| !zend_native_value_decode_explicit_operand(
+			|| !zend_native_decode_explicit_operand(
 				execute_data, result,
 				&operation->result_type, &operation->result)) {
 		return false;
@@ -131,32 +120,19 @@ static bool zend_native_value_init_explicit_dim_assignment(
 	return zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result, extended_value, source_opcode,
 			source_position_id, expected_opcode, operation)
-		&& zend_native_value_decode_explicit_operand(
+		&& zend_native_decode_explicit_operand(
 			execute_data, auxiliary, &operation->auxiliary_type,
 			&operation->auxiliary)
 		&& operation->auxiliary_type != IS_UNUSED;
 }
 
-static zval *zend_native_value_read_explicit(
+static zend_always_inline zval *zend_native_value_read_explicit(
 	zend_execute_data *execute_data,
 	const zend_native_explicit_value_operation *operation,
 	uint8_t operand_type, znode_op operand)
 {
-	zval *value;
-
-	if (operand_type == IS_CONST) {
-		ZEND_ASSERT(operand.constant
-			< (uint32_t) execute_data->func->op_array.last_literal);
-		return &execute_data->func->op_array.literals[operand.constant];
-	}
-	value = zend_native_value_slot(
-		execute_data, operand_type, operand);
-	if (value != NULL && operand_type == IS_VAR
-			&& Z_TYPE_P(value) == IS_INDIRECT) {
-		value = Z_INDIRECT_P(value);
-	}
 	(void) operation;
-	return value;
+	return zend_native_operand_read(execute_data, operand_type, operand);
 }
 
 static zend_always_inline zval *zend_native_value_object_dimension_offset(
@@ -194,37 +170,9 @@ static zval *zend_native_value_read_r_explicit(
 	return value;
 }
 
-static zval *zend_native_value_slot(
-	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand)
-{
-	operand_type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
-	if (operand_type != IS_CV && operand_type != IS_VAR
-			&& operand_type != IS_TMP_VAR) {
-		return NULL;
-	}
-	return ZEND_CALL_VAR(execute_data, operand.var);
-}
-
 static zend_native_status zend_native_value_status(void)
 {
 	return EG(exception) == NULL ? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
-}
-
-static void zend_native_value_consume_operand(
-	zend_execute_data *execute_data, uint8_t operand_type, znode_op operand,
-	zval *preserve)
-{
-	zval *slot;
-
-	operand_type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
-	if (operand_type != IS_TMP_VAR && operand_type != IS_VAR) {
-		return;
-	}
-	slot = zend_native_value_slot(execute_data, operand_type, operand);
-	if (slot != NULL && slot != preserve && !Z_ISUNDEF_P(slot)) {
-		zval_ptr_dtor_nogc(slot);
-		ZVAL_UNDEF(slot);
-	}
 }
 
 static void zend_native_value_consume_write_container(
@@ -233,11 +181,10 @@ static void zend_native_value_consume_write_container(
 {
 	zval *container;
 
-	operand_type &= IS_CONST | IS_TMP_VAR | IS_VAR | IS_CV;
 	if (operand_type != IS_VAR) {
 		return;
 	}
-	container = zend_native_value_slot(execute_data, operand_type, operand);
+	container = zend_native_operand_slot(execute_data, operand_type, operand);
 	if (container == NULL || Z_ISUNDEF_P(container)) {
 		return;
 	}
@@ -272,9 +219,9 @@ zend_native_status zend_native_value_make_ref(
 			|| opline->result_type == IS_UNUSED) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	source = zend_native_value_slot(
+	source = zend_native_operand_slot(
 		execute_data, opline->op1_type, opline->op1);
-	result = zend_native_value_slot(
+	result = zend_native_operand_slot(
 		execute_data, opline->result_type, opline->result);
 	if (source == NULL || result == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -329,9 +276,9 @@ zend_native_status zend_native_value_assign_ref(
 			|| (opline->op2_type != IS_CV && opline->op2_type != IS_VAR)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	variable = zend_native_value_slot(
+	variable = zend_native_operand_slot(
 		execute_data, opline->op1_type, opline->op1);
-	value_slot = zend_native_value_slot(
+	value_slot = zend_native_operand_slot(
 		execute_data, opline->op2_type, opline->op2);
 	if (variable == NULL || value_slot == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -389,7 +336,7 @@ zend_native_status zend_native_value_assign_ref(
 		ZVAL_REF(variable, reference);
 	}
 	if (opline->result_type != IS_UNUSED) {
-		zval *result = zend_native_value_slot(
+		zval *result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result == NULL) {
 			return ZEND_NATIVE_EXCEPTION;
@@ -412,9 +359,9 @@ cleanup_operands:
 		ZVAL_UNDEF(value_slot);
 	}
 	if (opline->op1_type == IS_VAR && !Z_ISUNDEF_P(
-			zend_native_value_slot(
+			zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1))) {
-		zval *variable_slot = zend_native_value_slot(
+		zval *variable_slot = zend_native_operand_slot(
 			execute_data, opline->op1_type, opline->op1);
 		zval_ptr_dtor_nogc(variable_slot);
 		ZVAL_UNDEF(variable_slot);
@@ -436,7 +383,7 @@ zend_native_status zend_native_value_separate(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_SEPARATE, &operation)
 			|| opline->op1_type != IS_VAR
-			|| (value = zend_native_value_slot(
+			|| (value = zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -462,9 +409,9 @@ zend_native_status zend_native_value_copy_tmp(
 			|| operation.op1_type != IS_TMP_VAR
 			|| operation.op2_type != IS_UNUSED
 			|| operation.result_type == IS_UNUSED
-			|| (source = zend_native_value_slot(
+			|| (source = zend_native_operand_slot(
 				execute_data, operation.op1_type, operation.op1)) == NULL
-			|| (result = zend_native_value_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, operation.result_type,
 				operation.result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -489,7 +436,7 @@ zend_native_status zend_native_value_free(
 				&& operation.op1_type != IS_VAR)
 			|| operation.op2_type != IS_UNUSED
 			|| operation.result_type != IS_UNUSED
-			|| (value = zend_native_value_slot(
+			|| (value = zend_native_operand_slot(
 				execute_data, operation.op1_type, operation.op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -535,7 +482,7 @@ zend_native_status zend_native_value_echo(
 		}
 		zend_string_release_ex(string, false);
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op1_type, operation.op1, NULL);
 	return zend_native_value_status();
 }
@@ -555,7 +502,7 @@ zend_native_status zend_native_value_func_num_args(
 			|| operation.op1_type != IS_UNUSED
 			|| operation.op2_type != IS_UNUSED
 			|| operation.result_type == IS_UNUSED
-			|| (result = zend_native_value_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, operation.result_type,
 				operation.result)) == NULL
 			|| !Z_ISUNDEF_P(result)) {
@@ -586,7 +533,7 @@ zend_native_status zend_native_value_func_get_args(
 				&& operation.op1_type != IS_CONST)
 			|| operation.op2_type != IS_UNUSED
 			|| operation.result_type == IS_UNUSED
-			|| (result = zend_native_value_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, operation.result_type,
 				operation.result)) == NULL
 			|| !Z_ISUNDEF_P(result)) {
@@ -667,7 +614,7 @@ static bool zend_native_value_result(
 	zval **result)
 {
 	return operation->result_type != IS_UNUSED
-		&& (*result = zend_native_value_slot(
+		&& (*result = zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result)) != NULL
 		&& (operation->result_type == IS_CV || Z_ISUNDEF_P(*result));
 }
@@ -791,7 +738,7 @@ zend_native_status zend_native_value_count(
 	}
 	zend_native_value_prepare_result(&operation, result);
 	ZVAL_LONG(result, count);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op1_type, operation.op1, result);
 	return zend_native_value_status();
 }
@@ -825,7 +772,7 @@ zend_native_status zend_native_value_get_type(
 	} else {
 		ZVAL_STRING(result, "unknown type");
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op1_type, operation.op1, result);
 	return zend_native_value_status();
 }
@@ -915,9 +862,9 @@ zend_native_status zend_native_value_array_key_exists(
 	}
 	zend_native_value_prepare_result(&operation, result);
 	ZVAL_BOOL(result, exists);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op1_type, operation.op1, result);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op2_type, operation.op2, result);
 	return zend_native_value_status();
 }
@@ -1000,7 +947,7 @@ zend_native_status zend_native_value_in_array(
 	}
 	zend_native_value_prepare_result(&operation, result);
 	ZVAL_BOOL(result, found);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op1_type, operation.op1, result);
 	return zend_native_value_status();
 }
@@ -1112,7 +1059,7 @@ zend_native_status zend_native_value_end_silence(
 			&& !E_HAS_ONLY_FATAL_ERRORS(Z_LVAL_P(saved))) {
 		EG(error_reporting) = Z_LVAL_P(saved);
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op1_type, operation.op1, NULL);
 	return ZEND_NATIVE_RETURNED;
 }
@@ -1135,7 +1082,7 @@ zend_native_status zend_native_value_match_error(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	zend_match_unhandled_error(value);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, operation.op1_type, operation.op1, NULL);
 	return ZEND_NATIVE_EXCEPTION;
 }
@@ -1468,7 +1415,7 @@ zend_native_status zend_native_value_unset_cv(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_UNSET_CV, &operation)
 			|| opline->op1_type != IS_CV
-			|| (value = zend_native_value_slot(
+			|| (value = zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -1496,7 +1443,7 @@ zend_native_status zend_native_value_check_var(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_CHECK_VAR, &operation)
 			|| opline->op1_type != IS_CV
-			|| (value = zend_native_value_slot(
+			|| (value = zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -1629,7 +1576,7 @@ static zend_never_inline zend_native_status zend_native_value_assign_general(
 			|| (opline->op1_type != IS_CV && opline->op1_type != IS_VAR)
 			|| (opline->op2_type != IS_CONST && opline->op2_type != IS_TMP_VAR
 				&& opline->op2_type != IS_CV)
-			|| (variable = zend_native_value_slot(
+			|| (variable = zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL
 			|| (value_slot = zend_native_value_read_explicit(
 				execute_data, opline, opline->op2_type, opline->op2)) == NULL) {
@@ -1666,7 +1613,7 @@ static zend_never_inline zend_native_status zend_native_value_assign_general(
 		ZVAL_UNDEF(value_slot);
 	}
 	if (opline->result_type != IS_UNUSED) {
-		result = zend_native_value_slot(
+		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result == NULL) {
 			if (garbage != NULL) {
@@ -1883,7 +1830,7 @@ static zend_native_status zend_native_value_assign_op_apply(
 	if ((opline->op1_type != IS_CV && opline->op1_type != IS_VAR)
 			|| (opline->op2_type != IS_CONST && opline->op2_type != IS_TMP_VAR
 				&& opline->op2_type != IS_CV)
-			|| (variable_slot = zend_native_value_slot(
+			|| (variable_slot = zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL
 			|| (value = zend_native_value_read_r_explicit(
 				execute_data, opline, opline->op2_type, opline->op2)) == NULL) {
@@ -1909,21 +1856,21 @@ static zend_native_status zend_native_value_assign_op_apply(
 		opline->extended_value, ZEND_CALL_USES_STRICT_TYPES(execute_data));
 	ZVAL_DEREF(variable);
 	if (EG(exception) != NULL) {
-		zend_native_value_consume_operand(
+		zend_native_operand_free(
 			execute_data, opline->op2_type, opline->op2, variable);
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if (opline->result_type != IS_UNUSED) {
-		result = zend_native_value_slot(
+		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result == NULL) {
-			zend_native_value_consume_operand(
+			zend_native_operand_free(
 				execute_data, opline->op2_type, opline->op2, variable);
 			return ZEND_NATIVE_EXCEPTION;
 		}
 		ZVAL_COPY(result, variable);
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op2_type, opline->op2, variable);
 	if (opline->op1_type == IS_VAR) {
 		ZVAL_UNDEF(variable_slot);
@@ -2021,15 +1968,15 @@ zend_native_status zend_native_value_binary_op(
 			|| (right = zend_native_value_read_r_explicit(
 				execute_data, opline,
 				opline->op2_type, opline->op2)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	operation_status = zend_native_binary_op_inline(
 		opline->opcode, result, left, right);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op1_type, opline->op1, result);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op2_type, opline->op2, result);
 	return operation_status == SUCCESS
 		? zend_native_value_status() : ZEND_NATIVE_EXCEPTION;
@@ -2060,7 +2007,7 @@ zend_native_status zend_native_value_case(
 			|| (right = zend_native_value_read_r_explicit(
 				execute_data, opline,
 				opline->op2_type, opline->op2)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -2070,7 +2017,7 @@ zend_native_status zend_native_value_case(
 		? fast_is_identical_function(left, right)
 		: zend_compare(left, right) == 0;
 	ZVAL_BOOL(result, matched);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op2_type, opline->op2, result);
 	return zend_native_value_status();
 }
@@ -2146,7 +2093,7 @@ zend_native_status zend_native_value_unary_op(
 			|| (operand = zend_native_value_read_r_explicit(
 				execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -2195,7 +2142,7 @@ zend_native_status zend_native_value_unary_op(
 		}
 		operation_status = operation(result, operand);
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op1_type, opline->op1, result);
 	return operation_status == SUCCESS
 		? zend_native_value_status() : ZEND_NATIVE_EXCEPTION;
@@ -2223,7 +2170,7 @@ zend_native_status zend_native_value_type_check(
 				&& opline->op1_type != IS_CV)
 			|| (value = zend_native_value_read_explicit(
 				execute_data, opline, opline->op1_type, opline->op1)) == NULL
-			|| (result = zend_native_value_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -2245,7 +2192,7 @@ zend_native_status zend_native_value_type_check(
 		}
 	}
 	ZVAL_BOOL(result, matches);
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op1_type, opline->op1, result);
 	return zend_native_value_status();
 }
@@ -2466,7 +2413,7 @@ zend_native_status zend_native_value_incdec(
 				source_opcode, source_position_id, (uint8_t) source_opcode,
 				&operation_record)
 			|| (opline->op1_type != IS_CV && opline->op1_type != IS_VAR)
-			|| (slot = zend_native_value_slot(execute_data,
+			|| (slot = zend_native_operand_slot(execute_data,
 				opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -2488,7 +2435,7 @@ zend_native_status zend_native_value_incdec(
 	post = opline->opcode == ZEND_POST_INC
 		|| opline->opcode == ZEND_POST_DEC;
 	if (opline->result_type != IS_UNUSED) {
-		result = zend_native_value_slot(
+		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result == NULL) {
 			return ZEND_NATIVE_EXCEPTION;
@@ -2570,7 +2517,7 @@ zend_native_status zend_native_value_cast(
 			|| (operand = zend_native_value_read_r_explicit(
 				execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -2602,7 +2549,7 @@ zend_native_status zend_native_value_cast(
 		default:
 			return ZEND_NATIVE_EXCEPTION;
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op1_type, opline->op1, result);
 	return zend_native_value_status();
 }
@@ -2736,7 +2683,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		}
 		truth = EG(assertions) <= 0;
 		if (truth && opline->result_type != IS_UNUSED) {
-			zval *result = zend_native_value_slot(
+			zval *result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
 
 			if (result == NULL) {
@@ -2751,7 +2698,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		zend_reference *reference = NULL;
 		zval *result;
 		zval *slot = opline->op1_type == IS_CONST ? NULL
-			: zend_native_value_slot(
+			: zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1);
 
 		if ((opline->op1_type == IS_CV || opline->op1_type == IS_VAR)
@@ -2762,9 +2709,9 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		truth = opline->opcode == ZEND_COALESCE
 			? Z_TYPE_P(value) > IS_NULL : zend_is_true(value);
 		if (EG(exception) != NULL) {
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, NULL);
-			result = zend_native_value_slot(
+			result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
 			if (result != NULL) {
 				ZVAL_UNDEF(result);
@@ -2772,7 +2719,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			return ZEND_NATIVE_ITERATOR_EXCEPTION;
 		}
 		if (truth) {
-			result = zend_native_value_slot(
+			result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
 			if (result == NULL) {
 				return ZEND_NATIVE_ITERATOR_EXCEPTION;
@@ -2794,7 +2741,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 				ZVAL_UNDEF(slot);
 			}
 		} else {
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, NULL);
 		}
 		return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
@@ -2811,7 +2758,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		if (!truth) {
 			return ZEND_NATIVE_ITERATOR_END;
 		}
-		result = zend_native_value_slot(
+		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result == NULL) {
 			return ZEND_NATIVE_ITERATOR_EXCEPTION;
@@ -2837,7 +2784,7 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 	}
 	if (opline->opcode == ZEND_JMPZ_EX
 			|| opline->opcode == ZEND_JMPNZ_EX) {
-		zval *result = zend_native_value_slot(
+		zval *result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result == NULL) {
 			return ZEND_NATIVE_ITERATOR_EXCEPTION;
@@ -2847,12 +2794,12 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 		 * short-circuit result. Consume the old value before publishing the
 		 * bool so an aliased result is not immediately destroyed again.
 		 */
-		zend_native_value_consume_operand(
+		zend_native_operand_free(
 			execute_data, opline->op1_type, opline->op1, NULL);
 		ZVAL_BOOL(result, truth);
 		return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op1_type, opline->op1, NULL);
 	return truth ? ZEND_NATIVE_ITERATOR_NEXT : ZEND_NATIVE_ITERATOR_END;
 }
@@ -2875,7 +2822,7 @@ zend_native_iterator_branch_result zend_native_value_bind_static_branch(
 			|| operation.op1_type != IS_CV
 			|| operation.op2_type != IS_UNUSED
 			|| operation.result_type != IS_UNUSED
-			|| (variable = zend_native_value_slot(
+			|| (variable = zend_native_operand_slot(
 				execute_data, operation.op1_type, operation.op1)) == NULL) {
 		return ZEND_NATIVE_ITERATOR_EXCEPTION;
 	}
@@ -2958,9 +2905,9 @@ zend_native_status zend_native_value_isset_isempty_cv(
 			source_opcode, source_position_id, ZEND_ISSET_ISEMPTY_CV,
 			&operation)
 			|| opline->op1_type != IS_CV
-			|| (value = zend_native_value_slot(execute_data,
+			|| (value = zend_native_operand_slot(execute_data,
 				opline->op1_type, opline->op1)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -2992,7 +2939,7 @@ zend_native_status zend_native_value_qm_assign(
 			|| opline->result_type == IS_UNUSED
 			|| (opline->op1_type != IS_CONST && opline->op1_type != IS_TMP_VAR
 				&& opline->op1_type != IS_VAR && opline->op1_type != IS_CV)
-			|| (result = zend_native_value_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result)) == NULL
 			|| (value = zend_native_value_read_explicit(
 				execute_data, opline, opline->op1_type, opline->op1)) == NULL) {
@@ -3195,7 +3142,7 @@ zend_native_status zend_native_value_verify_return_type(
 		zval *result;
 
 		if (opline->result_type == IS_UNUSED
-				|| (result = zend_native_value_slot(
+				|| (result = zend_native_operand_slot(
 					execute_data, opline->result_type,
 					opline->result)) == NULL) {
 			return ZEND_NATIVE_EXCEPTION;
@@ -3498,7 +3445,7 @@ static zend_native_status zend_native_value_concat_impl(
 			|| (right = zend_native_value_read_r_explicit(
 				execute_data, opline,
 				opline->op2_type, opline->op2)) == NULL
-			|| (result = zend_native_value_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -3626,7 +3573,7 @@ static zend_native_status zend_native_value_rope_store(
 			&& opline->op2_type != IS_TMP_VAR && opline->op2_type != IS_CV)) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
-	rope = (zend_string **) zend_native_value_slot(execute_data,
+	rope = (zend_string **) zend_native_operand_slot(execute_data,
 		initialize ? opline->result_type : opline->op1_type,
 		initialize ? opline->result : opline->op1);
 	if (rope == NULL || (!initialize && opline->op1_type != IS_TMP_VAR)) {
@@ -3731,9 +3678,9 @@ zend_native_status zend_native_value_rope_end(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_ROPE_END, &operation)
 			|| opline->op1_type != IS_TMP_VAR
-			|| (rope = (zend_string **) zend_native_value_slot(
+			|| (rope = (zend_string **) zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL
-			|| (result = zend_native_value_slot(
+			|| (result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -3997,7 +3944,7 @@ static bool zend_native_value_take_explicit(
 		return false;
 	}
 	if (preserve_reference && (operand_type == IS_CV || operand_type == IS_VAR)) {
-		slot = zend_native_value_slot(execute_data, operand_type, operand);
+		slot = zend_native_operand_slot(execute_data, operand_type, operand);
 		if (slot == NULL) {
 			return false;
 		}
@@ -4009,7 +3956,7 @@ static bool zend_native_value_take_explicit(
 		}
 		ZVAL_COPY(out, slot);
 		if (operand_type == IS_VAR) {
-			zval *source_slot = zend_native_value_slot(
+			zval *source_slot = zend_native_operand_slot(
 				execute_data, operand_type, operand);
 
 			if (source_slot != NULL
@@ -4030,7 +3977,7 @@ static bool zend_native_value_take_explicit(
 	}
 	zend_native_zval_copy_deref_or_dup(out, value);
 	if (operand_type == IS_VAR) {
-		slot = zend_native_value_slot(execute_data, operand_type, operand);
+		slot = zend_native_operand_slot(execute_data, operand_type, operand);
 		if (slot != NULL && Z_TYPE_P(slot) != IS_INDIRECT) {
 			zval_ptr_dtor_nogc(slot);
 			ZVAL_UNDEF(slot);
@@ -4066,13 +4013,13 @@ static bool zend_native_array_add_explicit_element(
 		}
 		if (!zend_native_array_key_from_zval(
 				offset, opline->op2_type, true, BP_VAR_W, &key)) {
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, NULL);
 			zval_ptr_dtor_nogc(&value);
 			return false;
 		}
 		inserted = zend_native_array_update(table, &key, &value);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, NULL);
 	}
 	if (inserted == NULL) {
@@ -4223,7 +4170,7 @@ static zend_native_status zend_native_value_init_array_explicit(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_INIT_ARRAY, &operation)
 			|| opline->result_type == IS_UNUSED
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -4281,7 +4228,7 @@ static zend_native_status zend_native_value_add_array_element_explicit(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_ADD_ARRAY_ELEMENT,
 			&operation)
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL
 			|| Z_TYPE_P(result) != IS_ARRAY
 			|| !zend_native_array_add_explicit_element(
@@ -4312,7 +4259,7 @@ zend_native_status zend_native_value_add_array_unpack(
 			&operation)
 			|| (source = zend_native_value_read_r_explicit(execute_data, opline,
 				opline->op1_type, opline->op1)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -4433,7 +4380,7 @@ zend_native_status zend_native_value_add_array_unpack(
 	} ZEND_HASH_FOREACH_END();
 
 finish:
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op1_type, opline->op1, result);
 	return zend_native_value_status();
 }
@@ -4597,7 +4544,7 @@ static bool zend_native_assign_string_offset(
 	Z_STRVAL_P(container)[offset] = character;
 
 	if (operation->result_type != IS_UNUSED) {
-		zval *result = zend_native_value_slot(
+		zval *result = zend_native_operand_slot(
 			execute_data, operation->result_type, operation->result);
 
 		if (result == NULL) {
@@ -4764,7 +4711,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, expected_opcode, &operation)
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -4799,9 +4746,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 					zval copy;
 
 					ZVAL_COPY_DEREF(&copy, element);
-					zend_native_value_consume_operand(execute_data,
+					zend_native_operand_free(execute_data,
 						opline->op2_type, opline->op2, NULL);
-					zend_native_value_consume_operand(execute_data,
+					zend_native_operand_free(execute_data,
 						opline->op1_type, opline->op1, NULL);
 					ZVAL_COPY_VALUE(result, &copy);
 					return zend_native_value_status();
@@ -4816,7 +4763,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			&& (!write || mode == ZEND_NATIVE_DIM_UNSET)) {
 		zend_throw_error(NULL, "Cannot use [] for reading");
 		ZVAL_UNDEF(result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, NULL);
 		return zend_native_value_status();
 	}
@@ -4831,9 +4778,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		zend_throw_error(NULL,
 			"Cannot use temporary expression in write context");
 		ZVAL_UNDEF(result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, NULL);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, NULL);
 		return zend_native_value_status();
 	}
@@ -4891,7 +4838,7 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			zend_false_to_array_deprecated();
 		}
 		ZVAL_NULL(result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, result);
 		zend_native_value_consume_write_container(execute_data,
 			opline->op1_type, opline->op1, result);
@@ -4903,9 +4850,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 				&& !zend_verify_ref_array_assignable(container_reference))
 				|| !zend_native_value_promote_to_array(container, 8, &table))) {
 		ZVAL_NULL(result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, result);
 		return zend_native_value_status();
 	}
@@ -4932,9 +4879,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			zend_fetch_dimension_const(result, &string_container, offset,
 				mode == ZEND_NATIVE_DIM_IS ? BP_VAR_IS : BP_VAR_R);
 		fetch_dim_complete:
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, result);
 			return zend_native_value_status();
 		}
@@ -4991,13 +4938,13 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		if (GC_DELREF(object) == 0) {
 			zend_objects_store_del(object);
 		}
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, result);
 		if (write) {
 			zend_native_value_consume_write_container(execute_data,
 				opline->op1_type, opline->op1, result);
 		} else {
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, result);
 		}
 		return zend_native_value_status();
@@ -5013,9 +4960,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		}
 		if (mode == ZEND_NATIVE_DIM_IS) {
 			ZVAL_NULL(result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, result);
 			return ZEND_NATIVE_RETURNED;
 		} else if (write) {
@@ -5030,9 +4977,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			zend_error(E_WARNING, "Trying to access array offset on %s",
 				zend_zval_value_name(container));
 			ZVAL_NULL(result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, result);
 			return zend_native_value_status();
 		}
@@ -5073,9 +5020,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 				zend_cannot_add_element();
 			}
 			ZVAL_NULL(result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, result);
 			return zend_native_value_status();
 		}
@@ -5088,22 +5035,22 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 	} else {
 		zend_native_zval_copy_deref_or_dup(result, value);
 	}
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, result);
 	if (write) {
 		zend_native_value_consume_write_container(execute_data,
 			opline->op1_type, opline->op1, result);
 	} else {
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, result);
 	}
 	return zend_native_value_status();
 
 fetch_dim_error:
 	ZVAL_UNDEF(result);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, NULL);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op1_type, opline->op1, NULL);
 	return zend_native_value_status();
 }
@@ -5617,13 +5564,13 @@ zend_native_status zend_native_value_fetch_list(
 				opline->op1_type, opline->op1)) == NULL
 			|| (offset = zend_native_value_read_r_explicit(execute_data, opline,
 				opline->op2_type, opline->op2)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	writable = opline->opcode == ZEND_FETCH_LIST_W;
 	container_slot = writable
-		? zend_native_value_slot(execute_data, opline->op1_type, opline->op1)
+		? zend_native_operand_slot(execute_data, opline->op1_type, opline->op1)
 		: NULL;
 	if (writable && container_slot == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
@@ -5644,14 +5591,14 @@ zend_native_status zend_native_value_fetch_list(
 				&& ZEND_REF_HAS_TYPE_SOURCES(container_reference)
 				&& !zend_verify_ref_array_assignable(container_reference)) {
 			ZVAL_UNDEF(result);
-			zend_native_value_consume_operand(
+			zend_native_operand_free(
 				execute_data, opline->op2_type, opline->op2, NULL);
 			return zend_native_value_status();
 		}
 		if (!zend_native_value_promote_to_array(
 				container, 8, &promoted_table)) {
 			ZVAL_UNDEF(result);
-			zend_native_value_consume_operand(
+			zend_native_operand_free(
 				execute_data, opline->op2_type, opline->op2, NULL);
 			return zend_native_value_status();
 		}
@@ -5661,7 +5608,7 @@ zend_native_status zend_native_value_fetch_list(
 			zend_wrong_string_offset_error();
 		}
 		ZVAL_UNDEF(result);
-		zend_native_value_consume_operand(
+		zend_native_operand_free(
 			execute_data, opline->op2_type, opline->op2, NULL);
 		return zend_native_value_status();
 	}
@@ -5680,7 +5627,7 @@ zend_native_status zend_native_value_fetch_list(
 		if (GC_DELREF(object) == 0) {
 			zend_objects_store_del(object);
 		}
-		zend_native_value_consume_operand(
+		zend_native_operand_free(
 			execute_data, opline->op2_type, opline->op2, result);
 		return zend_native_value_status();
 	}
@@ -5690,7 +5637,7 @@ zend_native_status zend_native_value_fetch_list(
 				zend_zval_type_name(container));
 		}
 		ZVAL_NULL(result);
-		zend_native_value_consume_operand(
+		zend_native_operand_free(
 			execute_data, opline->op2_type, opline->op2, result);
 		return zend_native_value_status();
 	}
@@ -5717,7 +5664,7 @@ zend_native_status zend_native_value_fetch_list(
 			zend_native_zval_copy_deref_or_dup(result, element);
 		}
 	}
-	zend_native_value_consume_operand(
+	zend_native_operand_free(
 		execute_data, opline->op2_type, opline->op2, result);
 	return zend_native_value_status();
 }
@@ -5796,7 +5743,7 @@ static zend_native_status zend_native_value_assign_dim_impl(
 				container, offset, &source, &assigned)) {
 			zval_ptr_dtor_nogc(&source);
 			if (opline->result_type != IS_UNUSED) {
-				result = zend_native_value_slot(
+				result = zend_native_operand_slot(
 					execute_data, opline->result_type, opline->result);
 				if (result != NULL) {
 					if (EG(exception) != NULL) {
@@ -5806,16 +5753,16 @@ static zend_native_status zend_native_value_assign_dim_impl(
 					}
 				}
 			}
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, result);
 			return zend_native_value_status();
 		}
 		zval_ptr_dtor_nogc(&source);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, assigned);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, assigned);
 		return zend_native_value_status();
 	}
@@ -5861,9 +5808,9 @@ static zend_native_status zend_native_value_assign_dim_impl(
 				if (GC_DELREF(object) == 0) {
 					zend_objects_store_del(object);
 				}
-				zend_native_value_consume_operand(execute_data,
+				zend_native_operand_free(execute_data,
 					opline->op2_type, opline->op2, NULL);
-				zend_native_value_consume_operand(execute_data,
+				zend_native_operand_free(execute_data,
 					opline->op1_type, opline->op1, NULL);
 				return ZEND_NATIVE_EXCEPTION;
 			}
@@ -5877,7 +5824,7 @@ static zend_native_status zend_native_value_assign_dim_impl(
 			assigned = &source;
 		}
 		if (opline->result_type != IS_UNUSED) {
-			result = zend_native_value_slot(
+			result = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
 			if (result == NULL) {
 				zval_ptr_dtor_nogc(assigned);
@@ -5887,9 +5834,9 @@ static zend_native_status zend_native_value_assign_dim_impl(
 				if (GC_DELREF(object) == 0) {
 					zend_objects_store_del(object);
 				}
-				zend_native_value_consume_operand(execute_data,
+				zend_native_operand_free(execute_data,
 					opline->op2_type, opline->op2, NULL);
-				zend_native_value_consume_operand(execute_data,
+				zend_native_operand_free(execute_data,
 					opline->op1_type, opline->op1, NULL);
 				return ZEND_NATIVE_EXCEPTION;
 			}
@@ -5902,9 +5849,9 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		if (GC_DELREF(object) == 0) {
 			zend_objects_store_del(object);
 		}
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, result);
 		return zend_native_value_status();
 	}
@@ -5949,7 +5896,7 @@ static zend_native_status zend_native_value_assign_dim_impl(
 			if (protect_table && GC_DELREF(table) == 0) {
 				zend_array_destroy(table);
 			}
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, NULL);
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -6017,9 +5964,9 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		if (!zend_native_value_take_explicit(
 				execute_data, opline, opline->auxiliary_type,
 				opline->auxiliary, false, &source)) {
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, NULL);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, NULL);
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -6030,9 +5977,9 @@ static zend_native_status zend_native_value_assign_dim_impl(
 				ZEND_CALL_USES_STRICT_TYPES(execute_data));
 			zval_ptr_dtor_nogc(&source);
 			if (EG(exception) != NULL) {
-				zend_native_value_consume_operand(execute_data,
+				zend_native_operand_free(execute_data,
 					opline->op2_type, opline->op2, NULL);
-				zend_native_value_consume_operand(execute_data,
+				zend_native_operand_free(execute_data,
 					opline->op1_type, opline->op1, NULL);
 				return ZEND_NATIVE_EXCEPTION;
 			}
@@ -6045,15 +5992,15 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		}
 	}
 	if (opline->result_type != IS_UNUSED) {
-		result = zend_native_value_slot(
+		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result == NULL) {
 			if (garbage != NULL) {
 				GC_DTOR_NO_REF(garbage);
 			}
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, NULL);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, NULL);
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -6062,23 +6009,23 @@ static zend_native_status zend_native_value_assign_dim_impl(
 	if (garbage != NULL) {
 		GC_DTOR_NO_REF(garbage);
 	}
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, result);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op1_type, opline->op1, result);
 	return zend_native_value_status();
 
 assign_dim_error_without_auxiliary:
 	if (opline->result_type != IS_UNUSED) {
-		result = zend_native_value_slot(
+		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result != NULL) {
 			ZVAL_NULL(result);
 		}
 	}
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, result);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op1_type, opline->op1, result);
 	return zend_native_value_status();
 
@@ -6088,15 +6035,15 @@ assign_dim_error:
 		zval_ptr_dtor_nogc(&source);
 	}
 	if (opline->result_type != IS_UNUSED) {
-		result = zend_native_value_slot(
+		result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result != NULL) {
 			ZVAL_NULL(result);
 		}
 	}
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, result);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op1_type, opline->op1, result);
 	return zend_native_value_status();
 }
@@ -6671,9 +6618,9 @@ static zend_never_inline bool zend_native_value_assign_dim_op_in_place(
 	} else {
 		mul_function(element, element, fast_value);
 	}
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->auxiliary_type, opline->auxiliary, NULL);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, NULL);
 	return true;
 }
@@ -6780,9 +6727,9 @@ zend_native_status zend_native_value_unset_dim(
 		offset = zend_native_value_object_dimension_offset(
 			opline->op2_type, offset);
 		Z_OBJ_HT_P(container)->unset_dimension(Z_OBJ_P(container), offset);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, NULL);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, NULL);
 		return zend_native_value_status();
 	}
@@ -6795,9 +6742,9 @@ zend_native_status zend_native_value_unset_dim(
 		} else if (Z_TYPE_P(container) == IS_FALSE) {
 			zend_false_to_array_deprecated();
 		}
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, NULL);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, NULL);
 		return zend_native_value_status();
 	}
@@ -6807,9 +6754,9 @@ zend_native_status zend_native_value_unset_dim(
 			table, true, offset, opline->op2_type, false,
 			BP_VAR_UNSET, &key, &table_valid)
 			|| !table_valid) {
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, NULL);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, NULL);
 		return zend_native_value_status();
 	}
@@ -6818,9 +6765,9 @@ zend_native_status zend_native_value_unset_dim(
 	} else {
 		zend_hash_del(table, key.string);
 	}
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, NULL);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op1_type, opline->op1, NULL);
 	return zend_native_value_status();
 }
@@ -6991,7 +6938,7 @@ static zend_native_status zend_native_value_isset_isempty_dim_explicit(
 				opline->op1_type, opline->op1)) == NULL
 			|| (offset = zend_native_value_read_r_explicit(execute_data, opline,
 				opline->op2_type, opline->op2)) == NULL
-			|| (result = zend_native_value_slot(execute_data,
+			|| (result = zend_native_operand_slot(execute_data,
 				opline->result_type, opline->result)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
@@ -7008,9 +6955,9 @@ static zend_native_status zend_native_value_isset_isempty_dim_explicit(
 			: Z_OBJ_HT_P(container)->has_dimension(
 				Z_OBJ_P(container), offset, 0);
 		ZVAL_BOOL(result, answer);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, result);
 		return zend_native_value_status();
 	}
@@ -7044,9 +6991,9 @@ static zend_native_status zend_native_value_isset_isempty_dim_explicit(
 		}
 string_result:
 		ZVAL_BOOL(result, answer);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op2_type, opline->op2, result);
-		zend_native_value_consume_operand(execute_data,
+		zend_native_operand_free(execute_data,
 			opline->op1_type, opline->op1, result);
 		return ZEND_NATIVE_RETURNED;
 	}
@@ -7055,9 +7002,9 @@ string_result:
 		if (!zend_native_array_key_from_zval_protected(
 				table, false, offset, opline->op2_type, true,
 				BP_VAR_IS, &key, &table_valid)) {
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op2_type, opline->op2, result);
-			zend_native_value_consume_operand(execute_data,
+			zend_native_operand_free(execute_data,
 				opline->op1_type, opline->op1, result);
 			return ZEND_NATIVE_EXCEPTION;
 		}
@@ -7074,9 +7021,9 @@ string_result:
 			&& (!Z_ISREF_P(value) || Z_TYPE_P(Z_REFVAL_P(value)) != IS_NULL);
 	}
 	ZVAL_BOOL(result, answer);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op2_type, opline->op2, result);
-	zend_native_value_consume_operand(execute_data,
+	zend_native_operand_free(execute_data,
 		opline->op1_type, opline->op1, result);
 	return ZEND_NATIVE_RETURNED;
 }
@@ -7089,7 +7036,7 @@ static void zend_native_iterator_release_operand(
 	if (operand_type != IS_TMP_VAR && operand_type != IS_VAR) {
 		return;
 	}
-	value = zend_native_value_slot(execute_data, operand_type, operand);
+	value = zend_native_operand_slot(execute_data, operand_type, operand);
 	if (value != NULL && Z_TYPE_P(value) != IS_UNDEF) {
 		zval_ptr_dtor_nogc(value);
 		ZVAL_UNDEF(value);
@@ -7101,7 +7048,7 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_array(
 	const zend_native_explicit_value_operation *opline,
 	zval *source_slot, zval *array, bool by_reference)
 {
-	zval *result = zend_native_value_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, opline->result_type, opline->result);
 
 	if (result == NULL) {
@@ -7151,7 +7098,7 @@ static zend_native_iterator_branch_result zend_native_iterator_reset_object(
 	zval *source_slot, zval *object, bool by_reference)
 {
 	zend_object *zobj = Z_OBJ_P(object);
-	zval *result = zend_native_value_slot(
+	zval *result = zend_native_operand_slot(
 		execute_data, opline->result_type, opline->result);
 	HashTable *properties;
 
@@ -7310,7 +7257,7 @@ static zend_native_iterator_branch_result zend_native_iterator_reset(
 		"foreach() argument must be of type array|object, %s given",
 		zend_zval_value_name(value));
 	{
-		zval *result = zend_native_value_slot(
+		zval *result = zend_native_operand_slot(
 			execute_data, opline->result_type, opline->result);
 		if (result != NULL) {
 			ZVAL_UNDEF(result);
@@ -7336,7 +7283,7 @@ static bool zend_native_iterator_set_key(
 	if (opline->result_type == IS_UNUSED) {
 		return true;
 	}
-	result = zend_native_value_slot(
+	result = zend_native_operand_slot(
 		execute_data, opline->result_type, opline->result);
 	if (result == NULL) {
 		return false;
@@ -7361,7 +7308,7 @@ static bool zend_native_iterator_assign_value(
 	const zend_native_explicit_value_operation *opline,
 	zval *value, bool by_reference)
 {
-	zval *destination = zend_native_value_slot(
+	zval *destination = zend_native_operand_slot(
 		execute_data, opline->op2_type, opline->op2);
 
 	if (destination == NULL) {
@@ -7472,7 +7419,7 @@ static zend_native_iterator_branch_result zend_native_iterator_fetch_object(
 				: ZEND_NATIVE_ITERATOR_EXCEPTION;
 		}
 		if (opline->result_type != IS_UNUSED) {
-			zval *key = zend_native_value_slot(
+			zval *key = zend_native_operand_slot(
 				execute_data, opline->result_type, opline->result);
 			if (key == NULL) {
 				return ZEND_NATIVE_ITERATOR_EXCEPTION;
@@ -7570,7 +7517,7 @@ zend_native_iterator_branch_result zend_native_value_iterator_branch(
 			|| opline->opcode == ZEND_FE_RESET_RW) {
 		return zend_native_iterator_reset(execute_data, opline);
 	}
-	holder = zend_native_value_slot(
+	holder = zend_native_operand_slot(
 		execute_data, opline->op1_type, opline->op1);
 	if (holder == NULL) {
 		return ZEND_NATIVE_ITERATOR_EXCEPTION;
@@ -7621,7 +7568,7 @@ zend_native_status zend_native_value_fe_free(
 	if (!zend_native_value_init_explicit_operation(
 			execute_data, op1, op2, result_operand, extended_value,
 			source_opcode, source_position_id, ZEND_FE_FREE, &operation)
-			|| (value = zend_native_value_slot(
+			|| (value = zend_native_operand_slot(
 				execute_data, opline->op1_type, opline->op1)) == NULL) {
 		return ZEND_NATIVE_EXCEPTION;
 	}
