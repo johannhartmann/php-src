@@ -1833,10 +1833,13 @@ static bool zend_mir_opcode_requires_boxed_execution(
 	if (integration->overlay_scalarized_opcodes[index]) {
 		return false;
 	}
+	/* Like zend_mir_machine_condition(): a double condition is evaluated
+	 * from its canonical zval. */
 	if (zend_mir_source_value_branch(opcode)) {
 		return !zend_mir_opcode_operand_fact(
 			integration, op_array, ssa, index, ZEND_MIR_FRONTEND_OP1, &fact)
-			|| !zend_mir_scalar_type_is_exact(fact.exact_type);
+			|| !zend_mir_scalar_type_is_exact(fact.exact_type)
+			|| fact.exact_type == ZEND_MIR_SCALAR_TYPE_F64;
 	}
 	return zend_mir_overlay_opcode_is_executable(opcode)
 		|| zend_mir_call_fragment(opcode)
