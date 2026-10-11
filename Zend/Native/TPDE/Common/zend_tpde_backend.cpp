@@ -99,14 +99,100 @@ bool native_buffer_append(
 	return true;
 }
 
-const zend_native_image_symbol_binding *native_image_binding(
-	const zend_native_image *image, uint32_t symbol_index) {
-	for (uint32_t index = 0; index < image->symbol_binding_count; ++index) {
-		if (image->symbol_bindings[index].symbol_index == symbol_index) {
-			return &image->symbol_bindings[index];
+/*
+ * The image's symbol lookup index: the first symbol of each (kind,
+ * namespace, id) and the first binding of each symbol. Symbols and bindings
+ * are only ever appended, so the index catches up with them on each use.
+ */
+struct zend_native_image_symbol_lookup {
+	struct key {
+		uint32_t kind;
+		uint32_t symbol_namespace;
+		uint32_t id;
+
+		bool operator==(const key &other) const {
+			return kind == other.kind
+				&& symbol_namespace == other.symbol_namespace
+				&& id == other.id;
+		}
+	};
+	struct key_hash {
+		size_t operator()(const key &value) const {
+			return static_cast<size_t>(
+				((uint64_t{value.kind} * UINT64_C(0x9e3779b97f4a7c15))
+					^ (uint64_t{value.symbol_namespace} << 32)
+					^ value.id)
+				* UINT64_C(0xff51afd7ed558ccd));
+		}
+	};
+	std::unordered_map<key, uint32_t, key_hash> symbols;
+	std::vector<uint32_t> first_binding;
+	uint32_t indexed_symbols = 0;
+	uint32_t indexed_bindings = 0;
+	/* Up to here every symbol carries the name image_add_symbol() gives
+	 * its key, so the first symbol of a name is the first of its key. */
+	uint32_t checked_names = 0;
+	bool names_from_keys = true;
+};
+
+zend_native_image_symbol_lookup *native_image_symbol_lookup(
+	const zend_native_image *image) {
+	auto *lookup = static_cast<zend_native_image_symbol_lookup *>(
+		image->symbol_lookup);
+	if (lookup == nullptr) {
+		lookup = new zend_native_image_symbol_lookup();
+		const_cast<zend_native_image *>(image)->symbol_lookup = lookup;
+	}
+	for (; lookup->indexed_symbols < image->symbol_count;
+			++lookup->indexed_symbols) {
+		const zend_native_image_symbol &symbol =
+			image->symbols[lookup->indexed_symbols];
+		lookup->symbols.try_emplace(
+			{symbol.kind, symbol.symbol_namespace, symbol.id},
+			lookup->indexed_symbols);
+	}
+	if (lookup->first_binding.size() < image->symbol_count) {
+		lookup->first_binding.resize(image->symbol_count, UINT32_MAX);
+	}
+	for (; lookup->indexed_bindings < image->symbol_binding_count;
+			++lookup->indexed_bindings) {
+		const uint32_t symbol_index =
+			image->symbol_bindings[lookup->indexed_bindings].symbol_index;
+		if (symbol_index >= lookup->first_binding.size()) {
+			lookup->first_binding.resize(
+				static_cast<size_t>(symbol_index) + 1, UINT32_MAX);
+		}
+		if (lookup->first_binding[symbol_index] == UINT32_MAX) {
+			lookup->first_binding[symbol_index] = lookup->indexed_bindings;
 		}
 	}
-	return nullptr;
+	return lookup;
+}
+
+void native_image_symbol_lookup_destroy(zend_native_image *image) {
+	delete static_cast<zend_native_image_symbol_lookup *>(
+		image->symbol_lookup);
+	image->symbol_lookup = nullptr;
+}
+
+/* The first symbol of the key, or UINT32_MAX. */
+uint32_t native_image_symbol_index(
+	const zend_native_image *image,
+	uint32_t kind, uint32_t id, uint32_t symbol_namespace) {
+	const zend_native_image_symbol_lookup *lookup =
+		native_image_symbol_lookup(image);
+	const auto found = lookup->symbols.find({kind, symbol_namespace, id});
+	return found == lookup->symbols.end() ? UINT32_MAX : found->second;
+}
+
+const zend_native_image_symbol_binding *native_image_binding(
+	const zend_native_image *image, uint32_t symbol_index) {
+	const zend_native_image_symbol_lookup *lookup =
+		native_image_symbol_lookup(image);
+	return symbol_index < lookup->first_binding.size()
+			&& lookup->first_binding[symbol_index] != UINT32_MAX
+		? &image->symbol_bindings[lookup->first_binding[symbol_index]]
+		: nullptr;
 }
 
 bool native_descriptor_size(
@@ -1403,24 +1489,14 @@ bool image_add_symbol(
 	if (image == nullptr || !zend_mir_id_is_valid(id)) {
 		return false;
 	}
-	for (uint32_t index = 0; index < image->symbol_count; ++index) {
-		const zend_native_image_symbol &symbol = image->symbols[index];
-		if (symbol.kind == kind && symbol.id == id
-				&& symbol.symbol_namespace == symbol_namespace) {
-			if (address == nullptr) {
-				return true;
-			}
-			for (uint32_t binding_index = 0;
-					binding_index < image->symbol_binding_count;
-					++binding_index) {
-				const zend_native_image_symbol_binding &binding =
-					image->symbol_bindings[binding_index];
-				if (binding.symbol_index == index) {
-					return binding.address == address;
-				}
-			}
-			return false;
+	if (const uint32_t index = native_image_symbol_index(
+			image, kind, id, symbol_namespace); index != UINT32_MAX) {
+		if (address == nullptr) {
+			return true;
 		}
+		const zend_native_image_symbol_binding *binding =
+			native_image_binding(image, index);
+		return binding != nullptr && binding->address == address;
 	}
 	if (image->symbol_count == image->symbol_capacity) {
 		uint32_t capacity = image->symbol_capacity == 0
@@ -13962,14 +14038,9 @@ const zend_native_image_symbol *zend_tpde_image_symbol_find(
 	if (image == nullptr) {
 		return nullptr;
 	}
-	for (uint32_t index = 0; index < image->symbol_count; ++index) {
-		const zend_native_image_symbol &symbol = image->symbols[index];
-		if (symbol.kind == kind && symbol.id == id
-				&& symbol.symbol_namespace == symbol_namespace) {
-			return &symbol;
-		}
-	}
-	return nullptr;
+	const uint32_t index =
+		native_image_symbol_index(image, kind, id, symbol_namespace);
+	return index == UINT32_MAX ? nullptr : &image->symbols[index];
 }
 
 bool zend_tpde_image_resolve_symbol(
@@ -13981,10 +14052,41 @@ bool zend_tpde_image_resolve_symbol(
 	}
 	*address = nullptr;
 	const zend_native_image_symbol *symbol = nullptr;
-	for (uint32_t index = 0; index < image->symbol_count; ++index) {
-		if (std::strcmp(image->symbols[index].name, name) == 0) {
+	zend_native_image_symbol_lookup *lookup =
+		native_image_symbol_lookup(image);
+	for (; lookup->names_from_keys
+				&& lookup->checked_names < image->symbol_count;
+			++lookup->checked_names) {
+		const zend_native_image_symbol &candidate =
+			image->symbols[lookup->checked_names];
+		char expected[sizeof(candidate.name)];
+		const int written = std::snprintf(expected, sizeof(expected),
+			"__znmir_%u_%u_%u", candidate.kind, candidate.symbol_namespace,
+			candidate.id);
+		lookup->names_from_keys = written > 0
+			&& static_cast<size_t>(written) < sizeof(expected)
+			&& std::strncmp(expected, candidate.name, sizeof(expected)) == 0;
+	}
+	unsigned int kind;
+	unsigned int symbol_namespace;
+	unsigned int id;
+	int consumed = 0;
+	if (lookup->names_from_keys
+			&& std::sscanf(name, "__znmir_%u_%u_%u%n",
+				&kind, &symbol_namespace, &id, &consumed) == 3
+			&& name[consumed] == 0) {
+		const uint32_t index =
+			native_image_symbol_index(image, kind, id, symbol_namespace);
+		if (index != UINT32_MAX
+				&& std::strcmp(image->symbols[index].name, name) == 0) {
 			symbol = &image->symbols[index];
-			break;
+		}
+	} else {
+		for (uint32_t index = 0; index < image->symbol_count; ++index) {
+			if (std::strcmp(image->symbols[index].name, name) == 0) {
+				symbol = &image->symbols[index];
+				break;
+			}
 		}
 	}
 	if (symbol == nullptr) {
@@ -14004,8 +14106,16 @@ bool zend_tpde_image_resolve_symbol(
 		}
 		const uint32_t symbol_index =
 			static_cast<uint32_t>(symbol - image->symbols);
+		const zend_native_image_symbol_binding *first =
+			native_image_binding(image, symbol_index);
+		if (first != nullptr && first->address != nullptr) {
+			*address = first->address;
+			return true;
+		}
+		/* Only a binding without an address can hide a later one. */
 		for (uint32_t index = 0;
-				index < image->symbol_binding_count; ++index) {
+				first != nullptr && index < image->symbol_binding_count;
+				++index) {
 			const zend_native_image_symbol_binding &binding =
 				image->symbol_bindings[index];
 			if (binding.symbol_index == symbol_index
@@ -14444,18 +14554,7 @@ extern "C" zend_result zend_native_image_serialize(
 								|| serialized.scope_reference == 0))) {
 					goto invalid_image;
 				}
-				unsigned char *copy =
-					static_cast<unsigned char *>(std::malloc(payload_size));
-				if (copy == nullptr) {
-					goto allocation_failure;
-				}
-				std::memcpy(copy, descriptor, payload_size);
-				auto *copy_descriptor =
-					reinterpret_cast<zend_native_direct_call_descriptor *>(
-						copy);
-				copy_descriptor->expected_function = nullptr;
-				copy_descriptor->called_scope = nullptr;
-				payload = copy;
+				payload = descriptor;
 				break;
 			}
 			case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR:
@@ -14475,15 +14574,21 @@ extern "C" zend_result zend_native_image_serialize(
 				&buffer, &serialized, sizeof(serialized))
 				|| !native_buffer_append(
 					&buffer, payload, payload_size)) {
-			if (symbol.kind
-					== ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR) {
-				std::free(const_cast<void *>(payload));
-			}
 			goto allocation_failure;
 		}
 		if (symbol.kind
 				== ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR) {
-			std::free(const_cast<void *>(payload));
+			/* The function and scope are encoded as references; their
+			 * pointers are stored as null. */
+			unsigned char *stored = buffer.bytes + buffer.size - payload_size;
+			std::memset(stored
+					+ offsetof(zend_native_direct_call_descriptor,
+						expected_function),
+				0, sizeof(zend_function *));
+			std::memset(stored
+					+ offsetof(zend_native_direct_call_descriptor,
+						called_scope),
+				0, sizeof(zend_class_entry *));
 		}
 	}
 	if (buffer.size > MAX_NATIVE_IMAGE_BYTES) {
@@ -14625,7 +14730,26 @@ extern "C" zend_result zend_native_image_deserialize(
 			static_cast<zend_native_image_symbol_binding *>(
 				std::calloc(header.binding_count,
 					sizeof(*image->symbol_bindings)));
-		if (image->symbol_bindings == nullptr) {
+		/* Each binding owns at most one cell or descriptor. */
+		image->owned_internal_call_cells =
+			static_cast<zend_native_internal_call_cell **>(std::calloc(
+				header.binding_count,
+				sizeof(*image->owned_internal_call_cells)));
+		image->direct_calls =
+			static_cast<zend_native_direct_call_descriptor **>(std::calloc(
+				header.binding_count, sizeof(*image->direct_calls)));
+		image->direct_internal_calls =
+			static_cast<zend_native_direct_internal_call_descriptor **>(
+				std::calloc(header.binding_count,
+					sizeof(*image->direct_internal_calls)));
+		image->user_calls =
+			static_cast<zend_native_user_call_descriptor **>(std::calloc(
+				header.binding_count, sizeof(*image->user_calls)));
+		if (image->symbol_bindings == nullptr
+				|| image->owned_internal_call_cells == nullptr
+				|| image->direct_calls == nullptr
+				|| image->direct_internal_calls == nullptr
+				|| image->user_calls == nullptr) {
 			goto allocation_failure;
 		}
 		image->symbol_binding_capacity = header.binding_count;
@@ -14700,17 +14824,6 @@ extern "C" zend_result zend_native_image_deserialize(
 					std::free(cell);
 					goto invalid_image;
 				}
-				void *resized = std::realloc(
-					image->owned_internal_call_cells,
-					static_cast<size_t>(
-						image->owned_internal_call_cell_count + 1)
-						* sizeof(*image->owned_internal_call_cells));
-				if (resized == nullptr) {
-					std::free(cell);
-					goto allocation_failure;
-				}
-				image->owned_internal_call_cells =
-					static_cast<zend_native_internal_call_cell **>(resized);
 				image->owned_internal_call_cells[
 					image->owned_internal_call_cell_count++] = cell;
 				address = cell;
@@ -14759,17 +14872,6 @@ extern "C" zend_result zend_native_image_deserialize(
 					const_cast<zend_class_entry *>(
 						static_cast<const zend_class_entry *>(
 							resolved_scope));
-				void *resized = std::realloc(
-					image->direct_calls,
-					static_cast<size_t>(image->direct_call_count + 1)
-						* sizeof(*image->direct_calls));
-				if (resized == nullptr) {
-					std::free(descriptor);
-					goto allocation_failure;
-				}
-				image->direct_calls =
-					static_cast<zend_native_direct_call_descriptor **>(
-						resized);
 				image->direct_calls[image->direct_call_count++] = descriptor;
 				address = descriptor;
 				break;
@@ -14806,36 +14908,12 @@ extern "C" zend_result zend_native_image_deserialize(
 				}
 				if (symbol.kind
 						== ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR) {
-					void *resized = std::realloc(
-						image->direct_internal_calls,
-						static_cast<size_t>(
-							image->direct_internal_call_count + 1)
-							* sizeof(*image->direct_internal_calls));
-					if (resized == nullptr) {
-						std::free(descriptor);
-						goto allocation_failure;
-					}
-					image->direct_internal_calls =
-						static_cast<
-							zend_native_direct_internal_call_descriptor **>(
-								resized);
 					image->direct_internal_calls[
 						image->direct_internal_call_count++] =
 							static_cast<
 								zend_native_direct_internal_call_descriptor *>(
 									descriptor);
 				} else {
-					void *resized = std::realloc(
-						image->user_calls,
-						static_cast<size_t>(image->user_call_count + 1)
-							* sizeof(*image->user_calls));
-					if (resized == nullptr) {
-						free_descriptor(descriptor);
-						goto allocation_failure;
-					}
-					image->user_calls =
-						static_cast<zend_native_user_call_descriptor **>(
-							resized);
 					image->user_calls[image->user_call_count++] =
 						static_cast<zend_native_user_call_descriptor *>(
 							descriptor);
@@ -14970,6 +15048,7 @@ extern "C" void zend_native_image_destroy(zend_native_image *image) {
 		if (image->destroy_target_state != nullptr) {
 			image->destroy_target_state(image->target_state);
 		}
+		native_image_symbol_lookup_destroy(image);
 		std::free(image->symbol_bindings);
 		std::free(image->symbols);
 		std::free(image->text);

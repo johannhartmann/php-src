@@ -2846,6 +2846,9 @@ struct zend_native_image {
 	uint32_t user_call_count;
 	_zend_native_internal_call_cell **owned_internal_call_cells;
 	uint32_t owned_internal_call_cell_count;
+	/* Transient lookup index over symbols and bindings, built on demand
+	 * and never serialized. */
+	void *symbol_lookup;
 };
 
 struct zend_native_code {
