@@ -6293,14 +6293,24 @@ static zend_result zend_native_compiler_import_bundle_sources(
 		compiler->functions[index]->image_owner_index = owner;
 		compiler->functions[index]->image_component_index =
 			record->image_component_index;
-		for (uint32_t prior = 0; prior < index; prior++) {
-			if (functions[prior].image_owner_index == owner
-					&& functions[prior].image_component_index
-						== record->image_component_index) {
-				malformed_message =
-					"persistent native image bundle component table is ambiguous";
-				goto malformed;
-			}
+	}
+	/* Each (owner, component) pair names one function record. */
+	if (header.function_count > 1) {
+		HashTable components;
+		bool ambiguous = false;
+
+		zend_hash_init(&components, header.function_count, NULL, NULL, 0);
+		for (index = 0; index < header.function_count && !ambiguous; index++) {
+			ambiguous = zend_hash_index_add_empty_element(&components,
+				(zend_ulong) functions[index].image_owner_index
+					* header.function_count
+					+ functions[index].image_component_index) == NULL;
+		}
+		zend_hash_destroy(&components);
+		if (ambiguous) {
+			malformed_message =
+				"persistent native image bundle component table is ambiguous";
+			goto malformed;
 		}
 	}
 	memset(&decoder, 0, sizeof(decoder));
