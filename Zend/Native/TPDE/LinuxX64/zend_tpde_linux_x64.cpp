@@ -8737,6 +8737,22 @@ bool ZendCompilerX64::compile_inst_impl(
 					builder.call(runtime_symbol(
 						ZEND_NATIVE_HELPER_CALL_FAST_UNDEFINED_ARGUMENT));
 				}
+				/* The argument is null before a warning's exception leaves:
+				 * the unfinished-call cleanup releases it, as after the VM's
+				 * SEND_VAR. */
+				auto store_null_argument = [&]() {
+					ScratchReg callee{this};
+					auto callee_reg = callee.alloc_gp();
+					ASM(MOV64rm, callee_reg,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_execute_data, call))));
+					ASM(MOV32mi,
+						FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
+							target_offset + offsetof(zval, u1.type_info))),
+						IS_NULL);
+				};
+				store_null_argument();
 				{
 					ScratchReg exception{this};
 					auto exception_reg = exception.alloc_gp();
@@ -8749,19 +8765,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(TEST64rr, exception_reg, exception_reg);
 					generate_raw_jump(Jump::jne, send_exception);
 				}
+				generate_raw_jump(Jump::jmp, sent);
 				label_place(undefined_null);
-				{
-					ScratchReg callee{this};
-					auto callee_reg = callee.alloc_gp();
-					ASM(MOV64rm, callee_reg,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_execute_data, call))));
-					ASM(MOV32mi,
-						FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
-							target_offset + offsetof(zval, u1.type_info))),
-						IS_NULL);
-				}
+				store_null_argument();
 				generate_raw_jump(Jump::jmp, sent);
 				cold_end();
 			}
