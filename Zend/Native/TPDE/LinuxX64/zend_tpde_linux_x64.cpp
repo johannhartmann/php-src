@@ -2140,8 +2140,7 @@ public:
 	bool emit_fused_identical(const zend_tpde_instruction *compare,
 			const zend_tpde_fused_operand &left,
 			const zend_tpde_fused_operand &right, AsmReg frame_reg,
-			AsmReg type_reg, tpde::Label truthy, tpde::Label falsey,
-			tpde::Label slow) {
+			tpde::Label truthy, tpde::Label falsey, tpde::Label slow) {
 		if (!store_fused_result_placeholder(compare, frame_reg)) {
 			return false;
 		}
@@ -2169,11 +2168,13 @@ public:
 		const int32_t left_offset = static_cast<int32_t>(left.offset);
 		const int32_t right_offset = static_cast<int32_t>(right.offset);
 		ScratchReg match{this};
+		ScratchReg type{this};
 		AsmReg match_reg;
 		if (typed_literal) {
 			const uint32_t may_be = source != nullptr
 				? source->op1_may_be : UINT32_MAX;
 			match_reg = match.alloc_gp();
+			const AsmReg type_reg = type.alloc_gp();
 			auto mismatch = text_writer.label_create();
 			ASM(XOR32rr, match_reg, match_reg);
 			ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
@@ -2600,7 +2601,7 @@ public:
 				&& zend_tpde_fused_identical_at(
 					*compare, &layout.left, &layout.right)) {
 			return emit_fused_identical(compare, layout.left, layout.right,
-				frame_reg, left_type, truthy, falsey, slow);
+				frame_reg, truthy, falsey, slow);
 		}
 		if (compare != nullptr
 				&& zend_tpde_fused_isset_cv_at(*compare, &layout.left)) {
@@ -20673,6 +20674,17 @@ bool ZendCompilerX64::compile_inst_impl(
 								fused_compare->value_operation, false,
 								fused_successors[0], fused_successors[1]);
 						}
+					}
+					/* Their probes need the scratch registers the other
+					 * fused forms use. */
+					zend_tpde_fused_operand fused_left{};
+					zend_tpde_fused_operand fused_right{};
+					if (fused && (zend_tpde_fused_isset_dim_at(*fused_compare,
+								&fused_left, &fused_right)
+							|| zend_tpde_fused_identical_at(*fused_compare,
+								&fused_left, &fused_right))) {
+						type.reset();
+						value.reset();
 					}
 					if (fused && !emit_fused_compare(
 							fused_compare, frame_reg, type_reg, value_reg,
