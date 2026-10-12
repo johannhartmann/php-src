@@ -6736,7 +6736,21 @@ bool zend_native_compiler_end_request(zend_native_compiler *compiler)
 	return true;
 }
 
+static void zend_native_compiler_destroy_impl(
+	zend_native_compiler *compiler, bool final);
+
 void zend_native_compiler_destroy(zend_native_compiler *compiler)
+{
+	zend_native_compiler_destroy_impl(compiler, false);
+}
+
+void zend_native_compiler_destroy_final(zend_native_compiler *compiler)
+{
+	zend_native_compiler_destroy_impl(compiler, true);
+}
+
+static void zend_native_compiler_destroy_impl(
+	zend_native_compiler *compiler, bool final)
 {
 	uint32_t index;
 	zend_native_runtime_source *runtime_source;
@@ -6761,7 +6775,7 @@ void zend_native_compiler_destroy(zend_native_compiler *compiler)
 	 * The executor keeps stale generations on its retirement list until
 	 * active calls and suspended generator frames have both drained.
 	 */
-	if (!zend_native_compiler_is_quiescent(compiler)) {
+	if (!final && !zend_native_compiler_is_quiescent(compiler)) {
 		return;
 	}
 	zend_native_compiler_leave(compiler);

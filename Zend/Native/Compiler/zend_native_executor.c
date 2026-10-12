@@ -1155,6 +1155,13 @@ failure:
 	return false;
 }
 
+/*
+ * Set while the generations go after the last PHP frame (request
+ * deactivation after shutdown_executor(), process shutdown): their
+ * compilers go even with calls or suspended frames a bailout left counted.
+ */
+static ZEND_TLS bool zend_native_executor_final_teardown;
+
 static void zend_native_executor_destroy_generation(
 	zend_native_executor_generation *generation)
 {
@@ -1181,7 +1188,11 @@ static void zend_native_executor_destroy_generation(
 			}
 		} ZEND_HASH_FOREACH_END();
 	}
-	zend_native_compiler_destroy(generation->compiler);
+	if (zend_native_executor_final_teardown) {
+		zend_native_compiler_destroy_final(generation->compiler);
+	} else {
+		zend_native_compiler_destroy(generation->compiler);
+	}
 	if (generation->owns_script_tables) {
 		zend_hash_destroy(&generation->script.class_table);
 		zend_hash_destroy(&generation->script.function_table);
@@ -2244,10 +2255,12 @@ void zend_native_executor_shutdown(void)
 	zend_native_executor_end_preload_capture();
 	zend_native_property_cache_forget();
 	zend_native_executor_deactivate();
+	zend_native_executor_final_teardown = true;
 	zend_native_executor_destroy_generations(
 		&zend_native_executor_persistent_generations);
 	zend_native_executor_destroy_generations(
 		&zend_native_executor_retired_generations);
+	zend_native_executor_final_teardown = false;
 	if (zend_native_executor_generation_indexes_active) {
 		zend_hash_destroy(&zend_native_executor_generations_by_opcodes);
 		zend_hash_destroy(&zend_native_executor_generations_by_owner);
@@ -2460,8 +2473,10 @@ void zend_native_executor_deactivate(void)
 			&zend_native_executor_request_state
 				.request_generations_by_root);
 	}
+	zend_native_executor_final_teardown = true;
 	zend_native_executor_destroy_generations(
 		&zend_native_executor_request_state.request_generations);
+	zend_native_executor_final_teardown = false;
 	zend_native_executor_release_request_leases();
 	if (zend_native_executor_request_state.lookup_indexes_active) {
 #ifdef ZTS

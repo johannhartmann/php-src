@@ -120,6 +120,13 @@ ZEND_API zend_native_compiler *zend_native_compiler_create(
 	const zend_native_compiler_config *config,
 	zend_native_compile_diagnostic *diagnostic);
 ZEND_API void zend_native_compiler_destroy(zend_native_compiler *compiler);
+/*
+ * Destroy a compiler after the last PHP frame that could enter its code:
+ * after shutdown_executor() or at process shutdown. A bailout may have left
+ * calls and suspended frames counted that never run again; they do not keep
+ * the code alive as in zend_native_compiler_destroy().
+ */
+ZEND_API void zend_native_compiler_destroy_final(zend_native_compiler *compiler);
 
 /*
  * Drop request-owned dynamic code and post-publication compiler workspaces.
