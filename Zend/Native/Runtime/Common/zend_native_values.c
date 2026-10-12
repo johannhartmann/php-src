@@ -7469,6 +7469,7 @@ zend_native_iterator_branch_result zend_native_value_iterator_branch(
 {
 	zend_native_explicit_value_operation operation;
 	const zend_native_explicit_value_operation *opline = &operation;
+	zend_native_iterator_branch_result status;
 	zval *holder;
 	zval *value;
 	bool by_reference;
@@ -7496,18 +7497,26 @@ zend_native_iterator_branch_result zend_native_value_iterator_branch(
 		value = Z_REFVAL_P(value);
 	}
 	if (Z_TYPE_P(value) == IS_ARRAY) {
-		return zend_native_iterator_fetch_array(
+		status = zend_native_iterator_fetch_array(
 			execute_data, opline, holder, value, by_reference);
-	}
-	if (Z_TYPE_P(value) == IS_OBJECT) {
-		return zend_native_iterator_fetch_object(
+	} else if (Z_TYPE_P(value) == IS_OBJECT) {
+		status = zend_native_iterator_fetch_object(
 			execute_data, opline, holder, value, by_reference);
+	} else {
+		zend_error(E_WARNING,
+			"foreach() argument must be of type array|object, %s given",
+			zend_zval_value_name(value));
+		status = EG(exception) == NULL
+			? ZEND_NATIVE_ITERATOR_END : ZEND_NATIVE_ITERATOR_EXCEPTION;
 	}
-	zend_error(E_WARNING,
-		"foreach() argument must be of type array|object, %s given",
-		zend_zval_value_name(value));
-	return EG(exception) == NULL
-		? ZEND_NATIVE_ITERATOR_END : ZEND_NATIVE_ITERATOR_EXCEPTION;
+	/* The VM's UNDEF_RESULT(): the exception's cleanup releases the key
+	 * result of the throwing fetch, which may never have been written. */
+	if (status == ZEND_NATIVE_ITERATOR_EXCEPTION
+			&& opline->result_type != IS_UNUSED) {
+		ZVAL_UNDEF(zend_native_operand_slot(
+			execute_data, opline->result_type, opline->result));
+	}
+	return status;
 }
 
 zend_native_status zend_native_value_fe_free(
