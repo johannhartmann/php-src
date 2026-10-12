@@ -681,10 +681,24 @@ static zend_op_array *zend_compile_ast_internal(int type)
 }
 
 #ifdef HAVE_NATIVE_ENGINE
+/*
+ * The AST arenas of compilations a bailout abandoned, newest first, each
+ * linked through a pointer at its start. A tree compiled halfway may share
+ * nodes (a get hook borrows its property's type until the hook is
+ * compiled), so it is never destroyed, as in stock builds: the arenas stay
+ * reachable until the request's heap goes.
+ */
+static ZEND_EXT_TLS zend_arena *zend_compile_abandoned_ast_arenas;
+
 static void zend_compile_unwind(zend_native_bailout_record *record)
 {
-	zend_ast_destroy(CG(ast));
-	zend_arena_destroy(CG(ast_arena));
+	zend_arena **previous = zend_arena_alloc(
+		&CG(ast_arena), sizeof(zend_arena *));
+
+	*previous = zend_compile_abandoned_ast_arenas;
+	zend_compile_abandoned_ast_arenas = CG(ast_arena);
+	CG(ast) = NULL;
+	CG(ast_arena) = NULL;
 }
 #endif
 
