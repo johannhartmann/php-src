@@ -379,6 +379,10 @@ class ZendCompilerX64 final
 	/* Per source call (MIR instruction), the stack slot recording whether
 	 * its Init took the native fast path (ADR 0025 section 3). */
 	std::vector<std::pair<uint32_t, int32_t>> fast_call_slots_;
+	/* The source call whose phases chain (source_call_phases_chain()) and
+	 * the universal entry of its next phase. */
+	uint32_t chained_call_ = UINT32_MAX;
+	tpde::Label chained_universal_{};
 	std::vector<std::pair<uint32_t, int32_t>> fast_entry_slots_;
 	std::vector<std::pair<uint32_t, int32_t>> fast_do_entry_slots_;
 	std::vector<tpde::Label> user_opcode_result_reload_labels_;
@@ -786,6 +790,48 @@ class ZendCompilerX64 final
 	}
 	int32_t fast_call_slot(uint32_t call_instruction) {
 		return site_slot(fast_call_slots_, call_instruction, sizeof(uint32_t));
+	}
+	/*
+	 * Whether the phases after a fast call site's Init are only its own
+	 * Send, Expand, argument-less Check and Do nodes, none emitting code
+	 * before its phase (a materialization, deopt store, landing or
+	 * generator reload). The Init's spill leaves every live value in its
+	 * stack slot until the Do, so the universal path of each phase may
+	 * continue in the next phase's universal path: the fast path then
+	 * never tests the call's mode.
+	 */
+	bool source_call_phases_chain(
+			const Adaptor::InstNode &init, InstRange remaining) const {
+		for (auto it = remaining.from; it != remaining.to; ++it) {
+			const Adaptor::InstNode &phase = adaptor->node(*it);
+			if (phase.mir_instruction_index != init.mir_instruction_index
+					|| phase.deopt_landing != UINT32_MAX
+					|| (phase.materialization_operand_index != UINT32_MAX
+						&& phase.materialization_count != 0)
+					|| phase.deopt_store_operand_index != UINT32_MAX
+					|| !adaptor->generator_resume_values(*it).empty()) {
+				return false;
+			}
+			switch (phase.kind) {
+				case Adaptor::InstKind::UserCallDo:
+					return true;
+				case Adaptor::InstKind::UserCallSend:
+				case Adaptor::InstKind::UserCallExpand:
+					break;
+				case Adaptor::InstKind::UserCallCheck:
+					if (phase.source_position
+							>= adaptor->plan()->source_opcode_count
+						|| adaptor->plan()->source_opcodes[
+								phase.source_position].opcode
+							!= ZEND_CHECK_UNDEF_ARGS) {
+						return false;
+					}
+					break;
+				default:
+					return false;
+			}
+		}
+		return false;
 	}
 	/* The entry a dynamic fast call site's Do calls, from its Init. */
 	int32_t fast_do_entry_slot(uint32_t call_instruction) {
@@ -1220,6 +1266,37 @@ class ZendCompilerX64 final
 		for (IRValueRef phi : adaptor->block_phis(cold)) {
 			spill_value(adaptor->val_as_phi(phi).incoming_val_for_block(
 				IRBlockRef{node.control_block}));
+		}
+	}
+
+	/*
+	 * At a label entered with only the fixed registers and the stack slots
+	 * valid (a chained universal path, see source_call_phases_chain()): a
+	 * value the fall-through code loaded after its branch state was taken
+	 * is in no register there.
+	 */
+	void forget_value_registers() {
+		for (auto reg_id : ::tpde::util::BitSetIterator<>{
+				register_file.used}) {
+			const ::tpde::Reg reg{reg_id};
+			const auto local_idx = register_file.reg_local_idx(reg);
+			if (local_idx == INVALID_VAL_LOCAL_IDX
+					|| register_file.is_fixed(reg)) {
+				continue;
+			}
+			::tpde::ValueAssignment *assignment = val_assignment(local_idx);
+			if (assignment == nullptr) {
+				continue;
+			}
+			::tpde::AssignmentPartRef part{
+				assignment, register_file.reg_part(reg)};
+			if (part.fixed_assignment()) {
+				continue;
+			}
+			ZEND_ASSERT(part.stack_valid() || part.variable_ref()
+				|| assignment->references_left == 0);
+			part.set_register_valid(false);
+			register_file.unmark_used(reg);
 		}
 	}
 
@@ -4001,6 +4078,7 @@ public:
 		user_opcode_labels_.clear();
 		user_opcode_dispatch_labels_.clear();
 		fast_call_slots_.clear();
+		chained_call_ = UINT32_MAX;
 		fast_call_forms_.clear();
 		block_entries_.clear();
 		block_entries_counted_ = false;
@@ -7240,6 +7318,17 @@ bool ZendCompilerX64::compile_inst_impl(
 			const bool fast_site = source_call_fast_eligible(call);
 			const bool fast_new_site = fast_site
 				&& call.user_call->init_opcode == ZEND_NEW;
+			/* After a chained Init no phase tests the mode: only a method
+			 * site's Do reads it, for its second level (mode 2). */
+			const bool chained = fast_site
+				&& source_call_phases_chain(node, remaining_instructions);
+			const bool record_mode = !chained
+				|| (call.user_call->init_opcode == ZEND_INIT_METHOD_CALL
+					&& !source_call_fast_dynamic(call));
+			if (chained) {
+				chained_call_ = node.mir_instruction_index;
+				chained_universal_ = text_writer.label_create();
+			}
 			TargetBranchState fast_spilled;
 			auto fast_join = text_writer.label_create();
 			if (fast_site) {
@@ -7281,7 +7370,9 @@ bool ZendCompilerX64::compile_inst_impl(
 						created.reset(this);
 					}
 					generate_raw_jump(Jump::je, fast_miss);
-					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					if (record_mode) {
+						ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					}
 					/* Falls through to fast_join: the re-arm stub and the miss
 					 * path between them are emitted into the cold area. */
 				} else if (source_call_fast_dynamic(call)) {
@@ -7316,7 +7407,9 @@ bool ZendCompilerX64::compile_inst_impl(
 							do_entry_slot);
 					}
 					generate_raw_jump(Jump::je, fast_miss);
-					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					if (record_mode) {
+						ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					}
 					/* Falls through to fast_join: the re-arm stub and the miss
 					 * path between them are emitted into the cold area. */
 				} else {
@@ -7611,7 +7704,9 @@ bool ZendCompilerX64::compile_inst_impl(
 							static_cast<int32_t>(
 								offsetof(zend_execute_data, call))),
 						callee_reg);
-					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					if (record_mode) {
+						ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
+					}
 					/* Falls through to fast_join: the re-arm stub and the miss
 					 * path between them are emitted into the cold area. */
 				}
@@ -7666,7 +7761,9 @@ bool ZendCompilerX64::compile_inst_impl(
 				 * request at most: out of the hot code. */
 				cold_begin();
 				label_place(fast_miss);
-				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
+				if (record_mode) {
+					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
+				}
 			}
 
 			/*
@@ -7706,14 +7803,18 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto status_reg = resolution_status.cur_reg_or_load(this);
 			ASM(CMP32ri, status_reg,
 				ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS);
-			generate_raw_jump(Jump::je, resolved);
+			/* A chained universal Init continues in the universal path of
+			 * the next phase. */
+			generate_raw_jump(Jump::je, chained ? chained_universal_ : resolved);
 			if (fast_new_site) {
 				auto failed = text_writer.label_create();
 				ASM(CMP32ri, status_reg,
 					ZEND_NATIVE_USER_CALL_RESOLUTION_FAST);
 				generate_raw_jump(Jump::jne, failed);
-				ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG,
-					fast_call_slot(node.mir_instruction_index)), 1);
+				if (record_mode) {
+					ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG,
+						fast_call_slot(node.mir_instruction_index)), 1);
+				}
 				generate_raw_jump(Jump::jmp, resolved);
 				label_place(failed);
 			}
@@ -7787,6 +7888,16 @@ bool ZendCompilerX64::compile_inst_impl(
 			emit_fast_failure();
 		};
 		const bool fast_site = source_call_fast_eligible(call);
+		/* A phase of a chained call (source_call_phases_chain()): the
+		 * previous phase's universal path enters its universal path, which
+		 * continues in the next phase's. */
+		const bool chained = fast_site
+			&& chained_call_ == node.mir_instruction_index;
+		auto take_chained_universal = [&]() {
+			const tpde::Label entry = chained_universal_;
+			chained_universal_ = text_writer.label_create();
+			return entry;
+		};
 		/* A direct scalar send has one TPDE use; the fast and universal
 		 * paths share its ValueRef. */
 		std::optional<ValueRef> shared_direct;
@@ -8113,11 +8224,18 @@ bool ZendCompilerX64::compile_inst_impl(
 			}
 			/* A dynamic fast frame is EX(call): send to it as the VM does. */
 			auto fast_spilled = spill_target_branch_state();
-			auto universal = text_writer.label_create();
 			auto sent = text_writer.label_create();
-			ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
-				fast_call_slot(node.mir_instruction_index)), 0);
-			generate_raw_jump(Jump::je, universal);
+			tpde::Label universal;
+			tpde::Label universal_done = sent;
+			if (chained) {
+				universal = take_chained_universal();
+				universal_done = chained_universal_;
+			} else {
+				universal = text_writer.label_create();
+				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
+					fast_call_slot(node.mir_instruction_index)), 0);
+				generate_raw_jump(Jump::je, universal);
+			}
 			const zend_native_direct_internal_call_argument &send_argument =
 				call.user_call->arguments[node.argument_index];
 			const bool context_held = val_assignment(adaptor->val_local_idx(
@@ -8456,11 +8574,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			cold_begin();
 			label_place(universal);
 			reconcile_target_branch_state(fast_spilled);
+			if (chained) {
+				forget_value_registers();
+			}
 			if (!compile_universal_send()) {
 				cold_end();
 				return false;
 			}
-			generate_raw_jump(Jump::jmp, sent);
+			generate_raw_jump(Jump::jmp, universal_done);
 			label_place(send_exception);
 			emit_fast_failure();
 			cold_end();
@@ -8508,17 +8629,24 @@ bool ZendCompilerX64::compile_inst_impl(
 			if (direct && node.operands.size() != 3) {
 				return false;
 			}
-			if (direct) {
+			if (direct && !chained) {
 				/* Both paths read the scalar; it enters the branch in a
 				 * register so the branch state covers it. */
 				auto part = direct_value_ref().part_unowned(0);
 				(void) part.load_to_reg();
 			}
 			auto fast_spilled = spill_target_branch_state();
-			auto universal = text_writer.label_create();
 			auto sent = text_writer.label_create();
-			ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
-			generate_raw_jump(Jump::je, universal);
+			tpde::Label universal;
+			tpde::Label universal_done = sent;
+			if (chained) {
+				universal = take_chained_universal();
+				universal_done = chained_universal_;
+			} else {
+				universal = text_writer.label_create();
+				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
+				generate_raw_jump(Jump::je, universal);
+			}
 			/* SEND_VAR of an undefined CV warns and sends null, out of the
 			 * hot code behind it, where no scratch register is live across
 			 * the warning call. */
@@ -8776,11 +8904,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			cold_begin();
 			label_place(universal);
 			reconcile_target_branch_state(fast_spilled);
+			if (chained) {
+				forget_value_registers();
+			}
 			if (!compile_universal_send()) {
 				cold_end();
 				return false;
 			}
-			generate_raw_jump(Jump::jmp, sent);
+			generate_raw_jump(Jump::jmp, universal_done);
 			cold_end();
 			label_place(sent);
 			reconcile_target_branch_state(fast_spilled);
@@ -8926,8 +9057,19 @@ bool ZendCompilerX64::compile_inst_impl(
 			/* A fast frame received every argument by position; the
 			 * universal protocol expands out of line. */
 			auto fast_expanded = text_writer.label_create();
-			auto universal_expand = text_writer.label_create();
-			if (fast_site) {
+			tpde::Label expanded_done = fast_expanded;
+			if (chained) {
+				/* Entered from the previous phase's universal path only,
+				 * with every value in its stack slot. */
+				auto expand_spilled = spill_target_branch_state();
+				const tpde::Label universal_expand = take_chained_universal();
+				expanded_done = chained_universal_;
+				cold_begin();
+				label_place(universal_expand);
+				reconcile_target_branch_state(expand_spilled);
+				forget_value_registers();
+			} else if (fast_site) {
+				auto universal_expand = text_writer.label_create();
 				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG,
 					fast_call_slot(node.mir_instruction_index)), 0);
 				generate_raw_jump(Jump::je, universal_expand);
@@ -8943,7 +9085,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				builder.add_ret(expanded, tpde::CCAssignment{});
 			}
 			ASM(CMP32ri, expanded.cur_reg_or_load(this), SUCCESS);
-			generate_raw_jump(Jump::je, fast_expanded);
+			generate_raw_jump(Jump::je, expanded_done);
 			expanded.reset(this);
 			emit_fast_failure();
 			if (fast_site) {
@@ -9002,9 +9144,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			constexpr int32_t header_offset = -static_cast<int32_t>(
 				sizeof(zend_native_user_call_site_header));
 			auto fast_spilled = spill_target_branch_state();
-			auto universal_do = text_writer.label_create();
-			ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
-			generate_raw_jump(Jump::je, universal_do);
+			tpde::Label universal_do;
+			if (chained) {
+				universal_do = chained_universal_;
+				chained_call_ = UINT32_MAX;
+			} else {
+				universal_do = text_writer.label_create();
+				ASM(CMP32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 0);
+				generate_raw_jump(Jump::je, universal_do);
+			}
 			/*
 			 * zend_native_call_fast_do() unlinks, initializes, enters and
 			 * leaves the frame out of line; the site keeps one call.
@@ -9146,6 +9294,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * code, after the failure paths. */
 			label_place(universal_do);
 			reconcile_target_branch_state(fast_spilled);
+			if (chained) {
+				forget_value_registers();
+				/* The chain skipped the Do's opline publication. */
+				ScratchReg opline{this};
+				auto opline_reg = opline.alloc_gp();
+				emit_publish_opline(canonical_frame_register(), opline_reg,
+					static_cast<int32_t>(node.source_position
+						* sizeof(zend_op)));
+			}
 		}
 		/*
 		 * The universal protocol's Do runs out of line in
