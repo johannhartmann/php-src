@@ -1526,10 +1526,6 @@ public:
 			key_exists ? isset.op2 : isset.op1;
 		const zend_mir_source_operand_ref &key =
 			key_exists ? isset.op1 : isset.op2;
-		const zend_mir_storage_id container_storage =
-			key_exists ? isset.op2_storage_id : isset.op1_storage_id;
-		const zend_mir_storage_id key_storage =
-			key_exists ? isset.op1_storage_id : isset.op2_storage_id;
 		if (producer.kind != Adaptor::InstKind::GuardedFast
 				|| producer.continuation_block == UINT32_MAX
 				|| !producer_mir.has_value_operation
@@ -1563,8 +1559,33 @@ public:
 			}
 		}
 		/* Successor 0 is the branch's true edge; only it may enter. */
-		const IRBlockRef read_block = branch_succs[0];
-		if (read_block == branch_succs[1]) {
+		return lookup_reuse_read(isset, key_exists, branch_succs[0],
+			branch_succs[1]);
+	}
+	/*
+	 * The read of an isset's (or array_key_exists()'s) element that starts
+	 * read_block, the true edge of the branch on it, whose false edge is
+	 * other_block (see lookup_reuse_consumer()); an invalid ref if none.
+	 */
+	IRInstRef lookup_reuse_read(const zend_mir_executable_value_ref &isset,
+			bool key_exists, IRBlockRef read_block, IRBlockRef other_block) {
+		auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
+			return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+				? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+		};
+		const zend_mir_source_operand_ref &container =
+			key_exists ? isset.op2 : isset.op1;
+		const zend_mir_source_operand_ref &key =
+			key_exists ? isset.op1 : isset.op2;
+		const zend_mir_storage_id container_storage =
+			key_exists ? isset.op2_storage_id : isset.op1_storage_id;
+		const zend_mir_storage_id key_storage =
+			key_exists ? isset.op1_storage_id : isset.op2_storage_id;
+		if (slot_kind(container) != ZEND_MIR_SOURCE_SLOT_CV
+				|| (key.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& slot_kind(key) != ZEND_MIR_SOURCE_SLOT_CV)
+				|| read_block == other_block) {
 			return IRInstRef{UINT32_MAX};
 		}
 		/* The edges into each block, counted once per function. */
@@ -2037,6 +2058,525 @@ public:
 	}
 
 	/*
+	 * An array probe that cannot decide a key finds the element in C,
+	 * zend_native_array_find_element(), out of the hot code. Only an array
+	 * (a global's or a by-reference parameter's through its reference)
+	 * under a string key can be decided there: any other container or key
+	 * goes to undecided, where the probe's own answer would go.
+	 */
+	void emit_find_element_filter(AsmReg container_base,
+			int32_t container_offset, AsmReg key_base, int32_t key_offset,
+			tpde::Label undecided) {
+		auto container_checked = text_writer.label_create();
+		auto key_checked = text_writer.label_create();
+		const int32_t type = static_cast<int32_t>(offsetof(zval, u1.v.type));
+		ASM(CMP8mi, FE_MEM(container_base, 0, FE_NOREG,
+			container_offset + type), IS_ARRAY);
+		generate_raw_jump(Jump::je, container_checked);
+		ASM(CMP8mi, FE_MEM(container_base, 0, FE_NOREG,
+			container_offset + type), IS_REFERENCE);
+		generate_raw_jump(Jump::jne, undecided);
+		label_place(container_checked);
+		ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG, key_offset + type),
+			IS_STRING);
+		generate_raw_jump(Jump::je, key_checked);
+		ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG, key_offset + type),
+			IS_REFERENCE);
+		generate_raw_jump(Jump::jne, undecided);
+		label_place(key_checked);
+	}
+	/* out_reg = zend_native_array_find_element(container, key, mode), all
+	 * other live registers kept. */
+	void emit_find_element_call(AsmReg out_reg, uint64_t mode,
+			AsmReg frame_reg, AsmReg container_base, int32_t container_offset,
+			AsmReg key_base, int32_t key_offset) {
+		const uint64_t live_registers = static_cast<uint64_t>(
+			register_file.used) & ~(uint64_t{1} << out_reg.id());
+		emit_preserving_call(live_registers,
+			ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT, [&] {
+				/* The key's address first, through a caller-saved register
+				 * no base uses: a base may sit in an argument register. */
+				FeRegGP key_temp = FE_AX;
+				for (const auto &[id, reg] : {std::pair{AsmReg::AX, FE_AX},
+						std::pair{AsmReg::CX, FE_CX},
+						std::pair{AsmReg::DX, FE_DX}}) {
+					if (frame_reg.id() != id && key_base.id() != id
+							&& container_base.id() != id) {
+						key_temp = reg;
+						break;
+					}
+				}
+				ASM(LEA64rm, key_temp,
+					FE_MEM(key_base, 0, FE_NOREG, key_offset));
+				ASM(LEA64rm, FE_DI,
+					FE_MEM(container_base, 0, FE_NOREG, container_offset));
+				ASM(MOV64rr, FE_SI, key_temp);
+				ASM(MOV32ri, FE_DX, static_cast<int32_t>(mode));
+			}, [&] {
+				ASM(MOV64rr, out_reg, FE_AX);
+			});
+	}
+
+	/* The source opcode facts of a fused operation, or nullptr. */
+	const zend_tpde_source_opcode *fused_source_opcode(
+			const zend_tpde_instruction *operation) const {
+		const zend_tpde_plan *plan = adaptor->plan();
+		const uint32_t position =
+			operation->value_operation.source_position_id;
+		return plan->source_opcodes != nullptr
+				&& position < plan->source_opcode_count
+				&& plan->source_opcodes[position].opcode
+					== operation->value_operation.source_opcode
+			? &plan->source_opcodes[position] : nullptr;
+	}
+	/*
+	 * === or !== fused into its JMPZ/JMPNZ, as identical_literal() decides
+	 * it: a null, boolean or integer literal by type byte and payload, any
+	 * other operand through zend_native_zval_identical(_any)(). The match
+	 * jumps to truthy (=== ) or falsey (!==); an undefined variable,
+	 * doubles, arrays, objects, a counted second temporary and a first one
+	 * no other owner keeps alive take slow.
+	 */
+	bool emit_fused_identical(const zend_tpde_instruction *compare,
+			const zend_tpde_fused_operand &left,
+			const zend_tpde_fused_operand &right, AsmReg frame_reg,
+			AsmReg type_reg, tpde::Label truthy, tpde::Label falsey,
+			tpde::Label slow) {
+		if (!store_fused_result_placeholder(compare, frame_reg)) {
+			return false;
+		}
+		const bool negated = compare->value_operation.source_opcode
+			== ZEND_IS_NOT_IDENTICAL;
+		const tpde::Label matches = negated ? falsey : truthy;
+		const tpde::Label differs = negated ? truthy : falsey;
+		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_source_opcode *source = fused_source_opcode(compare);
+		const uint32_t literal_index = right.offset / sizeof(zval);
+		const zval *known_literal = right.literal
+				&& plan->source_literals != nullptr
+				&& literal_index < plan->source_literal_count
+			? &plan->source_literals[literal_index] : nullptr;
+		const bool typed_literal = known_literal != nullptr
+			&& (Z_TYPE_P(known_literal) <= IS_TRUE
+				|| Z_TYPE_P(known_literal) == IS_LONG)
+			&& Z_TYPE_P(known_literal) != IS_UNDEF;
+		/* The snippet's seven scratch registers, the frame and the
+		 * literals. */
+		if (!typed_literal && unlocked_gp_registers() < 9) {
+			generate_raw_jump(Jump::jmp, slow);
+			return true;
+		}
+		const int32_t left_offset = static_cast<int32_t>(left.offset);
+		const int32_t right_offset = static_cast<int32_t>(right.offset);
+		ScratchReg match{this};
+		AsmReg match_reg;
+		if (typed_literal) {
+			const uint32_t may_be = source != nullptr
+				? source->op1_may_be : UINT32_MAX;
+			match_reg = match.alloc_gp();
+			auto mismatch = text_writer.label_create();
+			ASM(XOR32rr, match_reg, match_reg);
+			ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				left_offset + static_cast<int32_t>(
+					offsetof(zval, u1.v.type))));
+			ASM(CMP32ri, type_reg, Z_TYPE_P(known_literal));
+			generate_raw_jump(Jump::jne, mismatch);
+			if (Z_TYPE_P(known_literal) == IS_LONG) {
+				const zend_long literal_value = Z_LVAL_P(known_literal);
+				if (literal_value >= INT32_MIN && literal_value <= INT32_MAX) {
+					ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, left_offset),
+						static_cast<int32_t>(literal_value));
+				} else {
+					ASM(MOV64ri, type_reg,
+						static_cast<int64_t>(literal_value));
+					ASM(CMP64rm, type_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG, left_offset));
+				}
+				generate_raw_set(Jump::je, match_reg, false);
+			} else {
+				ASM(MOV32ri, match_reg, 1);
+			}
+			if ((may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0) {
+				auto decided = text_writer.label_create();
+				generate_raw_jump(Jump::jmp, decided);
+				label_place(mismatch);
+				ASM(TEST32rr, type_reg, type_reg);
+				generate_raw_jump(Jump::je, slow);
+				ASM(CMP32ri, type_reg, IS_REFERENCE);
+				generate_raw_jump(Jump::je, slow);
+				label_place(decided);
+			} else {
+				label_place(mismatch);
+			}
+		} else {
+			ScratchReg literals{this};
+			ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
+			bool encoded;
+			if (right.literal) {
+				const AsmReg literals_reg = literals.alloc_gp();
+				emit_literal_base(literals_reg, frame_reg);
+				encoded = EncodeBase::encode_zend_native_zval_identical(
+					GenericValuePart{GenericValuePart::Expr{frame_reg,
+						static_cast<int64_t>(left_offset)}},
+					GenericValuePart{GenericValuePart::Expr{literals_reg,
+						static_cast<int64_t>(right_offset)}},
+					matched);
+			} else {
+				encoded = EncodeBase::encode_zend_native_zval_identical_any(
+					GenericValuePart{GenericValuePart::Expr{frame_reg,
+						static_cast<int64_t>(left_offset)}},
+					GenericValuePart{GenericValuePart::Expr{frame_reg,
+						static_cast<int64_t>(right_offset)}},
+					matched);
+			}
+			if (!encoded) {
+				return false;
+			}
+			literals.reset();
+			match_reg = match.alloc_gp();
+			mov(match_reg, matched.cur_reg_or_load(this), 8);
+			matched.reset(this);
+			ASM(CMP64ri, match_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
+			generate_raw_jump(Jump::je, slow);
+			/* A temporary second operand must need no release. */
+			if (right.temporary) {
+				ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					right_offset + static_cast<int32_t>(
+						offsetof(zval, u1.type_info))),
+					Z_TYPE_FLAGS_MASK);
+				generate_raw_jump(Jump::jne, slow);
+			}
+		}
+		if (left.temporary) {
+			emit_consume_shared(frame_reg, left_offset, slow);
+		}
+		ASM(TEST32rr, match_reg, match_reg);
+		generate_raw_jump(Jump::jne, matches);
+		generate_raw_jump(Jump::jmp, differs);
+		return true;
+	}
+	/*
+	 * isset($a[$k]) fused into its JMPZ/JMPNZ, with the probes the array
+	 * element code uses for it: set jumps to truthy, absent or null to
+	 * falsey. A key the probe cannot decide is looked up in C; anything else
+	 * takes slow, where the helper computes the temporary the branch then
+	 * tests. With a read of the element on the true edge (reuse_read, see
+	 * lookup_reuse_read()) the element itself is found and kept for it.
+	 */
+	bool emit_fused_isset_dim(const zend_tpde_instruction *isset,
+			const zend_tpde_fused_operand &container,
+			const zend_tpde_fused_operand &key, AsmReg frame_reg,
+			tpde::Label truthy, tpde::Label falsey, tpde::Label slow,
+			IRInstRef reuse_read) {
+		if (!store_fused_result_placeholder(isset, frame_reg)) {
+			return false;
+		}
+		const bool reuse = reuse_read != IRInstRef{UINT32_MAX}
+			&& !key.temporary;
+		if (reuse) {
+			ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
+		}
+		/* The probes use up to seven scratch registers, with the literal
+		 * base held. */
+		if (unlocked_gp_registers() < 9) {
+			generate_raw_jump(Jump::jmp, slow);
+			return true;
+		}
+		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_source_opcode *source = fused_source_opcode(isset);
+		const int32_t container_offset =
+			static_cast<int32_t>(container.offset);
+		const int32_t key_offset = static_cast<int32_t>(key.offset);
+		/* A CV Zend's type inference proves to be an array, neither
+		 * undefined nor a reference: the known_* probes take its table. */
+		const bool known_array = !container.literal && source != nullptr
+			&& source->op1_type == IS_CV
+			&& source->op1_var == container.offset
+			&& (source->op1_may_be & (MAY_BE_ANY | MAY_BE_UNDEF
+					| MAY_BE_REF | MAY_BE_INDIRECT)) == MAY_BE_ARRAY
+			&& unlocked_gp_registers() >= 10;
+		/* A literal key is an integer or a string with its hash, which the
+		 * compiler made non-numeric; any other literal and a runtime key
+		 * take the general probes. */
+		enum class KeyForm { Index, String, Literal, Runtime };
+		KeyForm form = key.literal ? KeyForm::Literal : KeyForm::Runtime;
+		uint64_t literal_value = 0;
+		if (key.literal && plan->source_literals != nullptr
+				&& key.offset / sizeof(zval) < plan->source_literal_count) {
+			const zval *literal =
+				&plan->source_literals[key.offset / sizeof(zval)];
+			if (Z_TYPE_P(literal) == IS_LONG) {
+				form = KeyForm::Index;
+				literal_value = static_cast<uint64_t>(Z_LVAL_P(literal));
+			} else if (Z_TYPE_P(literal) == IS_STRING
+					&& ZSTR_H(Z_STR_P(literal)) != 0) {
+				form = KeyForm::String;
+				literal_value = ZSTR_H(Z_STR_P(literal));
+			}
+		}
+		ScratchReg literals{this};
+		AsmReg literals_reg = frame_reg;
+		if (container.literal || (key.literal && form != KeyForm::Index)) {
+			literals_reg = literals.alloc_gp();
+			emit_literal_base(literals_reg, frame_reg);
+		}
+		const AsmReg container_base =
+			container.literal ? literals_reg : frame_reg;
+		const AsmReg key_base = key.literal ? literals_reg : frame_reg;
+		auto address = [](AsmReg base, int32_t offset) {
+			return GenericValuePart{GenericValuePart::Expr{
+				base, static_cast<int64_t>(offset)}};
+		};
+		auto constant = [&]() {
+			return GenericValuePart{ValuePartRef{this, literal_value, 8,
+				tpde::x64::PlatformConfig::GP_BANK}};
+		};
+		/* The operation consumes a temporary key: one that needs a release
+		 * takes the helper. */
+		if (key.temporary) {
+			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				key_offset + static_cast<int32_t>(
+					offsetof(zval, u1.type_info))),
+				Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::jne, slow);
+		}
+		const bool find_element = form != KeyForm::Index
+			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
+		const bool split_string_key = form == KeyForm::Runtime
+			&& unlocked_gp_registers() >= 10;
+		/*
+		 * A runtime key: a string probes inline, any other key (an integer,
+		 * a reference) out of line, both into one register.
+		 */
+		auto string_key_split = [&](auto &&string_probe, auto &&general_probe,
+				ValuePart &out) -> bool {
+			ScratchReg common{this};
+			const AsmReg common_reg = common.alloc_gp();
+			auto other = text_writer.label_create();
+			auto joined = text_writer.label_create();
+			ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
+				key_offset + static_cast<int32_t>(
+					offsetof(zval, u1.v.type))), IS_STRING);
+			generate_raw_jump(Jump::jne, other);
+			{
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				if (!string_probe(value)) {
+					return false;
+				}
+				mov(common_reg, value.cur_reg_or_load(this), 8);
+				value.reset(this);
+			}
+			const bool cold_other = !text_writer.in_cold_area();
+			if (cold_other) {
+				cold_begin();
+			} else {
+				generate_raw_jump(Jump::jmp, joined);
+			}
+			label_place(other);
+			{
+				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+				if (!general_probe(value)) {
+					return false;
+				}
+				mov(common_reg, value.cur_reg_or_load(this), 8);
+				value.reset(this);
+			}
+			if (cold_other) {
+				generate_raw_jump(Jump::jmp, joined);
+				cold_end();
+			}
+			label_place(joined);
+			out.set_value(this, std::move(common));
+			return true;
+		};
+		ValuePart probed{tpde::x64::PlatformConfig::GP_BANK, 8};
+		bool encoded = false;
+		if (reuse) {
+			/* The element itself, as the test probes find it. */
+			switch (form) {
+				case KeyForm::Index:
+					encoded = known_array
+						? EncodeBase::encode_zend_native_known_find_idx(
+							address(container_base, container_offset),
+							constant(), probed)
+						: EncodeBase::encode_zend_native_array_test_idx(
+							address(container_base, container_offset),
+							constant(), probed);
+					break;
+				case KeyForm::String: {
+					ScratchReg name{this};
+					ASM(MOV64rm, name.alloc_gp(),
+						FE_MEM(literals_reg, 0, FE_NOREG, key_offset));
+					encoded = known_array
+						? EncodeBase::encode_zend_native_known_find_str(
+							address(container_base, container_offset),
+							GenericValuePart{std::move(name)}, constant(),
+							probed)
+						: EncodeBase::encode_zend_native_array_test_str(
+							address(container_base, container_offset),
+							GenericValuePart{std::move(name)}, constant(),
+							probed);
+					break;
+				}
+				case KeyForm::Literal:
+					encoded = known_array
+						? EncodeBase::encode_zend_native_known_find_literal(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed)
+						: EncodeBase::encode_zend_native_array_test_literal(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed);
+					break;
+				case KeyForm::Runtime:
+					encoded = known_array
+						? EncodeBase::encode_zend_native_known_find_key(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed)
+						: EncodeBase::encode_zend_native_array_test_key(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed);
+					break;
+			}
+		} else {
+			switch (form) {
+				case KeyForm::Index:
+					encoded = known_array
+						? EncodeBase::encode_zend_native_known_isset_idx(
+							address(container_base, container_offset),
+							constant(), probed)
+						: EncodeBase::encode_zend_native_array_isset_idx(
+							address(container_base, container_offset),
+							constant(), probed);
+					break;
+				case KeyForm::String: {
+					ScratchReg name{this};
+					ASM(MOV64rm, name.alloc_gp(),
+						FE_MEM(literals_reg, 0, FE_NOREG, key_offset));
+					encoded = known_array
+						? EncodeBase::encode_zend_native_known_isset_str(
+							address(container_base, container_offset),
+							GenericValuePart{std::move(name)}, constant(),
+							probed)
+						: EncodeBase::encode_zend_native_array_isset_str(
+							address(container_base, container_offset),
+							GenericValuePart{std::move(name)}, constant(),
+							probed);
+					break;
+				}
+				case KeyForm::Literal:
+					encoded = known_array
+						? EncodeBase::encode_zend_native_known_isset_literal(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed)
+						: EncodeBase::encode_zend_native_array_isset_literal(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed);
+					break;
+				case KeyForm::Runtime:
+					encoded = split_string_key
+						? string_key_split(
+							[&](ValuePart &out) {
+								return known_array
+				? EncodeBase::encode_zend_native_known_isset_string_key(
+									address(container_base, container_offset),
+									address(key_base, key_offset), out)
+				: EncodeBase::encode_zend_native_array_isset_string_key(
+									address(container_base, container_offset),
+									address(key_base, key_offset), out);
+							},
+							[&](ValuePart &out) {
+								return known_array
+				? EncodeBase::encode_zend_native_known_isset_key(
+									address(container_base, container_offset),
+									address(key_base, key_offset), out)
+				: EncodeBase::encode_zend_native_array_isset_key(
+									address(container_base, container_offset),
+									address(key_base, key_offset), out);
+							}, probed)
+						: known_array
+						? EncodeBase::encode_zend_native_known_isset_key(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed)
+						: EncodeBase::encode_zend_native_array_isset_key(
+							address(container_base, container_offset),
+							address(key_base, key_offset), probed);
+					break;
+			}
+		}
+		if (!encoded) {
+			return false;
+		}
+		ScratchReg answer{this};
+		const AsmReg answer_reg = answer.alloc_gp();
+		mov(answer_reg, probed.cur_reg_or_load(this), 8);
+		probed.reset(this);
+		/* An undecided key is looked up in C out of the hot code; the
+		 * answer goes through the same test again, and one C cannot decide
+		 * either takes slow. */
+		auto complete_in_c = [&](Jump undecided, uint64_t mode,
+				int32_t unknown, tpde::Label decide) {
+			auto complete = text_writer.label_create();
+			auto decided = text_writer.label_create();
+			generate_raw_jump(undecided, complete);
+			const bool cold_find = !text_writer.in_cold_area();
+			if (cold_find) {
+				cold_begin();
+			} else {
+				generate_raw_jump(Jump::jmp, decided);
+			}
+			label_place(complete);
+			emit_find_element_filter(container_base, container_offset,
+				key_base, key_offset, slow);
+			emit_find_element_call(answer_reg, mode, frame_reg,
+				container_base, container_offset, key_base, key_offset);
+			ASM(CMP64ri, answer_reg, unknown);
+			generate_raw_jump(undecided, slow);
+			generate_raw_jump(Jump::jmp, decide);
+			if (cold_find) {
+				cold_end();
+			}
+			label_place(decided);
+		};
+		auto decide = text_writer.label_create();
+		label_place(decide);
+		if (reuse) {
+			ASM(CMP64ri, answer_reg,
+				static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+			if (find_element) {
+				complete_in_c(Jump::jb, ZEND_NATIVE_FIND_TEST,
+					static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT), decide);
+			} else {
+				generate_raw_jump(Jump::jb, slow);
+			}
+			generate_raw_jump(Jump::je, falsey);
+			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
+				answer_reg);
+			lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse_read));
+			ValuePart set{tpde::x64::PlatformConfig::GP_BANK, 8};
+			if (!EncodeBase::encode_zend_native_zval_isset(
+					address(answer_reg, 0), set)) {
+				return false;
+			}
+			const AsmReg set_reg = set.cur_reg_or_load(this);
+			ASM(TEST32rr, set_reg, set_reg);
+			set.reset(this);
+		} else {
+			ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
+			if (find_element) {
+				complete_in_c(Jump::je,
+					ZEND_NATIVE_FIND_TEST | ZEND_NATIVE_FIND_ISSET,
+					ZEND_NATIVE_ISSET_UNKNOWN, decide);
+			} else {
+				generate_raw_jump(Jump::je, slow);
+			}
+			ASM(TEST32rr, answer_reg, answer_reg);
+		}
+		generate_raw_jump(Jump::jne, truthy);
+		generate_raw_jump(Jump::jmp, falsey);
+		return true;
+	}
+
+	/*
 	 * The hot part of a comparison fused into its JMPZ/JMPNZ: two numbers
 	 * (through a CV's reference) compare and jump to the branch's truthy or
 	 * falsey label; any other operand jumps to slow.
@@ -2044,11 +2584,56 @@ public:
 	bool emit_fused_compare(
 			const zend_tpde_instruction *compare, AsmReg frame_reg,
 			AsmReg left_type, AsmReg left_value, tpde::Label truthy,
-			tpde::Label falsey, tpde::Label slow) {
+			tpde::Label falsey, tpde::Label slow,
+			IRInstRef reuse_read = IRInstRef{UINT32_MAX}) {
 		struct {
 			zend_tpde_fused_operand left;
 			zend_tpde_fused_operand right;
 		} layout{};
+		if (compare != nullptr
+				&& zend_tpde_fused_isset_dim_at(
+					*compare, &layout.left, &layout.right)) {
+			return emit_fused_isset_dim(compare, layout.left, layout.right,
+				frame_reg, truthy, falsey, slow, reuse_read);
+		}
+		if (compare != nullptr
+				&& zend_tpde_fused_identical_at(
+					*compare, &layout.left, &layout.right)) {
+			return emit_fused_identical(compare, layout.left, layout.right,
+				frame_reg, left_type, truthy, falsey, slow);
+		}
+		if (compare != nullptr
+				&& zend_tpde_fused_isset_cv_at(*compare, &layout.left)) {
+			/* isset($cv): set and not null, through a reference. */
+			if (!store_fused_result_placeholder(compare, frame_reg)) {
+				return false;
+			}
+			const zend_tpde_source_opcode *source =
+				fused_source_opcode(compare);
+			const int32_t offset = static_cast<int32_t>(layout.left.offset);
+			ASM(MOVZXr32m8, left_type,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					offset + static_cast<int32_t>(
+						offsetof(zval, u1.type_info))));
+			ASM(CMP32ri, left_type, IS_NULL);
+			generate_raw_jump(Jump::jbe, falsey);
+			if (source == nullptr || source->op1_may_be == UINT32_MAX
+					|| (source->op1_may_be & MAY_BE_REF) != 0) {
+				auto reference = text_writer.label_create();
+				ASM(CMP32ri, left_type, IS_REFERENCE);
+				emit_cold_branch(Jump::je, reference, [&] {
+					ASM(MOV64rm, left_value,
+						FE_MEM(frame_reg, 0, FE_NOREG, offset));
+					ASM(CMP8mi, FE_MEM(left_value, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_reference, val)
+							+ offsetof(zval, u1.v.type))), IS_NULL);
+					generate_raw_jump(Jump::jbe, falsey);
+					generate_raw_jump(Jump::jmp, truthy);
+				});
+			}
+			generate_raw_jump(Jump::jmp, truthy);
+			return true;
+		}
 		if (compare != nullptr
 				&& zend_tpde_fused_type_check_at(*compare, &layout.left)) {
 			/* TYPE_CHECK: the mask bit of the type, or of a reference's
@@ -6538,6 +7123,15 @@ bool ZendCompilerX64::compile_inst_impl(
 					required
 						< adaptor->plan()->entry_undef_temporary_count;
 					++required) {
+				/* A branch-fused operation's result is a placeholder the
+				 * branch stores before its helper runs. */
+				if (!adaptor->typed_body()
+						&& adaptor->plan()->entry_undef_temporary_fused_only
+							!= nullptr
+						&& adaptor->plan()->entry_undef_temporary_fused_only[
+							required] != 0) {
+					continue;
+				}
 				const uint32_t index =
 					adaptor->plan()->entry_undef_temporary_indices[
 						required];
@@ -12390,60 +12984,17 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& literal_key != LiteralKey::Index
 			&& literal_key != LiteralKey::Register
 			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
-		/* Only an array (a global's or a by-reference parameter's through
-		 * its reference) under a string key can be decided in C; any other
-		 * container or key goes where the probe's undecided answer goes. */
 		auto find_element_filter = [&](tpde::Label undecided) {
-			const AsmReg key_base = key_literal ? literals_reg : frame_reg;
-			auto container_checked = text_writer.label_create();
-			auto key_checked = text_writer.label_create();
-			ASM(CMP8mi, FE_MEM(container_base, 0, FE_NOREG,
-				static_cast<int32_t>(container_offset
-					+ offsetof(zval, u1.v.type))), IS_ARRAY);
-			generate_raw_jump(Jump::je, container_checked);
-			ASM(CMP8mi, FE_MEM(container_base, 0, FE_NOREG,
-				static_cast<int32_t>(container_offset
-					+ offsetof(zval, u1.v.type))), IS_REFERENCE);
-			generate_raw_jump(Jump::jne, undecided);
-			label_place(container_checked);
-			ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
-				static_cast<int32_t>(key_offset
-					+ offsetof(zval, u1.v.type))), IS_STRING);
-			generate_raw_jump(Jump::je, key_checked);
-			ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
-				static_cast<int32_t>(key_offset
-					+ offsetof(zval, u1.v.type))), IS_REFERENCE);
-			generate_raw_jump(Jump::jne, undecided);
-			label_place(key_checked);
+			emit_find_element_filter(container_base,
+				static_cast<int32_t>(container_offset),
+				key_literal ? literals_reg : frame_reg,
+				static_cast<int32_t>(key_offset), undecided);
 		};
 		auto find_element_call = [&](AsmReg out_reg, uint64_t mode) {
-			const AsmReg key_base = key_literal ? literals_reg : frame_reg;
-			const uint64_t live_registers = static_cast<uint64_t>(
-				register_file.used) & ~(uint64_t{1} << out_reg.id());
-			emit_preserving_call(live_registers,
-				ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT, [&] {
-					/* The key's address first, through a caller-saved
-					 * register no base uses: a base may sit in an
-					 * argument register. */
-					FeRegGP key_temp = FE_AX;
-					for (const auto &[id, reg] : {std::pair{AsmReg::AX, FE_AX},
-							std::pair{AsmReg::CX, FE_CX},
-							std::pair{AsmReg::DX, FE_DX}}) {
-						if (frame_reg.id() != id && key_base.id() != id
-								&& container_base.id() != id) {
-							key_temp = reg;
-							break;
-						}
-					}
-					ASM(LEA64rm, key_temp, FE_MEM(key_base, 0, FE_NOREG,
-						static_cast<int32_t>(key_offset)));
-					ASM(LEA64rm, FE_DI, FE_MEM(container_base, 0, FE_NOREG,
-						static_cast<int32_t>(container_offset)));
-					ASM(MOV64rr, FE_SI, key_temp);
-					ASM(MOV32ri, FE_DX, static_cast<int32_t>(mode));
-				}, [&] {
-					ASM(MOV64rr, out_reg, FE_AX);
-				});
+			emit_find_element_call(out_reg, mode, frame_reg, container_base,
+				static_cast<int32_t>(container_offset),
+				key_literal ? literals_reg : frame_reg,
+				static_cast<int32_t>(key_offset));
 		};
 		/*
 		 * A runtime key: a string looks up inline, any other key (an
@@ -18457,6 +19008,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
+			if (mir.fused_into_branch && !adaptor->typed_body()) {
+				return fused_into_branch_placeholder();
+			}
 			return isset_array();
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
 			return long_assign_op();
@@ -18478,6 +19032,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_CAST:
 			return execute_value_operation();
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
+			if (mir.fused_into_branch && !adaptor->typed_body()) {
+				return fused_into_branch_placeholder();
+			}
 			return slot_isset_empty();
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
 			return execute_value_operation();
@@ -19094,8 +19651,18 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_ITERATOR_BRANCH:
 		case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
 		case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH: {
+			/* A fused comparison: the branch evaluates it (see
+			 * freeze_fused_compare_branches). */
+			const bool fused = record.opcode
+					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& mir.fused_compare_plus_one != 0
+				&& !adaptor->typed_body()
+				&& mir.fused_compare_plus_one
+					<= adaptor->plan()->instruction_count;
+			/* A fused operation's register result is a placeholder. */
 			const bool register_machine_condition =
 				record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				&& !fused
 				&& node.operands.size() == 1
 				&& node.operands[0]
 					!= IRValueRef{Adaptor::FRAME_VALUE}
@@ -19110,14 +19677,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					== IRValueRef{Adaptor::FRAME_VALUE}
 				&& adaptor->machine_kind(node.operands[1])
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-			/* A fused comparison: the branch evaluates it (see
-			 * freeze_fused_compare_branches). */
-			const bool fused = record.opcode
-					== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
-				&& mir.fused_compare_plus_one != 0
-				&& !adaptor->typed_body()
-				&& mir.fused_compare_plus_one
-					<= adaptor->plan()->instruction_count;
 			const zend_tpde_instruction *fused_compare = fused
 				? &adaptor->plan()->instructions[
 					mir.fused_compare_plus_one - 1]
@@ -19933,6 +20492,11 @@ bool ZendCompilerX64::compile_inst_impl(
 						if (register_boxed_condition) {
 							auto placeholder = val_ref(node.operands[1]);
 							(void) placeholder;
+						} else if (node.operands.size() == 1
+								&& node.operands[0]
+									!= IRValueRef{Adaptor::FRAME_VALUE}) {
+							auto placeholder = val_ref(node.operands[0]);
+							(void) placeholder;
 						}
 						for (size_t index = node.operands.size();
 								index < node.liveness_operands.size();
@@ -20095,9 +20659,24 @@ bool ZendCompilerX64::compile_inst_impl(
 							generate_raw_jump(Jump::jmp, falsey);
 						}
 					}
+					/* A fused isset's element is kept for a read of it
+					 * that starts the true edge (successor 0). */
+					IRInstRef fused_reuse{UINT32_MAX};
+					zend_tpde_fused_operand fused_container{};
+					zend_tpde_fused_operand fused_key{};
+					if (fused && zend_tpde_fused_isset_dim_at(*fused_compare,
+								&fused_container, &fused_key)) {
+						const auto &fused_successors = adaptor->block_succs(
+							IRBlockRef{node.control_block});
+						if (fused_successors.size() == 2) {
+							fused_reuse = lookup_reuse_read(
+								fused_compare->value_operation, false,
+								fused_successors[0], fused_successors[1]);
+						}
+					}
 					if (fused && !emit_fused_compare(
 							fused_compare, frame_reg, type_reg, value_reg,
-							truthy, falsey, slow)) {
+							truthy, falsey, slow, fused_reuse)) {
 						return false;
 					}
 

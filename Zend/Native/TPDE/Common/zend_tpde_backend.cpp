@@ -3259,11 +3259,19 @@ static void freeze_fused_compare_branches(zend_tpde_plan *plan)
 		/* The branch reads a fused TYPE_CHECK's CV from its slot: the check
 		 * must have no machine operand, as its inline form requires. */
 		zend_tpde_fused_operand checked{};
+		zend_tpde_fused_operand other{};
 		const bool type_check =
 			zend_tpde_fused_type_check_at(compare, &checked)
 			&& compare.operand_count == 0;
+		/* isset($cv), isset($a[$k]) and ===/!== are tested by the branch
+		 * the same way. */
+		const bool isset_cv = zend_tpde_fused_isset_cv_at(compare, &checked);
+		const bool isset_dim =
+			zend_tpde_fused_isset_dim_at(compare, &checked, &other);
+		const bool identical =
+			zend_tpde_fused_identical_at(compare, &checked, &other);
 		if (!compare.has_value_operation || !branch.has_value_operation
-				|| (!type_check
+				|| (!type_check && !isset_cv && !isset_dim && !identical
 					&& (operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
 						|| (operation.source_opcode != ZEND_IS_SMALLER
 							&& operation.source_opcode
@@ -3292,7 +3300,8 @@ static void freeze_fused_compare_branches(zend_tpde_plan *plan)
 		zend_tpde_fused_operand right{};
 		zend_tpde_value_condition condition{};
 		/* A branch with its own guard and cold blocks keeps its form. */
-		if ((!type_check && !zend_tpde_fused_compare_at(compare, &left, &right))
+		if ((!type_check && !isset_cv && !isset_dim
+					&& !zend_tpde_fused_compare_at(compare, &left, &right))
 				|| zend_tpde_value_condition_at(branch, &condition)) {
 			continue;
 		}
@@ -6361,6 +6370,9 @@ bool freeze_entry_undef_temporaries(
 	 * consume an operand.  Keep those actual helper destinations valid without
 	 * paying the old cost of clearing every temporary in the frame.
 	 */
+	/* 1: only branch-fused helpers need the index (see below); 2: also
+	 * anything else. */
+	std::vector<uint8_t> fused_need(op_array->T);
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction = plan->instructions[index];
 		if (!instruction.has_value_operation
@@ -6381,6 +6393,15 @@ bool freeze_entry_undef_temporaries(
 			return false;
 		}
 		if (storage >= first_temporary) {
+			/* A helper of an operation fused into its branch runs after
+			 * the branch stored a placeholder into its result (Zend
+			 * entry), which is as fresh as an initialized one. */
+			if (instruction.fused_into_branch) {
+				if (required[storage - first_temporary] == 0) {
+					fused_need[storage - first_temporary] = 1;
+				}
+				continue;
+			}
 			required[storage - first_temporary] = 1;
 		}
 	}
@@ -6405,10 +6426,12 @@ bool freeze_entry_undef_temporaries(
 	}
 
 	std::vector<uint32_t> indices;
+	std::vector<uint8_t> fused_only;
 	indices.reserve(op_array->T);
 	for (uint32_t index = 0; index < op_array->T; ++index) {
-		if (required[index] != 0) {
+		if (required[index] != 0 || fused_need[index] != 0) {
 			indices.push_back(index);
+			fused_only.push_back(required[index] == 0);
 		}
 	}
 	plan->entry_undef_temporary_count =
@@ -6419,7 +6442,10 @@ bool freeze_entry_undef_temporaries(
 	plan->entry_undef_temporary_indices = static_cast<uint32_t *>(
 		std::malloc(indices.size()
 			* sizeof(*plan->entry_undef_temporary_indices)));
-	if (plan->entry_undef_temporary_indices == nullptr) {
+	plan->entry_undef_temporary_fused_only = static_cast<uint8_t *>(
+		std::malloc(fused_only.size()));
+	if (plan->entry_undef_temporary_indices == nullptr
+			|| plan->entry_undef_temporary_fused_only == nullptr) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"unable to allocate selective temporary initialization plan");
@@ -6427,6 +6453,8 @@ bool freeze_entry_undef_temporaries(
 	}
 	std::memcpy(plan->entry_undef_temporary_indices, indices.data(),
 		indices.size() * sizeof(*plan->entry_undef_temporary_indices));
+	std::memcpy(plan->entry_undef_temporary_fused_only, fused_only.data(),
+		fused_only.size());
 	return true;
 }
 
@@ -6507,6 +6535,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->materializations);
 	std::free(plan->machine_references);
 	std::free(plan->entry_undef_temporary_indices);
+	std::free(plan->entry_undef_temporary_fused_only);
 	std::free(plan->direct_calls);
 	std::free(plan->direct_internal_calls);
 	std::free(plan->user_calls);
@@ -10636,9 +10665,6 @@ bool initialize_plan(
 	if (!freeze_machine_references(plan, diag)) {
 		return false;
 	}
-	if (!freeze_entry_undef_temporaries(plan, source_op_array, diag)) {
-		return false;
-	}
 	if (!freeze_generator_resume_liveness(
 			plan, source_op_array, value_model, diag)) {
 		return false;
@@ -10656,6 +10682,11 @@ bool initialize_plan(
 	}
 	freeze_register_boolean_results(plan);
 	freeze_fused_compare_branches(plan);
+	/* After the fusion: a fused operation's helper needs no initialized
+	 * destination in the Zend entry. */
+	if (!freeze_entry_undef_temporaries(plan, source_op_array, diag)) {
+		return false;
+	}
 	plan->may_emit_calls = false;
 	for (uint32_t index = 0;
 			index < ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT; ++index) {

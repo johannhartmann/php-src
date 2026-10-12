@@ -1136,6 +1136,70 @@ static inline bool zend_tpde_fused_type_check_at(
 }
 
 /*
+ * isset($cv) into a temporary, fused into its JMPZ/JMPNZ: the branch tests
+ * the CV's type itself. isset() never warns.
+ */
+static inline bool zend_tpde_fused_isset_cv_at(
+	const zend_tpde_instruction &instruction, zend_tpde_fused_operand *value)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	return instruction.has_value_operation
+		&& operation.opcode == ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV
+		&& operation.source_opcode == ZEND_ISSET_ISEMPTY_CV
+		&& (operation.extended_value & ZEND_ISEMPTY) == 0
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		&& operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+		&& zend_mir_id_is_valid(operation.result_storage_id)
+		&& zend_tpde_fused_operand_at(operation.op1, operation.op1_storage_id,
+			operation.result_storage_id, value)
+		&& !value->literal;
+}
+
+/*
+ * === and !== of a CV or temporary and a literal or another CV or
+ * temporary, fused into its JMPZ/JMPNZ like a comparison.
+ */
+static inline bool zend_tpde_fused_identical_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_fused_operand *left, zend_tpde_fused_operand *right)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	return instruction.has_value_operation
+		&& (operation.source_opcode == ZEND_IS_IDENTICAL
+			|| operation.source_opcode == ZEND_IS_NOT_IDENTICAL)
+		&& zend_tpde_fused_compare_at(instruction, left, right)
+		&& !left->literal
+		&& (right->literal || right->offset != left->offset);
+}
+
+/*
+ * isset($a[$k]) of an array CV or literal under a literal, CV or temporary
+ * key, fused into its JMPZ/JMPNZ: the branch probes the element itself.
+ */
+static inline bool zend_tpde_fused_isset_dim_at(
+	const zend_tpde_instruction &instruction,
+	zend_tpde_fused_operand *container, zend_tpde_fused_operand *key)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	return instruction.has_value_operation
+		&& operation.opcode == ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
+		&& operation.source_opcode == ZEND_ISSET_ISEMPTY_DIM_OBJ
+		&& (operation.extended_value & ZEND_ISEMPTY) == 0
+		&& operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+		&& zend_mir_id_is_valid(operation.result_storage_id)
+		&& zend_tpde_fused_operand_at(operation.op1, operation.op1_storage_id,
+			operation.result_storage_id, container)
+		&& !container->temporary
+		&& zend_tpde_fused_operand_at(operation.op2, operation.op2_storage_id,
+			operation.result_storage_id, key)
+		&& (key->literal || container->literal
+			|| key->offset != container->offset);
+}
+
+/*
  * $cv[$key] into a temporary, and $cv[$key] = $value (or $cv[] = $value)
  * with an unused result, call the _direct helpers with precomputed offsets
  * (ZEND_NATIVE_DIM_DIRECT_*) instead of encoded operands.
@@ -2554,6 +2618,9 @@ struct zend_tpde_plan {
 	zend_tpde_machine_reference *machine_references;
 	uint32_t machine_reference_count;
 	uint32_t *entry_undef_temporary_indices;
+	/* Per index: only a branch-fused operation's helper needs it, and the
+	 * branch stores a placeholder there first (Zend entry only). */
+	uint8_t *entry_undef_temporary_fused_only;
 	uint32_t entry_undef_temporary_count;
 	/* The source op array is a generator: only then can an entry frame be
 	 * a generator frame. */
