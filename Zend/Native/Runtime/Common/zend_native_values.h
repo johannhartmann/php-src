@@ -240,6 +240,9 @@ zend_native_status zend_native_value_assign_dim_address(
  * element there, as ZEND_ASSIGN_DIM's write fetch does. */
 zval *zend_native_array_insert_index(zval *container, zend_ulong h);
 zval *zend_native_array_assign_lookup(zval *container, const zval *key);
+/* See ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT. */
+uintptr_t zend_native_array_find_element(
+	const zval *container, const zval *key, uint64_t mode);
 zend_native_status zend_native_value_isset_isempty_dim_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 ZEND_NATIVE_EXPLICIT_DIM_ASSIGN_HELPER(zend_native_value_assign_dim_op)

@@ -12378,6 +12378,74 @@ bool ZendCompilerX64::compile_inst_impl(
 			? address(literals_reg, key_offset)
 			: address(frame_reg, key_offset);
 		/*
+		 * A probe that cannot decide a key (a string without its hash, a
+		 * bucket key of the same hash that is another string, a numeric
+		 * string) finds the element in C out of the hot code, with the
+		 * probe's result encoding, before anything takes the helper.
+		 */
+		static_assert(ZEND_NATIVE_FIND_UNKNOWN == ZEND_NATIVE_ELEMENT_UNKNOWN
+			&& ZEND_NATIVE_FIND_ABSENT == ZEND_NATIVE_ELEMENT_ABSENT
+			&& ZEND_NATIVE_FIND_ISSET_UNKNOWN == ZEND_NATIVE_ISSET_UNKNOWN);
+		const bool find_element = !writes && !register_key
+			&& literal_key != LiteralKey::Index
+			&& literal_key != LiteralKey::Register
+			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
+		/* Only an array (a global's or a by-reference parameter's through
+		 * its reference) under a string key can be decided in C; any other
+		 * container or key goes where the probe's undecided answer goes. */
+		auto find_element_filter = [&](tpde::Label undecided) {
+			const AsmReg key_base = key_literal ? literals_reg : frame_reg;
+			auto container_checked = text_writer.label_create();
+			auto key_checked = text_writer.label_create();
+			ASM(CMP8mi, FE_MEM(container_base, 0, FE_NOREG,
+				static_cast<int32_t>(container_offset
+					+ offsetof(zval, u1.v.type))), IS_ARRAY);
+			generate_raw_jump(Jump::je, container_checked);
+			ASM(CMP8mi, FE_MEM(container_base, 0, FE_NOREG,
+				static_cast<int32_t>(container_offset
+					+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+			generate_raw_jump(Jump::jne, undecided);
+			label_place(container_checked);
+			ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
+				static_cast<int32_t>(key_offset
+					+ offsetof(zval, u1.v.type))), IS_STRING);
+			generate_raw_jump(Jump::je, key_checked);
+			ASM(CMP8mi, FE_MEM(key_base, 0, FE_NOREG,
+				static_cast<int32_t>(key_offset
+					+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+			generate_raw_jump(Jump::jne, undecided);
+			label_place(key_checked);
+		};
+		auto find_element_call = [&](AsmReg out_reg, uint64_t mode) {
+			const AsmReg key_base = key_literal ? literals_reg : frame_reg;
+			const uint64_t live_registers = static_cast<uint64_t>(
+				register_file.used) & ~(uint64_t{1} << out_reg.id());
+			emit_preserving_call(live_registers,
+				ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT, [&] {
+					/* The key's address first, through a caller-saved
+					 * register no base uses: a base may sit in an
+					 * argument register. */
+					FeRegGP key_temp = FE_AX;
+					for (const auto &[id, reg] : {std::pair{AsmReg::AX, FE_AX},
+							std::pair{AsmReg::CX, FE_CX},
+							std::pair{AsmReg::DX, FE_DX}}) {
+						if (frame_reg.id() != id && key_base.id() != id
+								&& container_base.id() != id) {
+							key_temp = reg;
+							break;
+						}
+					}
+					ASM(LEA64rm, key_temp, FE_MEM(key_base, 0, FE_NOREG,
+						static_cast<int32_t>(key_offset)));
+					ASM(LEA64rm, FE_DI, FE_MEM(container_base, 0, FE_NOREG,
+						static_cast<int32_t>(container_offset)));
+					ASM(MOV64rr, FE_SI, key_temp);
+					ASM(MOV32ri, FE_DX, static_cast<int32_t>(mode));
+				}, [&] {
+					ASM(MOV64rr, out_reg, FE_AX);
+				});
+		};
+		/*
 		 * A runtime key: a string looks up inline, any other key (an
 		 * integer, a reference) out of line, both into one register. Only
 		 * with a register to spare, so that neither lookup evicts.
@@ -12512,9 +12580,32 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto answer_reg = answer.alloc_gp();
 			mov(answer_reg, value.cur_reg_or_load(this), 8);
 			value.reset(this);
-			literals.reset();
 			ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
-			generate_raw_jump(Jump::je, slow);
+			if (find_element) {
+				auto complete = text_writer.label_create();
+				auto known = text_writer.label_create();
+				generate_raw_jump(Jump::je, complete);
+				const bool cold_find = !text_writer.in_cold_area();
+				if (cold_find) {
+					cold_begin();
+				} else {
+					generate_raw_jump(Jump::jmp, known);
+				}
+				label_place(complete);
+				find_element_filter(slow);
+				find_element_call(answer_reg,
+					ZEND_NATIVE_FIND_TEST | ZEND_NATIVE_FIND_ISSET);
+				ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
+				generate_raw_jump(Jump::je, slow);
+				generate_raw_jump(Jump::jmp, known);
+				if (cold_find) {
+					cold_end();
+				}
+				label_place(known);
+			} else {
+				generate_raw_jump(Jump::je, slow);
+			}
+			literals.reset();
 			if (node.has_result) {
 				auto [result_ref, result] = result_ref_single(node.result);
 				mov(result.alloc_reg(), answer_reg, 8);
@@ -12834,11 +12925,40 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& (literal_key == LiteralKey::Index || !key_literal);
 		auto string_offset = text_writer.label_create();
 		auto element_found = text_writer.label_create();
+		const auto undecided = access == ElementAccess::Coalesce ? unknown
+			: string_reads ? string_offset : slow;
+		auto decide = text_writer.label_create();
+		label_place(decide);
 		ASM(CMP64ri, element_reg,
 			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
-		generate_raw_jump(Jump::jb,
-			access == ElementAccess::Coalesce ? unknown
-				: string_reads ? string_offset : slow);
+		if (find_element) {
+			/* The C lookup's answer passes the same test again; one it
+			 * cannot decide either goes where the probe's would. */
+			auto complete = text_writer.label_create();
+			auto decided = text_writer.label_create();
+			generate_raw_jump(Jump::jb, complete);
+			const bool cold_find = !text_writer.in_cold_area();
+			if (cold_find) {
+				cold_begin();
+			} else {
+				generate_raw_jump(Jump::jmp, decided);
+			}
+			label_place(complete);
+			find_element_filter(undecided);
+			find_element_call(element_reg,
+				tests || access == ElementAccess::Coalesce
+					? ZEND_NATIVE_FIND_TEST : 0);
+			ASM(CMP64ri, element_reg,
+				static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+			generate_raw_jump(Jump::jb, undecided);
+			generate_raw_jump(Jump::jmp, decide);
+			if (cold_find) {
+				cold_end();
+			}
+			label_place(decided);
+		} else {
+			generate_raw_jump(Jump::jb, undecided);
+		}
 		/* A read of a missing key warns and a write fetch inserts it; the
 		 * helper does that. An assignment under an integer key into a CV's
 		 * unshared array inserts the null element out of line instead and

@@ -6483,6 +6483,56 @@ zval *zend_native_array_assign_lookup(zval *container, const zval *key)
 	return EXPECTED(Z_TYPE_P(element) != IS_INDIRECT) ? element : NULL;
 }
 
+/*
+ * The element a read, test or isset finds when the emitted probe could not
+ * decide: a string key without its hash, a key whose bucket key is another
+ * string of the same hash, a numeric string. Returns what the probe would
+ * (see zend_native_values.h); UNKNOWN still leaves the operation to the
+ * helper, which warns or reads objects and INDIRECT elements.
+ */
+uintptr_t zend_native_array_find_element(
+	const zval *container, const zval *key, uint64_t mode)
+{
+	uintptr_t found;
+
+	if (UNEXPECTED(Z_TYPE_P(container) == IS_REFERENCE)) {
+		container = &Z_REF_P(container)->val;
+	}
+	if (UNEXPECTED(Z_TYPE_P(key) == IS_REFERENCE)) {
+		key = &Z_REF_P(key)->val;
+	}
+	if (UNEXPECTED(Z_TYPE_P(container) != IS_ARRAY)) {
+		/* A test of an undefined or null container has no element; an
+		 * undefined key still warns in the helper. */
+		found = (mode & ZEND_NATIVE_FIND_TEST) != 0
+				&& Z_TYPE_P(container) <= IS_NULL
+				&& Z_TYPE_P(key) != IS_UNDEF
+			? ZEND_NATIVE_FIND_ABSENT : ZEND_NATIVE_FIND_UNKNOWN;
+	} else if (Z_TYPE_P(key) != IS_LONG && Z_TYPE_P(key) != IS_STRING) {
+		found = ZEND_NATIVE_FIND_UNKNOWN;
+	} else {
+		zval *element = zend_native_array_find_key(
+			Z_ARRVAL_P(container), key);
+
+		found = element == NULL ? ZEND_NATIVE_FIND_ABSENT
+			: UNEXPECTED(Z_TYPE_P(element) == IS_INDIRECT)
+				? ZEND_NATIVE_FIND_UNKNOWN : (uintptr_t) element;
+	}
+	if ((mode & ZEND_NATIVE_FIND_ISSET) == 0) {
+		return found;
+	}
+	if (found == ZEND_NATIVE_FIND_UNKNOWN) {
+		return ZEND_NATIVE_FIND_ISSET_UNKNOWN;
+	}
+	if (found == ZEND_NATIVE_FIND_ABSENT) {
+		return 0;
+	}
+	if (Z_ISREF_P((zval *) found)) {
+		return Z_TYPE_P(Z_REFVAL_P((zval *) found)) > IS_NULL;
+	}
+	return Z_TYPE_P((zval *) found) > IS_NULL;
+}
+
 zend_native_status zend_native_value_assign_dim_address(
 	zend_execute_data *execute_data, zval *container_slot, zval *key,
 	zval *value, uint64_t descriptor)

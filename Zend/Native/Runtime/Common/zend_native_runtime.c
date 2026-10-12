@@ -1130,6 +1130,8 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_CALL_FAST_RUN_TIME_CACHE,
 		ZEND_NATIVE_RUNTIME_EFFECT_ALLOCATE,
 		(const void *) zend_native_call_fast_run_time_cache},
+	{ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT, 0,
+		(const void *) zend_native_array_find_element},
 };
 
 _Static_assert(sizeof(zend_native_runtime_helpers)

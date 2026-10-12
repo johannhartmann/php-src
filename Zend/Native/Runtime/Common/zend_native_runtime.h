@@ -14,7 +14,7 @@ extern "C" {
  * loaded: bump it whenever the helper ids, the execution context, the
  * persisted image layout or what generated code assumes about them change.
  */
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 109u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 110u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
@@ -266,7 +266,8 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_CONCAT_STRINGS_TT = 234,
 	ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT = 235,
 	ZEND_NATIVE_HELPER_CALL_FAST_RUN_TIME_CACHE = 236,
-	ZEND_NATIVE_HELPER_COUNT = 237
+	ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT = 237,
+	ZEND_NATIVE_HELPER_COUNT = 238
 } zend_native_runtime_helper_id;
 
 /*
@@ -296,6 +297,20 @@ typedef enum _zend_native_runtime_helper_id {
 #define ZEND_NATIVE_DIM_DIRECT_CONST 1
 #define ZEND_NATIVE_DIM_DIRECT_CV 2
 #define ZEND_NATIVE_DIM_DIRECT_TMP 3
+
+/*
+ * zend_native_array_find_element(container, key, mode): the element a read
+ * (mode 0), test (ZEND_NATIVE_FIND_TEST: an undefined or null container has
+ * none) or isset (ZEND_NATIVE_FIND_ISSET, with TEST) finds under an integer
+ * or string key: the element's zval, ABSENT or UNKNOWN (the helper
+ * decides), as the emitted probes encode them; an isset answers 1, 0 or
+ * ISSET_UNKNOWN.
+ */
+#define ZEND_NATIVE_FIND_UNKNOWN ((uintptr_t) 0)
+#define ZEND_NATIVE_FIND_ABSENT ((uintptr_t) 1)
+#define ZEND_NATIVE_FIND_ISSET_UNKNOWN ((uintptr_t) 2)
+#define ZEND_NATIVE_FIND_TEST 1u
+#define ZEND_NATIVE_FIND_ISSET 2u
 
 /* zend_native_value_concat_assign_direct() value kinds. */
 #define ZEND_NATIVE_CONCAT_DIRECT_CONST 0

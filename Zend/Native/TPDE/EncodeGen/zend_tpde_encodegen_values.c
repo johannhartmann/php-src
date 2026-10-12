@@ -199,7 +199,8 @@ ZEND_NATIVE_SNIPPET_INLINE bool zend_native_short_key_equal(
 /*
  * The element under a non-numeric string key: identity with the bucket key
  * decides, and a bucket key of the same hash and length up to 16 bytes is
- * compared by content; a longer one is left to the helper.
+ * compared by content; a longer one is left to the emitted code's C lookup
+ * (zend_native_array_find_element()).
  */
 /* The same with the key's hash known, which is never zero. */
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string_h(
@@ -245,7 +246,8 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_literal_string(
 /*
  * The element under a runtime string key that cannot be numeric (starting
  * with neither a digit nor '-') is decided like a literal's, interned or
- * not; keys without their hash are left to the helper.
+ * not; keys without their hash, and numeric strings, are left to the
+ * emitted code's C lookup.
  */
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string(
 	const HashTable *table, const zend_string *name)
