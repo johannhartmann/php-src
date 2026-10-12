@@ -12906,11 +12906,15 @@ bool ZendCompilerX64::compile_inst_impl(
 			return -1;
 		}
 		const AsmReg element_reg = element.cur_reg_or_load(this);
+		/* The isset stored only an element it found: its reuse skips the
+		 * probe's answer tests. */
+		auto element_ready = text_writer.label_create();
 		if (reuse_load) {
 			generate_raw_jump(Jump::jmp, reuse_joined);
 			label_place(reuse_cached);
 			ASM(MOV64rm, element_reg,
 				FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()));
+			generate_raw_jump(Jump::jmp, element_ready);
 			label_place(reuse_joined);
 		}
 		/* Held from here on; the lookup needed the registers before. */
@@ -12973,6 +12977,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto inserted = text_writer.label_create();
 		generate_raw_jump(Jump::je, insert_index ? insert
 			: access == ElementAccess::Read || writes ? slow : absent);
+		label_place(element_ready);
 		if (reuse_store) {
 			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
 				element_reg);
@@ -24890,6 +24895,20 @@ bool ZendCompilerX64::compile_inst_impl(
 				const int32_t type_offset = payload_offset
 					+ static_cast<int32_t>(offsetof(zval, u1.type_info));
 				auto helper = text_writer.label_create();
+				/* Zend's type inference may rule out a reference or an
+				 * undefined value; the helper takes whatever it does not. */
+				const zend_tpde_plan *return_plan = adaptor->plan();
+				const uint32_t return_position =
+					mir.value_operation.source_position_id;
+				const uint32_t returned_may_be =
+					return_plan->source_opcodes != nullptr
+						&& return_position
+							< return_plan->source_opcode_count
+						&& return_plan->source_opcodes[return_position]
+								.opcode == ZEND_RETURN
+					? return_plan->source_opcodes[return_position]
+						.op1_may_be
+					: UINT32_MAX;
 				{
 					const AsmReg frame_reg = canonical_frame_register();
 					ScratchReg return_value{this};
@@ -24906,10 +24925,14 @@ bool ZendCompilerX64::compile_inst_impl(
 					generate_raw_jump(Jump::je, helper);
 					ASM(MOV32rm, type_reg,
 						FE_MEM(frame_reg, 0, FE_NOREG, type_offset));
-					ASM(CMP8ri, type_reg, IS_REFERENCE);
-					generate_raw_jump(Jump::je, helper);
-					ASM(CMP8ri, type_reg, IS_UNDEF);
-					generate_raw_jump(Jump::je, helper);
+					if ((returned_may_be & MAY_BE_REF) != 0) {
+						ASM(CMP8ri, type_reg, IS_REFERENCE);
+						generate_raw_jump(Jump::je, helper);
+					}
+					if ((returned_may_be & MAY_BE_UNDEF) != 0) {
+						ASM(CMP8ri, type_reg, IS_UNDEF);
+						generate_raw_jump(Jump::je, helper);
+					}
 					ASM(MOV64rm, payload_reg,
 						FE_MEM(frame_reg, 0, FE_NOREG, payload_offset));
 					ASM(MOV64mr,

@@ -59,6 +59,14 @@ void FunctionWriterX64::relax_jumps(u32 body_begin) {
     } else if (disp[-2] == 0x0f && (disp[-1] & 0xf0) == 0x80) {
       jumps.push_back(Jump{fixup.off - 2, i, label_resolve_jump(fixup.label),
                            6, u8(0x70 | (disp[-1] & 0x0f))});
+    } else {
+      continue;
+    }
+    // A jump to the label placed right after it falls through, whatever
+    // that label forwards to: threading it to the final target would keep
+    // it as a second copy of the forwarding jump.
+    if (label_offsets[u32(fixup.label)] == fixup.off + 4) {
+      jumps.back().len = 0;
     }
   }
   if (jumps.empty()) {

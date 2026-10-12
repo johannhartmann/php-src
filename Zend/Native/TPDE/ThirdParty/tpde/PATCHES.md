@@ -122,7 +122,8 @@ function become fixups to a label in front of the epilogue.
 the epilogue is written and the cold area appended, and before the prologue
 is written,
 shortens every jump whose target lies within rel8 range to the 2-byte form
-and removes jumps to the next instruction. A conditional jump over an
+and removes jumps to the next instruction, including a jump to a label
+placed right after it that threading would resolve elsewhere. A conditional jump over an
 unconditional one (`jcc A; jmp B; A:`) becomes the inverted `jcc B` when no
 label is placed at the `jmp`, so nothing else can enter it. It starts with
 every jump short and lengthens those whose target lies out of rel8 range,

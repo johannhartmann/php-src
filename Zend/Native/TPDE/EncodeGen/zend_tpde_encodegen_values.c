@@ -143,6 +143,9 @@ ZEND_NATIVE_SNIPPET_INLINE const HashTable *zend_native_probe_array(
 
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_probe_element(zval *element)
 {
+	/* An element's address is never one of the two answers: a caller that
+	 * tests the result for them after a hit needs no test. */
+	__builtin_assume((uintptr_t) element > ZEND_NATIVE_ELEMENT_ABSENT);
 	return UNEXPECTED(Z_TYPE_P(element) == IS_INDIRECT)
 		? ZEND_NATIVE_ELEMENT_UNKNOWN : (uintptr_t) element;
 }
@@ -252,12 +255,9 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_literal_string(
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string(
 	const HashTable *table, const zend_string *name)
 {
-	unsigned char first;
+	/* The empty string's first byte is its terminator. */
+	const unsigned char first = (unsigned char) ZSTR_VAL(name)[0];
 
-	if (UNEXPECTED(ZSTR_LEN(name) == 0)) {
-		return ZEND_NATIVE_ELEMENT_UNKNOWN;
-	}
-	first = (unsigned char) ZSTR_VAL(name)[0];
 	if (UNEXPECTED((first >= '0' && first <= '9') || first == '-')) {
 		return ZEND_NATIVE_ELEMENT_UNKNOWN;
 	}
@@ -976,13 +976,22 @@ void zend_native_release_shared(const zval *container)
 	}
 }
 
-/* ZVAL_COPY_DEREF as two machine words. */
+/* ZVAL_COPY_DEREF as two machine words; the type word is read once. */
 zend_native_boxed zend_native_zval_copy_deref(const zval *value)
 {
-	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
+	zend_native_boxed boxed;
+	uint32_t type_info = Z_TYPE_INFO_P(value);
+
+	if (UNEXPECTED((type_info & Z_TYPE_MASK) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
+		type_info = Z_TYPE_INFO_P(value);
 	}
-	return zend_native_zval_copy(value);
+	boxed.payload = (uint64_t) Z_LVAL_P(value);
+	boxed.type_info = type_info;
+	if (Z_TYPE_INFO_REFCOUNTED(type_info)) {
+		ZEND_NATIVE_ADDREF(Z_COUNTED_P(value));
+	}
+	return boxed;
 }
 
 /* isset() of an element: set and not null, looking through a reference. */
