@@ -172,6 +172,18 @@ static uint32_t native_image_symbol_index(
 	return found == lookup->symbols.end() ? UINT32_MAX : found->second;
 }
 
+/* A symbol's name spells its key: kind, namespace and id. */
+#define NATIVE_IMAGE_SYMBOL_NAME_FORMAT "__znmir_%u_%u_%u"
+
+[[nodiscard]]
+static bool native_image_symbol_name(
+	char (&name)[sizeof(zend_native_image_symbol::name)],
+	uint32_t kind, uint32_t symbol_namespace, uint32_t id) {
+	const int written = std::snprintf(name, sizeof(name),
+		NATIVE_IMAGE_SYMBOL_NAME_FORMAT, kind, symbol_namespace, id);
+	return written > 0 && static_cast<size_t>(written) < sizeof(name);
+}
+
 static const zend_native_image_symbol_binding *native_image_binding(
 	const zend_native_image *image, uint32_t symbol_index) {
 	const zend_native_image_symbol_lookup *lookup =
@@ -279,10 +291,8 @@ static bool image_add_symbol(
 	symbol.kind = kind;
 	symbol.id = id;
 	symbol.symbol_namespace = symbol_namespace;
-	const int written = std::snprintf(symbol.name, sizeof(symbol.name),
-		"__znmir_%u_%u_%u", static_cast<uint32_t>(kind),
-		symbol_namespace, id);
-	if (written <= 0 || static_cast<size_t>(written) >= sizeof(symbol.name)) {
+	if (!native_image_symbol_name(symbol.name,
+			static_cast<uint32_t>(kind), symbol_namespace, id)) {
 		return false;
 	}
 	const uint32_t symbol_index = image->symbol_count++;
@@ -508,11 +518,8 @@ bool zend_tpde_image_resolve_symbol(
 		const zend_native_image_symbol &candidate =
 			image->symbols[lookup->checked_names];
 		char expected[sizeof(candidate.name)];
-		const int written = std::snprintf(expected, sizeof(expected),
-			"__znmir_%u_%u_%u", candidate.kind, candidate.symbol_namespace,
-			candidate.id);
-		lookup->names_from_keys = written > 0
-			&& static_cast<size_t>(written) < sizeof(expected)
+		lookup->names_from_keys = native_image_symbol_name(expected,
+				candidate.kind, candidate.symbol_namespace, candidate.id)
 			&& std::strncmp(expected, candidate.name, sizeof(expected)) == 0;
 	}
 	unsigned int kind;
@@ -520,7 +527,7 @@ bool zend_tpde_image_resolve_symbol(
 	unsigned int id;
 	int consumed = 0;
 	if (lookup->names_from_keys
-			&& std::sscanf(name, "__znmir_%u_%u_%u%n",
+			&& std::sscanf(name, NATIVE_IMAGE_SYMBOL_NAME_FORMAT "%n",
 				&kind, &symbol_namespace, &id, &consumed) == 3
 			&& name[consumed] == 0) {
 		const uint32_t index =

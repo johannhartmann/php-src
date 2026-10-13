@@ -372,6 +372,20 @@ int32_t id_index_find(
 	const zend_tpde_id_index_entry *entries,
 	uint32_t capacity,
 	uint32_t id);
+/* The generator resume of a target source position, or UINT32_MAX; the
+ * targets are sorted and unique. */
+inline uint32_t generator_resume_at_target(
+	const zend_tpde_plan *plan, uint32_t target) {
+	if (plan->generator_resume_targets == nullptr) {
+		return UINT32_MAX;
+	}
+	const uint32_t *begin = plan->generator_resume_targets;
+	const uint32_t *end = begin + plan->generator_resume_count;
+	const uint32_t *found = std::lower_bound(begin, end, target);
+	return found != end && *found == target
+		? static_cast<uint32_t>(found - begin) : UINT32_MAX;
+}
+
 void require_runtime_helper(
 	zend_tpde_plan *plan, zend_native_runtime_helper_id helper);
 void destroy_plan(zend_tpde_plan *plan);

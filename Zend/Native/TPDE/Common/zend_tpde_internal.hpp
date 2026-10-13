@@ -796,9 +796,9 @@ struct zend_tpde_dynamic_fetch_read {
 };
 
 /* Known operand type: a long or a double, never undefined or a reference. */
-#define ZEND_TPDE_KNOWN_NUMBER 0xfe
+inline constexpr uint8_t ZEND_TPDE_KNOWN_NUMBER = 0xfe;
 /* Known operand type: false or true. */
-#define ZEND_TPDE_KNOWN_BOOL 0xfd
+inline constexpr uint8_t ZEND_TPDE_KNOWN_BOOL = 0xfd;
 
 struct zend_tpde_source_opcode {
 	uint8_t opcode;
@@ -905,27 +905,6 @@ zend_tpde_integer_dispatch(
 			&& span / cases->size() < 8
 		? ZEND_TPDE_INTEGER_DISPATCH_JUMP_TABLE
 		: ZEND_TPDE_INTEGER_DISPATCH_BALANCED;
-}
-
-static inline uint32_t zend_tpde_relative_source_target(
-	const zend_op_array *op_array, uint32_t source_position,
-	zend_long byte_offset)
-{
-	if (op_array == nullptr || source_position >= op_array->last) {
-		return UINT32_MAX;
-	}
-	const uintptr_t first = reinterpret_cast<uintptr_t>(op_array->opcodes);
-	const intptr_t signed_address =
-		reinterpret_cast<intptr_t>(&op_array->opcodes[source_position])
-		+ static_cast<intptr_t>(byte_offset);
-	const uintptr_t address = static_cast<uintptr_t>(signed_address);
-	const uintptr_t last =
-		first + static_cast<uintptr_t>(op_array->last) * sizeof(zend_op);
-	if (address < first || address >= last
-			|| (address - first) % sizeof(zend_op) != 0) {
-		return UINT32_MAX;
-	}
-	return static_cast<uint32_t>((address - first) / sizeof(zend_op));
 }
 
 /*
@@ -2670,21 +2649,6 @@ zend_tpde_source_call_phase_at(
 	return entry->phases == ZEND_TPDE_SOURCE_CALL_PHASE_NONE ? nullptr : entry;
 }
 
-/* The generator resume of a target source position, or UINT32_MAX; the
- * targets are sorted and unique. */
-static inline uint32_t zend_tpde_generator_resume_at_target(
-	const zend_tpde_plan *plan, uint32_t target)
-{
-	if (plan->generator_resume_targets == nullptr) {
-		return UINT32_MAX;
-	}
-	const uint32_t *begin = plan->generator_resume_targets;
-	const uint32_t *end = begin + plan->generator_resume_count;
-	const uint32_t *found = std::lower_bound(begin, end, target);
-	return found != end && *found == target
-		? static_cast<uint32_t>(found - begin) : UINT32_MAX;
-}
-
 /* Calls visit(value_index) for the live values of a generator resume in
  * ascending order; stops at, and returns, the first false. */
 template <typename Visit>
@@ -3051,7 +3015,7 @@ int32_t zend_tpde_block_index(
 /* What of a member's code the layout profile saw run rarely keeps small:
  * no native call entry of its own. 0 when the profile (the host backend's;
  * none on others) did not see the member's generic body run rarely. */
-#define ZEND_TPDE_RARE_NO_CALL_ENTRY (1u << 0)
+inline constexpr uint32_t ZEND_TPDE_RARE_NO_CALL_ENTRY = 1u << 0;
 uint32_t zend_tpde_layout_rare_function(
 	uint32_t index, const zend_tpde_plan *plan);
 zend_mir_value_id zend_tpde_operand_at(

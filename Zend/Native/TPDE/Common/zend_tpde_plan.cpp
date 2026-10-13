@@ -371,6 +371,28 @@ static bool read_mir_function(plan_builder &builder) {
 	return true;
 }
 
+/* The source position a jump byte_offset from source_position reaches, or
+ * UINT32_MAX. */
+static uint32_t relative_source_target(
+	const zend_op_array *op_array, uint32_t source_position,
+	zend_long byte_offset) {
+	if (op_array == nullptr || source_position >= op_array->last) {
+		return UINT32_MAX;
+	}
+	const uintptr_t first = reinterpret_cast<uintptr_t>(op_array->opcodes);
+	const intptr_t signed_address =
+		reinterpret_cast<intptr_t>(&op_array->opcodes[source_position])
+		+ static_cast<intptr_t>(byte_offset);
+	const uintptr_t address = static_cast<uintptr_t>(signed_address);
+	const uintptr_t last =
+		first + static_cast<uintptr_t>(op_array->last) * sizeof(zend_op);
+	if (address < first || address >= last
+			|| (address - first) % sizeof(zend_op) != 0) {
+		return UINT32_MAX;
+	}
+	return static_cast<uint32_t>((address - first) / sizeof(zend_op));
+}
+
 /* The multiway branches of SWITCH_LONG, SWITCH_STRING and MATCH. */
 [[nodiscard]]
 static bool freeze_source_multi_branches(plan_builder &builder) {
@@ -433,7 +455,7 @@ static bool freeze_source_multi_branches(plan_builder &builder) {
 			zend_hash_num_elements(Z_ARRVAL_P(jump_table));
 		branch.constant_successor = UINT32_MAX;
 		branch.source_opcode = source.opcode;
-		branch.default_target = zend_tpde_relative_source_target(
+		branch.default_target = relative_source_target(
 			source_op_array, index,
 			static_cast<zend_long>(source.extended_value));
 		branch.fallback_target =
@@ -471,7 +493,7 @@ static bool freeze_source_multi_branches(plan_builder &builder) {
 								Z_STR_P(constant_operand), string_key)))) {
 				branch.constant_successor = branch_case_index;
 			}
-			frozen_case.target = zend_tpde_relative_source_target(
+			frozen_case.target = relative_source_target(
 				source_op_array, index, Z_LVAL_P(jump_value));
 			if (frozen_case.target == UINT32_MAX) {
 				branch.valid = false;

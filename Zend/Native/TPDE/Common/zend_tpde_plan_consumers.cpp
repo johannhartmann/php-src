@@ -249,7 +249,7 @@ bool freeze_machine_plan_consumers(
 					|| record.opcode == ZEND_MIR_OPCODE_GENERATOR_YIELD
 					|| record.opcode
 						== ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM)) {
-			const uint32_t resume = zend_tpde_generator_resume_at_target(
+			const uint32_t resume = generator_resume_at_target(
 				plan, record.source_position_id + 1);
 			if (!zend_tpde_visit_generator_resume_values(plan, resume,
 					[&](uint32_t value) {
