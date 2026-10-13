@@ -652,6 +652,24 @@ struct zend_tpde_instruction {
 	uint32_t register_merge_producer_plus_one[2];
 };
 
+/* The slot of a value operation's CV operand that may be a reference holds
+ * that reference, which the assignment of the value already wrote through:
+ * a cold path consumes the operand without publishing it into the slot. */
+static inline bool zend_tpde_reference_cv_operand_slot(
+	const zend_tpde_instruction &instruction, zend_mir_storage_id storage)
+{
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+
+	return instruction.has_value_operation && zend_mir_id_is_valid(storage)
+		&& ((instruction.source_op1_may_reference
+				&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				&& storage == operation.op1_storage_id)
+			|| (instruction.source_op2_may_reference
+				&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				&& storage == operation.op2_storage_id));
+}
+
 struct zend_tpde_array_read {
 	uint32_t container_offset;
 	uint32_t key_offset;

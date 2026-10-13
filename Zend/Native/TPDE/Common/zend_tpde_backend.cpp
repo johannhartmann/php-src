@@ -4100,6 +4100,9 @@ bool freeze_source_value_bindings(
 				plan, source_op_array, operation.op2,
 				operation.op2_storage_id,
 				source_position, index, definitions);
+			/* Without SSA facts a CV operand may hold a reference. */
+			instruction.source_op1_may_reference = true;
+			instruction.source_op2_may_reference = true;
 			if (source_ssa != nullptr && source_ssa->var_info != nullptr
 					&& source_position < source_op_array->last) {
 				auto reference_free = [&](int use) {
@@ -4118,9 +4121,9 @@ bool freeze_source_value_bindings(
 				instruction.source_op1_reference_free =
 					op1_known && reference_free(op1_use);
 				instruction.source_op1_may_reference =
-					op1_known && !reference_free(op1_use);
+					!op1_known || !reference_free(op1_use);
 				instruction.source_op2_may_reference =
-					op2_known && !reference_free(op2_use);
+					!op2_known || !reference_free(op2_use);
 			}
 			if (source_ssa != nullptr && source_ssa->var_info != nullptr
 					&& source_position < source_op_array->last
