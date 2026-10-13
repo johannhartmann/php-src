@@ -3225,19 +3225,6 @@ public:
 			emit_status_return(ZEND_NATIVE_EXCEPTION);
 		}
 	}
-	/* A GuardedFast node's control block: successor 0 is its continuation,
-	 * successor 1 its cold block (Adaptor::InstNode). */
-	auto guarded_successors_of(const Adaptor::InstNode &node) const {
-		ZEND_ASSERT(node.control_block != UINT32_MAX
-			&& node.continuation_block != UINT32_MAX);
-		const auto successors =
-			adaptor->block_succs(IRBlockRef{node.control_block});
-		ZEND_ASSERT(successors.size() >= 2
-			&& static_cast<uint32_t>(successors[0])
-				== node.continuation_block
-			&& static_cast<uint32_t>(successors[1]) == node.argument_index);
-		return successors;
-	}
 	/*
 	 * Observers are part of the system id: an image only runs in processes
 	 * with the observer state it was compiled in. With observers, the
@@ -10499,7 +10486,7 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 	if (node.control_block == UINT32_MAX) {
 		return false;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	auto [frame_ref, frame] =
 		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 	auto frame_reg = frame.load_to_reg();
@@ -11883,7 +11870,7 @@ bool ZendCompilerX64::copy_slot(
 			|| node.continuation_block == UINT32_MAX) {
 		return false;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
@@ -12290,7 +12277,7 @@ bool ZendCompilerX64::free_temporary_slot(InstContext &ctx) {
 			|| node.continuation_block == UINT32_MAX) {
 		return false;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	auto slow = text_writer.label_create();
 	auto released = text_writer.label_create();
 	auto [frame_ref, frame] =
@@ -12435,7 +12422,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		}
 		published.emplace_back(operand, storage);
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
 		return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
@@ -13602,7 +13589,7 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 			|| node.continuation_block == UINT32_MAX) {
 		return 0;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	const IRValueRef key_value = node.operands[0];
 	const zend_tpde_machine_value_kind key_kind =
 		adaptor->machine_kind(key_value);
@@ -13913,7 +13900,7 @@ int ZendCompilerX64::type_check_inline(InstContext &ctx) {
 	if (!frame_only_operands(node)) {
 		return 0;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	const uint64_t value_offset =
 		frame_slot_offset(operation.op1_storage_id);
 	const uint64_t result_offset =
@@ -14033,7 +14020,7 @@ int ZendCompilerX64::identical_literal(InstContext &ctx) {
 			return 0;
 		}
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	const uint64_t value_offset =
 		frame_slot_offset(operation.op1_storage_id);
 	const uint64_t literal_offset = variable_other
@@ -14244,7 +14231,7 @@ int ZendCompilerX64::key_exists_inline(InstContext &ctx) {
 	if (!frame_only_operands(node)) {
 		return 0;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	auto frame_offset = [](zend_mir_storage_id storage) {
 		return frame_slot_offset(storage);
 	};
@@ -14360,7 +14347,7 @@ int ZendCompilerX64::iterator_free_inline(InstContext &ctx) {
 	if (!frame_only_operands(node)) {
 		return 0;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	const uint64_t holder_offset =
 		frame_slot_offset(operation.op1_storage_id);
 	if (holder_offset > INT32_MAX - sizeof(zval)) {
@@ -14414,7 +14401,7 @@ int ZendCompilerX64::copy_literal(InstContext &ctx) {
 	if (!frame_only_operands(node)) {
 		return 0;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	const uint64_t literal_offset =
 		uint64_t{operation.op1.index} * sizeof(zval);
 	const uint64_t result_offset =
@@ -14508,7 +14495,7 @@ int ZendCompilerX64::count_inline(InstContext &ctx) {
 	if (!frame_only_operands(node)) {
 		return 0;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	const uint64_t value_offset =
 		frame_slot_offset(operation.op1_storage_id);
 	const uint64_t result_offset =
@@ -14652,7 +14639,7 @@ bool ZendCompilerX64::append_packed_array(InstContext &ctx) {
 			|| node.continuation_block == UINT32_MAX) {
 		return false;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	const bool scalar_value =
 		node.packed_append_value_operand_index < node.operands.size()
 		&& adaptor->representation(node.operands[
@@ -15094,7 +15081,7 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 			|| node.continuation_block == UINT32_MAX) {
 		return false;
 	}
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	if (register_string) {
 		auto [frame_ref, frame] = val_ref_single(node.operands[1]);
 		auto frame_scratch = frame_register(std::move(frame));
@@ -15939,7 +15926,7 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 	if (node.kind != Adaptor::InstKind::GuardedFast) {
 		return false;
 	}
-	const auto guarded_successors = guarded_successors_of(node);
+	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
 	auto [frame_ref, frame] =
@@ -16108,7 +16095,7 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 	/* ASSIGN_OP is always guarded (see freeze_machine_control_flow()),
 	 * also in typed bodies. */
 	ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
-	const auto guarded_successors = guarded_successors_of(node);
+	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
 	auto [frame_ref, frame] =
@@ -16347,7 +16334,7 @@ bool ZendCompilerX64::long_incdec(InstContext &ctx) {
 	 * also in typed bodies. */
 	ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
 	const bool machine_result = node.has_result;
-	const auto guarded_successors = guarded_successors_of(node);
+	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
 	auto [frame_ref, frame] =
@@ -16864,7 +16851,7 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 	type.reset();
 	value.reset();
 	finish_guarded(slow, done, std::move(decision), frame_scratch,
-		guarded_successors_of(node));
+		adaptor->guarded_successors_of(node));
 	return true;
 }
 
@@ -16910,7 +16897,7 @@ bool ZendCompilerX64::object_property_read(InstContext &ctx) {
 			|| node.kind != Adaptor::InstKind::GuardedFast) {
 		return branch_to_guarded_cold(ctx);
 	}
-	const auto guarded_successors = guarded_successors_of(node);
+	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	const zend_tpde_machine_value_kind result_kind = frame_result
 		? ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 		: adaptor->machine_kind(node.result);
@@ -17060,7 +17047,7 @@ bool ZendCompilerX64::object_property_address(InstContext &ctx) {
 			|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
 		return branch_to_guarded_cold(ctx);
 	}
-	const auto guarded_successors = guarded_successors_of(node);
+	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
 	auto [frame_ref, frame] =
@@ -17147,7 +17134,7 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 		&& adaptor->exact_type(node.operands[
 			node.property_write_value_operand_index])
 			== ZEND_MIR_SCALAR_TYPE_I64;
-	const auto successors = guarded_successors_of(node);
+	const auto successors = adaptor->guarded_successors_of(node);
 	auto slow = text_writer.label_create();
 	auto property_metadata_valid = text_writer.label_create();
 	auto old_released = text_writer.label_create();
@@ -17820,7 +17807,7 @@ bool ZendCompilerX64::dynamic_fetch_read(InstContext &ctx) {
 	 * freeze_machine_control_flow()); a name without a direct CV takes
 	 * the cold path. */
 	ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
-	const auto guarded_successors = guarded_successors_of(node);
+	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	if (layout.cv_index == UINT32_MAX) {
 		return branch_to_guarded_cold(ctx);
 	}

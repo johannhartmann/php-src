@@ -350,19 +350,6 @@ public:
 		}
 		return true;
 	}
-	/* Whether a GuardedFast node's control block has its continuation as
-	 * successor 0 and its cold block as successor 1 (Adaptor::InstNode). */
-	bool guarded_successors_match(const Adaptor::InstNode &node) const {
-		const auto guarded_successors =
-			adaptor->block_succs(IRBlockRef{node.control_block});
-		return !(node.control_block == UINT32_MAX
-			|| node.continuation_block == UINT32_MAX
-			|| guarded_successors.size() < 2
-			|| static_cast<uint32_t>(guarded_successors[0])
-				!= node.continuation_block
-			|| static_cast<uint32_t>(guarded_successors[1])
-				!= node.argument_index);
-	}
 	/* Copies the payload and type_info parts of boxed, the caller's reference
 	 * to value, to payload_reg and type_reg; false when the representation
 	 * lacks either part. */
@@ -1854,7 +1841,7 @@ bool ZendCompilerA64::copy_slot(
 	if (node.kind != Adaptor::InstKind::GuardedFast
 			|| node.control_block == UINT32_MAX
 			|| node.continuation_block == UINT32_MAX
-			|| !guarded_successors_match(node)) {
+			|| !adaptor->guarded_successors_match(node)) {
 		return false;
 	}
 	const auto successors =
@@ -2148,7 +2135,7 @@ bool ZendCompilerA64::free_temporary_slot() {
 	if (node.kind != Adaptor::InstKind::GuardedFast
 			|| node.control_block == UINT32_MAX
 			|| node.continuation_block == UINT32_MAX
-			|| !guarded_successors_match(node)) {
+			|| !adaptor->guarded_successors_match(node)) {
 		return false;
 	}
 	const auto successors =
@@ -2240,7 +2227,7 @@ bool ZendCompilerA64::read_array() {
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
 		const auto guarded_successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 		if (!node.operands.empty()
@@ -2700,7 +2687,7 @@ bool ZendCompilerA64::isset_array() {
 				&& adaptor->machine_kind(node.operands[1])
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 	}
@@ -3041,7 +3028,7 @@ bool ZendCompilerA64::append_packed_array() {
 	if (node.kind != Adaptor::InstKind::GuardedFast
 			|| node.control_block == UINT32_MAX
 			|| node.continuation_block == UINT32_MAX
-			|| !guarded_successors_match(node)) {
+			|| !adaptor->guarded_successors_match(node)) {
 		return false;
 	}
 	const auto successors =
@@ -3356,7 +3343,7 @@ bool ZendCompilerA64::string_length() {
 	if (node.kind != Adaptor::InstKind::GuardedFast
 			|| node.control_block == UINT32_MAX
 			|| node.continuation_block == UINT32_MAX
-			|| !guarded_successors_match(node)) {
+			|| !adaptor->guarded_successors_match(node)) {
 		return false;
 	}
 	const auto successors =
@@ -3454,7 +3441,7 @@ bool ZendCompilerA64::string_identity() {
 		return branch_to_guarded_cold();
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 	}
@@ -3650,7 +3637,7 @@ bool ZendCompilerA64::long_binary() {
 	if (node.kind != Adaptor::InstKind::GuardedFast) {
 		return false;
 	}
-	if (!guarded_successors_match(node)) {
+	if (!adaptor->guarded_successors_match(node)) {
 		return false;
 	}
 	auto slow = text_writer.label_create();
@@ -3836,7 +3823,7 @@ bool ZendCompilerA64::long_assign_op() {
 		return branch_to_guarded_cold();
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 	}
@@ -4093,7 +4080,7 @@ bool ZendCompilerA64::long_incdec() {
 		return branch_to_guarded_cold();
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 	}
@@ -4282,7 +4269,7 @@ bool ZendCompilerA64::slot_isset_empty() {
 		return branch_to_guarded_cold();
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 	}
@@ -4587,7 +4574,7 @@ bool ZendCompilerA64::object_property_read() {
 		return branch_to_guarded_cold();
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 	}
@@ -4982,7 +4969,7 @@ bool ZendCompilerA64::dynamic_fetch_read() {
 		&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
 	const bool direct_cv = layout.cv_index != UINT32_MAX;
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		if (!guarded_successors_match(node)) {
+		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
 		if (!direct_cv) {

@@ -1825,6 +1825,33 @@ public:
 	std::span<const IRInstRef> block_insts(IRBlockRef block) const {
 		return active_->block_insts(block);
 	}
+	/* A GuardedFast node's control block: successor 0 is its continuation,
+	 * successor 1 its cold block (InstNode). */
+	std::span<const IRBlockRef> guarded_successors_of(
+			const InstNode &node) const {
+		ZEND_ASSERT(node.control_block != UINT32_MAX
+			&& node.continuation_block != UINT32_MAX);
+		const auto successors =
+			block_succs(IRBlockRef{node.control_block});
+		ZEND_ASSERT(successors.size() >= 2
+			&& static_cast<uint32_t>(successors[0])
+				== node.continuation_block
+			&& static_cast<uint32_t>(successors[1]) == node.argument_index);
+		return successors;
+	}
+	/* Whether a GuardedFast node's control block has the successors
+	 * guarded_successors_of() asserts. */
+	bool guarded_successors_match(const InstNode &node) const {
+		const auto guarded_successors =
+			block_succs(IRBlockRef{node.control_block});
+		return !(node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| guarded_successors.size() < 2
+			|| static_cast<uint32_t>(guarded_successors[0])
+				!= node.continuation_block
+			|| static_cast<uint32_t>(guarded_successors[1])
+				!= node.argument_index);
+	}
 	bool block_is_cold(IRBlockRef block) const {
 		const uint32_t index = static_cast<uint32_t>(block);
 		if (index < profile_cold_blocks_.size()
