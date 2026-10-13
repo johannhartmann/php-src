@@ -452,17 +452,13 @@ private:
 			 * already point at a derived value whose defining node is later in
 			 * this function.
 			 */
-			if (binding.value_index >= 0
-					&& static_cast<uint32_t>(binding.value_index)
-						< plan_->value_count) {
+			if (valid_value_index(binding.value_index)) {
 				return IRValueRef{MIR_VALUE_BASE
 					+ static_cast<uint32_t>(binding.value_index)};
 			}
 			return INVALID_VALUE_REF;
 		}
-		if (binding.value_index >= 0
-				&& static_cast<uint32_t>(binding.value_index)
-					< plan_->value_count) {
+		if (valid_value_index(binding.value_index)) {
 			const zend_tpde_value &value =
 				plan_->values[
 					static_cast<uint32_t>(binding.value_index)];
@@ -482,6 +478,19 @@ private:
 
 	int32_t block_index(zend_mir_block_id id) const {
 		return zend_tpde_block_index(plan_, id);
+	}
+
+	/* Whether a plan value index names one of the plan's values. */
+	bool valid_value_index(int32_t index) const {
+		return index >= 0
+			&& static_cast<uint32_t>(index) < plan_->value_count;
+	}
+
+	/* Whether an IR value number is one of the plan's MIR values, rather
+	 * than a fixed argument or a derived value. */
+	bool is_mir_value(uint32_t index) const {
+		return index >= MIR_VALUE_BASE
+			&& index - MIR_VALUE_BASE < plan_->value_count;
 	}
 
 	void override_ssa_value(uint32_t ssa_variable_id, IRValueRef value);
@@ -999,8 +1008,7 @@ public:
 		if (const DerivedValue *derived = derived_value(value)) {
 			return derived->representation;
 		}
-		if (index >= MIR_VALUE_BASE
-				&& index - MIR_VALUE_BASE < plan_->value_count) {
+		if (is_mir_value(index)) {
 			const TypedBodyAbiType abi =
 				typed_body_value_abi(plan_, index - MIR_VALUE_BASE);
 			if (plan_->values[index - MIR_VALUE_BASE].argument_index >= 0
@@ -1008,8 +1016,7 @@ public:
 				return abi.representation;
 			}
 		}
-		return index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count
+		return !is_mir_value(index)
 			? ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
 			: plan_->values[index - MIR_VALUE_BASE].representation;
 	}
@@ -1018,8 +1025,7 @@ public:
 		if (const DerivedValue *derived = derived_value(value)) {
 			return derived->exact_type;
 		}
-		if (index >= MIR_VALUE_BASE
-				&& index - MIR_VALUE_BASE < plan_->value_count) {
+		if (is_mir_value(index)) {
 			const TypedBodyAbiType abi =
 				typed_body_value_abi(plan_, index - MIR_VALUE_BASE);
 			if (plan_->values[index - MIR_VALUE_BASE].argument_index >= 0
@@ -1027,8 +1033,7 @@ public:
 				return abi.exact_type;
 			}
 		}
-		return index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count
+		return !is_mir_value(index)
 			? ZEND_MIR_SCALAR_TYPE_NONE
 			: plan_->values[index - MIR_VALUE_BASE].exact_type;
 	}
@@ -1037,8 +1042,7 @@ public:
 		if (const DerivedValue *derived = derived_value(value)) {
 			return derived->machine_kind;
 		}
-		if (index >= MIR_VALUE_BASE
-				&& index - MIR_VALUE_BASE < plan_->value_count) {
+		if (is_mir_value(index)) {
 			const TypedBodyAbiType abi =
 				typed_body_value_abi(plan_, index - MIR_VALUE_BASE);
 			if (plan_->values[index - MIR_VALUE_BASE].argument_index >= 0
@@ -1046,8 +1050,7 @@ public:
 				return abi.machine_kind;
 			}
 		}
-		return index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count
+		return !is_mir_value(index)
 			? ZEND_TPDE_MACHINE_VALUE_I64
 			: plan_->values[index - MIR_VALUE_BASE].machine_kind;
 	}
@@ -1056,8 +1059,7 @@ public:
 		if (const DerivedValue *derived = derived_value(value)) {
 			return derived->ownership;
 		}
-		if (index >= MIR_VALUE_BASE
-				&& index - MIR_VALUE_BASE < plan_->value_count) {
+		if (is_mir_value(index)) {
 			const zend_tpde_value &plan_value =
 				plan_->values[index - MIR_VALUE_BASE];
 			if (function_mode_ == FunctionMode::TypedBody
@@ -1075,8 +1077,7 @@ public:
 			}
 			return plan_value.ownership;
 		}
-		return index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count
+		return !is_mir_value(index)
 			? ZEND_MIR_OWNERSHIP_STATE_INVALID
 			: plan_->values[index - MIR_VALUE_BASE].ownership;
 	}
@@ -1085,8 +1086,7 @@ public:
 		if (const DerivedValue *derived = derived_value(value)) {
 			return derived->refcount_state;
 		}
-		if (index >= MIR_VALUE_BASE
-				&& index - MIR_VALUE_BASE < plan_->value_count) {
+		if (is_mir_value(index)) {
 			const zend_tpde_value &plan_value =
 				plan_->values[index - MIR_VALUE_BASE];
 			if (function_mode_ == FunctionMode::TypedBody
@@ -1104,8 +1104,7 @@ public:
 			}
 			return plan_value.refcount_state;
 		}
-		return index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count
+		return !is_mir_value(index)
 			? ZEND_MIR_REFCOUNT_STATE_INVALID
 			: plan_->values[index - MIR_VALUE_BASE].refcount_state;
 	}
@@ -1135,8 +1134,7 @@ public:
 			return true;
 		}
 		const uint32_t raw = static_cast<uint32_t>(value);
-		if (raw < MIR_VALUE_BASE
-				|| raw - MIR_VALUE_BASE >= plan_->value_count) {
+		if (!is_mir_value(raw)) {
 			return true;
 		}
 		const uint32_t index = raw - MIR_VALUE_BASE;
@@ -1222,8 +1220,7 @@ public:
 		if (derived_value(value) != nullptr) {
 			return true;
 		}
-		if (index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count) {
+		if (!is_mir_value(index)) {
 			return true;
 		}
 		return plan_->values[index - MIR_VALUE_BASE]
@@ -1232,8 +1229,7 @@ public:
 	bool machine_value_has_stable_exact_type(IRValueRef value) const {
 		const uint32_t index = static_cast<uint32_t>(value);
 		if (derived_value(value) != nullptr
-				|| index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count) {
+				|| !is_mir_value(index)) {
 			return true;
 		}
 		const zend_tpde_value &plan_value =
@@ -1246,8 +1242,7 @@ public:
 		if (const DerivedValue *derived = derived_value(value)) {
 			return derived->storage_id;
 		}
-		return index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count
+		return !is_mir_value(index)
 			? ZEND_MIR_ID_INVALID
 			: plan_->values[index - MIR_VALUE_BASE].canonical_storage_id;
 	}
@@ -1313,8 +1308,7 @@ public:
 			*bits = derived->constant_bits;
 			return true;
 		}
-		if (index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count) {
+		if (!is_mir_value(index)) {
 			return false;
 		}
 		/*
@@ -1351,8 +1345,7 @@ public:
 			}
 			return true;
 		}
-		if (index < MIR_VALUE_BASE
-				|| index - MIR_VALUE_BASE >= plan_->value_count) {
+		if (!is_mir_value(index)) {
 			return false;
 		}
 		index -= MIR_VALUE_BASE;
@@ -1369,10 +1362,7 @@ public:
 				}
 				return true;
 			}
-			if (candidate.register_alias_value_index < 0
-					|| static_cast<uint32_t>(
-						candidate.register_alias_value_index)
-						>= plan_->value_count
+			if (!valid_value_index(candidate.register_alias_value_index)
 					|| static_cast<uint32_t>(
 						candidate.register_alias_value_index) == index) {
 				break;

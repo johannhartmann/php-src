@@ -203,8 +203,7 @@ bool ZendIRAdaptor::long_binary_machine_operands(
 			return derived->constant;
 		}
 		const uint32_t index = static_cast<uint32_t>(value);
-		return index >= MIR_VALUE_BASE
-			&& index - MIR_VALUE_BASE < plan_->value_count
+		return is_mir_value(index)
 			&& plan_->values[index - MIR_VALUE_BASE].constant;
 	};
 	auto long_register_value = [&](IRValueRef value) {
@@ -862,8 +861,15 @@ void ZendIRAdaptor::add_payload_load_before(
 	const uint32_t load_operand_offset = prefix_end;
 	operands_.push_back(address);
 	add_node(block_instructions, block, InstNode{
-		InstKind::ZvalPayloadLoad, instruction, UINT32_MAX,
-		loaded, {}, load_operand_offset, 1, true, storage_id, type});
+		.kind = InstKind::ZvalPayloadLoad,
+		.mir_instruction_index = instruction,
+		.argument_index = UINT32_MAX,
+		.result = loaded,
+		.operand_offset = load_operand_offset,
+		.operand_count = 1,
+		.has_result = true,
+		.storage_id = storage_id,
+		.exact_type = type});
 	move_operand_prefix(operand_offset, prefix_end);
 }
 
@@ -1081,10 +1087,15 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 				static_cast<uint32_t>(operands_.size());
 			operands_.push_back(caller_value);
 			add_node(block_instructions, caller_block, InstNode{
-				InstKind::UnboxScalar, UINT32_MAX, UINT32_MAX,
-				transported, {}, operand_offset, 1, true,
-				canonical_storage(caller_value),
-				expected_exact_type});
+				.kind = InstKind::UnboxScalar,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = UINT32_MAX,
+				.result = transported,
+				.operand_offset = operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = canonical_storage(caller_value),
+				.exact_type = expected_exact_type});
 			caller_value = transported;
 		}
 		if (effect_closed_inline
@@ -1117,9 +1128,15 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 				static_cast<uint32_t>(operands_.size());
 			operands_.push_back(address);
 			add_node(block_instructions, caller_block, InstNode{
-				InstKind::ZvalPayloadLoad, UINT32_MAX, UINT32_MAX,
-				transported, {}, load_operand_offset, 1, true,
-				storage_id, expected_exact_type});
+				.kind = InstKind::ZvalPayloadLoad,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = UINT32_MAX,
+				.result = transported,
+				.operand_offset = load_operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = storage_id,
+				.exact_type = expected_exact_type});
 			caller_value = transported;
 		}
 		if (caller_value != INVALID_VALUE_REF
@@ -1140,9 +1157,15 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 				static_cast<uint32_t>(operands_.size());
 			operands_.push_back(caller_value);
 			add_node(block_instructions, caller_block, InstNode{
-				InstKind::UnboxReferenceScalar, UINT32_MAX, UINT32_MAX,
-				transported, {}, operand_offset, 1, true,
-				canonical_storage(caller_value), expected_exact_type});
+				.kind = InstKind::UnboxReferenceScalar,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = UINT32_MAX,
+				.result = transported,
+				.operand_offset = operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = canonical_storage(caller_value),
+				.exact_type = expected_exact_type});
 			caller_value = transported;
 		}
 		if (caller_value != INVALID_VALUE_REF
@@ -1172,9 +1195,15 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 				static_cast<uint32_t>(operands_.size());
 			operands_.push_back(address);
 			add_node(block_instructions, caller_block, InstNode{
-				InstKind::ZvalPayloadLoad, UINT32_MAX, UINT32_MAX,
-				transported, {}, load_operand_offset, 1, true,
-				storage_id, callee_value.exact_type});
+				.kind = InstKind::ZvalPayloadLoad,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = UINT32_MAX,
+				.result = transported,
+				.operand_offset = load_operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = storage_id,
+				.exact_type = callee_value.exact_type});
 			caller_value = transported;
 		}
 		if (caller_value == INVALID_VALUE_REF
@@ -1652,10 +1681,17 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 				ZEND_TPDE_MACHINE_VALUE_I64);
 			values[static_cast<uint32_t>(result_index)] = result;
 			add_node(block_instructions, caller_block, InstNode{
-				InstKind::StringLengthValue, UINT32_MAX, UINT32_MAX,
-				result, {}, operand_offset, 1, true,
-				ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_I64,
-				true, record});
+				.kind = InstKind::StringLengthValue,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = UINT32_MAX,
+				.result = result,
+				.operand_offset = operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = ZEND_MIR_ID_INVALID,
+				.exact_type = ZEND_MIR_SCALAR_TYPE_I64,
+				.synthetic = true,
+				.synthetic_record = record});
 			cloned_string_length = true;
 			continue;
 		}
@@ -1707,10 +1743,17 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 			ZEND_MIR_ID_INVALID);
 		values[static_cast<uint32_t>(result_index)] = result;
 		add_node(block_instructions, caller_block, InstNode{
-			InstKind::MIR, UINT32_MAX, UINT32_MAX, result, {},
-			operand_offset, instruction.operand_count, true,
-			ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
-			true, record});
+			.kind = InstKind::MIR,
+			.mir_instruction_index = UINT32_MAX,
+			.argument_index = UINT32_MAX,
+			.result = result,
+			.operand_offset = operand_offset,
+			.operand_count = instruction.operand_count,
+			.has_result = true,
+			.storage_id = ZEND_MIR_ID_INVALID,
+			.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+			.synthetic = true,
+			.synthetic_record = record});
 	}
 	if (scalar_diamond) {
 		if (diamond_condition == INVALID_VALUE_REF
@@ -1777,10 +1820,17 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 			operands_.push_back(false_value);
 			values[static_cast<uint32_t>(result_index)] = result;
 			add_node(block_instructions, caller_block, InstNode{
-				InstKind::ScalarSelect, UINT32_MAX, UINT32_MAX,
-				result, {}, operand_offset, 3, true,
-				ZEND_MIR_ID_INVALID, callee_result.exact_type,
-				true, record});
+				.kind = InstKind::ScalarSelect,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = UINT32_MAX,
+				.result = result,
+				.operand_offset = operand_offset,
+				.operand_count = 3,
+				.has_result = true,
+				.storage_id = ZEND_MIR_ID_INVALID,
+				.exact_type = callee_result.exact_type,
+				.synthetic = true,
+				.synthetic_record = record});
 		}
 		returned = mapped_value(deferred_return_id);
 		if (returned == INVALID_VALUE_REF
@@ -1839,10 +1889,17 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 	copy_record.opcode = ZEND_MIR_OPCODE_COPY;
 	copy_record.block_id = callee->block_ids[0];
 	add_node(block_instructions, caller_block, InstNode{
-		InstKind::MIR, UINT32_MAX, UINT32_MAX, inline_result, {},
-		result_operand_offset, 1, true,
-		ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
-		true, copy_record});
+		.kind = InstKind::MIR,
+		.mir_instruction_index = UINT32_MAX,
+		.argument_index = UINT32_MAX,
+		.result = inline_result,
+		.operand_offset = result_operand_offset,
+		.operand_count = 1,
+		.has_result = true,
+		.storage_id = ZEND_MIR_ID_INVALID,
+		.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+		.synthetic = true,
+		.synthetic_record = copy_record});
 	return {true, inline_result};
 }
 
@@ -2259,9 +2316,7 @@ bool ZendIRAdaptor::Builder::init_value_tables() {
 				value < plan_->value_count; ++value) {
 			const int32_t alias =
 				plan_->values[value].register_alias_value_index;
-			if (alias >= 0
-					&& static_cast<uint32_t>(alias)
-						< plan_->value_count) {
+			if (valid_value_index(alias)) {
 				value_overrides_[value] = IRValueRef{
 					MIR_VALUE_BASE + static_cast<uint32_t>(alias)};
 			}
@@ -2724,14 +2779,13 @@ void ZendIRAdaptor::Builder::add_entry_nodes() {
 			operands_.push_back(IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 		}
 		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-			InstKind::LoadFrame,
-			UINT32_MAX,
-			UINT32_MAX,
-			IRValueRef{FRAME_VALUE},
-			{},
-			0,
-			static_cast<uint32_t>(operands_.size()),
-			true});
+			.kind = InstKind::LoadFrame,
+			.mir_instruction_index = UINT32_MAX,
+			.argument_index = UINT32_MAX,
+			.result = IRValueRef{FRAME_VALUE},
+			.operand_offset = 0,
+			.operand_count = static_cast<uint32_t>(operands_.size()),
+			.has_result = true});
 		if (plan_->generator_resume_count != 0) {
 			uint32_t operand_offset =
 				static_cast<uint32_t>(operands_.size());
@@ -2740,14 +2794,13 @@ void ZendIRAdaptor::Builder::add_entry_nodes() {
 				IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 			add_node(block_instructions, static_cast<uint32_t>(entry),
 				InstNode{
-					InstKind::GeneratorGateway,
-					UINT32_MAX,
-					UINT32_MAX,
-					INVALID_VALUE_REF,
-					{},
-					operand_offset,
-					2,
-					false});
+					.kind = InstKind::GeneratorGateway,
+					.mir_instruction_index = UINT32_MAX,
+					.argument_index = UINT32_MAX,
+					.result = INVALID_VALUE_REF,
+					.operand_offset = operand_offset,
+					.operand_count = 2,
+					.has_result = false});
 		}
 		if (plan_->deopt_resume_count != 0) {
 			uint32_t operand_offset =
@@ -2756,14 +2809,13 @@ void ZendIRAdaptor::Builder::add_entry_nodes() {
 			operands_.push_back(
 				IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 			InstNode gateway{
-				InstKind::GeneratorGateway,
-				UINT32_MAX,
-				UINT32_MAX,
-				INVALID_VALUE_REF,
-				{},
-				operand_offset,
-				2,
-				false};
+				.kind = InstKind::GeneratorGateway,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = UINT32_MAX,
+				.result = INVALID_VALUE_REF,
+				.operand_offset = operand_offset,
+				.operand_count = 2,
+				.has_result = false};
 			gateway.deopt_resume = true;
 			add_node(block_instructions, static_cast<uint32_t>(entry),
 				std::move(gateway));
@@ -2772,14 +2824,13 @@ void ZendIRAdaptor::Builder::add_entry_nodes() {
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(IRValueRef{FRAME_VALUE});
 		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-			InstKind::ZvalGuardArguments,
-			UINT32_MAX,
-			UINT32_MAX,
-			INVALID_VALUE_REF,
-			{},
-			guard_operand_offset,
-			1,
-			false});
+			.kind = InstKind::ZvalGuardArguments,
+			.mir_instruction_index = UINT32_MAX,
+			.argument_index = UINT32_MAX,
+			.result = INVALID_VALUE_REF,
+			.operand_offset = guard_operand_offset,
+			.operand_count = 1,
+			.has_result = false});
 	}
 }
 
@@ -2854,16 +2905,15 @@ void ZendIRAdaptor::Builder::load_register_arguments() {
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(payload_address);
 		add_node(block_instructions, static_cast<uint32_t>(entry), InstNode{
-			InstKind::ZvalPayloadLoad,
-			UINT32_MAX,
-			static_cast<uint32_t>(value.argument_index),
-			IRValueRef{MIR_VALUE_BASE + i},
-			{},
-			operand_offset,
-			1,
-			true,
-			storage_id,
-			argument_abi.exact_type});
+			.kind = InstKind::ZvalPayloadLoad,
+			.mir_instruction_index = UINT32_MAX,
+			.argument_index = static_cast<uint32_t>(value.argument_index),
+			.result = IRValueRef{MIR_VALUE_BASE + i},
+			.operand_offset = operand_offset,
+			.operand_count = 1,
+			.has_result = true,
+			.storage_id = storage_id,
+			.exact_type = argument_abi.exact_type});
 	}
 }
 
@@ -2934,9 +2984,7 @@ void ZendIRAdaptor::Builder::select_component_results() {
 						->return_abi)
 				: TypedBodyAbiType{};
 		if (canonical_result != INVALID_VALUE_REF
-				&& canonical_index >= MIR_VALUE_BASE
-				&& canonical_index - MIR_VALUE_BASE
-					< plan_->value_count
+				&& is_mir_value(canonical_index)
 				&& !result_abi.valid) {
 			result_abi = typed_body_value_abi(
 				plan_, canonical_index - MIR_VALUE_BASE);
@@ -2983,18 +3031,14 @@ void ZendIRAdaptor::Builder::select_component_results() {
 			local_abi_ownership(
 				result_abi.transfer,
 				canonical_result != INVALID_VALUE_REF
-					&& canonical_index >= MIR_VALUE_BASE
-					&& canonical_index - MIR_VALUE_BASE
-						< plan_->value_count
+					&& is_mir_value(canonical_index)
 				? plan_->values[
 					canonical_index - MIR_VALUE_BASE].ownership
 				: ZEND_MIR_OWNERSHIP_STATE_OWNED),
 			local_abi_refcount(
 				result_abi.transfer,
 				canonical_result != INVALID_VALUE_REF
-					&& canonical_index >= MIR_VALUE_BASE
-					&& canonical_index - MIR_VALUE_BASE
-						< plan_->value_count
+					&& is_mir_value(canonical_index)
 				? plan_->values[
 					canonical_index - MIR_VALUE_BASE].refcount_state
 				: ZEND_MIR_REFCOUNT_UNKNOWN));
@@ -3536,9 +3580,7 @@ void ZendIRAdaptor::Builder::select_register_boolean_results() {
 					instruction.value_operation.result.ssa_variable_id;
 				const zend_mir_storage_id result_storage =
 					instruction.value_operation.result_storage_id;
-				if (result_index < 0
-						|| static_cast<uint32_t>(result_index)
-							>= plan_->value_count
+				if (!valid_value_index(result_index)
 						|| result_ssa
 							>= active_source_ssa_overrides().size()
 						|| !zend_mir_id_is_valid(result_storage)) {
@@ -3595,9 +3637,7 @@ void ZendIRAdaptor::Builder::select_register_boolean_results() {
 					|| !machine_value_has_register_definition(condition)) {
 				continue;
 			}
-			if (result_index < 0
-					|| static_cast<uint32_t>(result_index)
-						>= plan_->value_count
+			if (!valid_value_index(result_index)
 					|| result_ssa >= active_source_ssa_overrides().size()) {
 				valid_ = false;
 				continue;
@@ -3620,9 +3660,7 @@ void ZendIRAdaptor::Builder::select_register_boolean_results() {
 					? producer.value_operation.source_opcode : 0;
 			const int32_t edge_value =
 				producer.source_result_binding.value_index;
-			if (edge_value >= 0
-					&& static_cast<uint32_t>(edge_value)
-						< plan_->value_count
+			if (valid_value_index(edge_value)
 					&& producer.record.opcode
 						== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 					&& (source_opcode == ZEND_JMPZ_EX
@@ -3656,9 +3694,7 @@ void ZendIRAdaptor::Builder::select_register_boolean_results() {
 			}
 			const int32_t result_index =
 				zend_tpde_value_index(plan_, record.result_id);
-			if (result_index < 0
-					|| static_cast<uint32_t>(result_index)
-						>= plan_->value_count
+			if (!valid_value_index(result_index)
 					|| plan_->value_consumer_offsets == nullptr
 					|| plan_->value_consumers == nullptr) {
 				continue;
@@ -3710,9 +3746,7 @@ void ZendIRAdaptor::Builder::select_register_boolean_results() {
 				}
 				const int32_t input_index =
 					zend_tpde_value_index(plan_, input_id);
-				if (input_index >= 0
-						&& static_cast<uint32_t>(input_index)
-							< plan_->value_count
+				if (valid_value_index(input_index)
 						&& short_circuit_edge_values[
 							static_cast<uint32_t>(input_index)] != 0) {
 					short_circuit_edge = true;
@@ -3873,9 +3907,7 @@ void ZendIRAdaptor::Builder::select_register_binary_results() {
 			instruction.value_operation.result_storage_id;
 		const zend_mir_value_id result_ssa =
 			instruction.value_operation.result.ssa_variable_id;
-		if (result_index < 0
-				|| static_cast<uint32_t>(result_index)
-					>= plan_->value_count
+		if (!valid_value_index(result_index)
 				|| !zend_mir_id_is_valid(result_storage)
 				|| result_ssa
 					>= active_source_ssa_overrides().size()) {
@@ -3955,9 +3987,7 @@ void ZendIRAdaptor::Builder::select_register_branch_results() {
 						!= ZEND_JMP_SET
 					&& instruction.value_operation.source_opcode
 						!= ZEND_COALESCE)
-				|| result_index < 0
-				|| static_cast<uint32_t>(result_index)
-					>= plan_->value_count
+				|| !valid_value_index(result_index)
 				|| !zend_mir_id_is_valid(
 					instruction.value_operation.result_storage_id)) {
 			continue;
@@ -4024,9 +4054,7 @@ void ZendIRAdaptor::Builder::select_packed_fetch_results() {
 				|| instruction.record.opcode
 					!= ZEND_MIR_OPCODE_ITERATOR_BRANCH
 				|| source_result_used[i] == 0
-				|| result_index < 0
-				|| static_cast<uint32_t>(result_index)
-					>= plan_->value_count
+				|| !valid_value_index(result_index)
 				|| !zend_tpde_packed_iterator_fetch_at(
 					instruction, &iterator)
 				|| !zend_mir_id_is_valid(
@@ -4463,9 +4491,7 @@ void ZendIRAdaptor::Builder::select_phi_results() {
 		if (producer.record.opcode
 				== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				&& producer.has_value_operation
-				&& result_index >= 0
-				&& static_cast<uint32_t>(result_index)
-					< plan_->value_count
+				&& valid_value_index(result_index)
 				&& (producer.value_operation.source_opcode
 						== ZEND_COALESCE
 					|| producer.value_operation.source_opcode
@@ -4637,8 +4663,7 @@ bool ZendIRAdaptor::Builder::entry_argument_has_register_definition(
 		return false;
 	}
 	const uint32_t raw = static_cast<uint32_t>(value);
-	if (raw < MIR_VALUE_BASE
-			|| raw - MIR_VALUE_BASE >= plan_->value_count) {
+	if (!is_mir_value(raw)) {
 		return false;
 	}
 	const uint32_t value_index = raw - MIR_VALUE_BASE;
@@ -4819,8 +4844,7 @@ bool ZendIRAdaptor::Builder::entry_register_definition(IRValueRef value) {
 	if (function_mode_ != FunctionMode::ZendEntry
 			|| value == INVALID_VALUE_REF
 			|| derived_value(value) != nullptr
-			|| raw < MIR_VALUE_BASE
-			|| raw - MIR_VALUE_BASE >= plan_->value_count
+			|| !is_mir_value(raw)
 			|| plan_->value_definition_instructions == nullptr
 			|| !machine_value_is_register_authoritative(value)) {
 		return false;
@@ -5249,9 +5273,7 @@ void ZendIRAdaptor::Builder::merge_short_circuit_results() {
 			instruction.source_op1_binding.value_index;
 		if ((instruction.machine_control_flow_flags
 				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_MERGE) == 0
-				|| result_index < 0
-				|| static_cast<uint32_t>(result_index)
-					>= plan_->value_count
+				|| !valid_value_index(result_index)
 				|| !zend_mir_id_is_valid(
 					instruction.value_operation.op1_storage_id)) {
 			continue;
@@ -5442,14 +5464,14 @@ void ZendIRAdaptor::Builder::emit_generator_resume(
 			return true;
 		});
 		InstNode resume_node{
-			InstKind::GeneratorResume,
-			UINT32_MAX,
-			resume_index,
-			INVALID_VALUE_REF,
-			{},
-			operand_offset,
-			static_cast<uint32_t>(operands_.size()) - operand_offset,
-			false};
+			.kind = InstKind::GeneratorResume,
+			.mir_instruction_index = UINT32_MAX,
+			.argument_index = resume_index,
+			.result = INVALID_VALUE_REF,
+			.operand_offset = operand_offset,
+			.operand_count =
+				static_cast<uint32_t>(operands_.size()) - operand_offset,
+			.has_result = false};
 		resume_node.generator_resume_value_offset = resume_value_offset;
 		resume_node.generator_resume_value_count =
 			static_cast<uint32_t>(generator_resume_values_.size())
@@ -5509,14 +5531,13 @@ void ZendIRAdaptor::Builder::emit_source_landing(
 		block, source_position, true, use_instruction);
 	if (plan_->user_opcode_callbacks) {
 		add_node(block_instructions, block, InstNode{
-			InstKind::UserOpcodeLanding,
-			UINT32_MAX,
-			source_position,
-			INVALID_VALUE_REF,
-			{},
-			0,
-			0,
-			false});
+			.kind = InstKind::UserOpcodeLanding,
+			.mir_instruction_index = UINT32_MAX,
+			.argument_index = source_position,
+			.result = INVALID_VALUE_REF,
+			.operand_offset = 0,
+			.operand_count = 0,
+			.has_result = false});
 		if (zend_get_user_opcode_handler(
 				plan_->source_opcodes[source_position].opcode)
 				!= nullptr) {
@@ -5543,25 +5564,23 @@ void ZendIRAdaptor::Builder::emit_source_landing(
 				}
 			}
 			add_node(block_instructions, block, InstNode{
-				InstKind::UserOpcodeGateway,
-				UINT32_MAX,
-				source_position,
-				INVALID_VALUE_REF,
-				{},
-				operand_offset,
-				static_cast<uint32_t>(
+				.kind = InstKind::UserOpcodeGateway,
+				.mir_instruction_index = UINT32_MAX,
+				.argument_index = source_position,
+				.result = INVALID_VALUE_REF,
+				.operand_offset = operand_offset,
+				.operand_count = static_cast<uint32_t>(
 					operands_.size() - operand_offset),
-				false});
+				.has_result = false});
 		}
 		add_node(block_instructions, block, InstNode{
-			InstKind::UserOpcodeDispatch,
-			UINT32_MAX,
-			source_position,
-			INVALID_VALUE_REF,
-			{},
-			0,
-			0,
-			false});
+			.kind = InstKind::UserOpcodeDispatch,
+			.mir_instruction_index = UINT32_MAX,
+			.argument_index = source_position,
+			.result = INVALID_VALUE_REF,
+			.operand_offset = 0,
+			.operand_count = 0,
+			.has_result = false});
 	}
 	if (const zend_tpde_source_call_phase_entry *phase =
 			zend_tpde_source_call_phase_at(plan_, source_position)) {
@@ -5579,14 +5598,13 @@ void ZendIRAdaptor::Builder::emit_source_landing(
 					operands_.push_back(operand);
 				}
 				InstNode node{
-					kind,
-					phase->instruction_index,
-					argument_index,
-					result,
-					{},
-					operand_offset,
-					operand == INVALID_VALUE_REF ? 2u : 3u,
-					has_result};
+					.kind = kind,
+					.mir_instruction_index = phase->instruction_index,
+					.argument_index = argument_index,
+					.result = result,
+					.operand_offset = operand_offset,
+					.operand_count = operand == INVALID_VALUE_REF ? 2u : 3u,
+					.has_result = has_result};
 				node.source_position = source_position;
 				add_node(block_instructions, block, std::move(node));
 			};
@@ -5625,9 +5643,7 @@ void ZendIRAdaptor::Builder::emit_source_landing(
 					}
 					const zend_tpde_source_value_binding &binding =
 						plan_->call_argument_bindings[binding_index];
-					if (binding.value_index < 0
-							|| static_cast<uint32_t>(binding.value_index)
-								>= plan_->value_count) {
+					if (!valid_value_index(binding.value_index)) {
 						valid_ = false;
 						return;
 					}
@@ -5698,14 +5714,13 @@ void ZendIRAdaptor::Builder::emit_source_landing(
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(IRValueRef{FRAME_VALUE});
 		add_node(block_instructions, block, InstNode{
-			InstKind::UserOpcodeCallFragment,
-			instruction_index,
-			source_position,
-			result,
-			{},
-			operand_offset,
-			1,
-			machine_result});
+			.kind = InstKind::UserOpcodeCallFragment,
+			.mir_instruction_index = instruction_index,
+			.argument_index = source_position,
+			.result = result,
+			.operand_offset = operand_offset,
+			.operand_count = 1,
+			.has_result = machine_result});
 	}
 }
 
@@ -5739,17 +5754,16 @@ void ZendIRAdaptor::Builder::emit_pending_phi_inputs(
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(pending.source);
 		add_node(block_instructions, block, InstNode{
-			pending.kind,
-			terminator_instruction,
-			UINT32_MAX,
-			pending.result,
-			{},
-			operand_offset,
-			1,
-			true,
-			pending.storage_id,
-			pending.exact_type,
-			true});
+			.kind = pending.kind,
+			.mir_instruction_index = terminator_instruction,
+			.argument_index = UINT32_MAX,
+			.result = pending.result,
+			.operand_offset = operand_offset,
+			.operand_count = 1,
+			.has_result = true,
+			.storage_id = pending.storage_id,
+			.exact_type = pending.exact_type,
+			.synthetic = true});
 		pending.emitted = true;
 	}
 }
@@ -5809,9 +5823,7 @@ void ZendIRAdaptor::Builder::elide_empty_silence_pairs() {
 			}
 			const int32_t saved_value =
 				begin.source_result_binding.value_index;
-			if (saved_value < 0
-					|| static_cast<uint32_t>(saved_value)
-						>= plan_->value_count
+			if (!valid_value_index(saved_value)
 					|| end.source_op1_binding.value_index != saved_value) {
 				continue;
 			}
@@ -6272,9 +6284,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 		const zend_mir_storage_id result_storage =
 			instruction.value_operation.result_storage_id;
 		if (canonical_result != INVALID_VALUE_REF
-				&& canonical_index >= MIR_VALUE_BASE
-				&& canonical_index - MIR_VALUE_BASE
-					< plan_->value_count
+				&& is_mir_value(canonical_index)
 				&& zend_mir_id_is_valid(result_storage)) {
 			result = add_derived_value(
 				result_type == ZEND_MIR_SCALAR_TYPE_I1
@@ -6336,8 +6346,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 		const uint32_t raw_key =
 			static_cast<uint32_t>(source_array_key);
 		if (function_mode_ == FunctionMode::ZendEntry
-				&& raw_key >= MIR_VALUE_BASE
-				&& raw_key - MIR_VALUE_BASE < plan_->value_count
+				&& is_mir_value(raw_key)
 				&& plan_->values[raw_key - MIR_VALUE_BASE]
 					.argument_index >= 0) {
 			const TypedBodyAbiType key_abi = typed_body_value_abi(
@@ -6504,9 +6513,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 		const zend_mir_storage_id result_storage =
 			instruction.value_operation.result_storage_id;
 		if (canonical_result == INVALID_VALUE_REF
-				|| canonical_index < MIR_VALUE_BASE
-				|| canonical_index - MIR_VALUE_BASE
-					>= plan_->value_count
+				|| !is_mir_value(canonical_index)
 				|| !zend_mir_id_is_valid(result_storage)) {
 			valid_ = false;
 			return;
@@ -6568,9 +6575,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 				|| result_type == ZEND_MIR_SCALAR_TYPE_I64
 				|| result_type == ZEND_MIR_SCALAR_TYPE_F64)
 				&& canonical_result != INVALID_VALUE_REF
-				&& canonical_index >= MIR_VALUE_BASE
-				&& canonical_index - MIR_VALUE_BASE
-					< plan_->value_count
+				&& is_mir_value(canonical_index)
 				&& zend_mir_id_is_valid(result_storage)) {
 			result = add_derived_value(
 				result_type == ZEND_MIR_SCALAR_TYPE_I1
@@ -6767,9 +6772,15 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 					static_cast<uint32_t>(operands_.size());
 				operands_.push_back(address);
 				add_node(block_instructions, block, InstNode{
-					InstKind::ZvalPayloadLoad, i, UINT32_MAX,
-					result, {}, load_operand_offset, 1, true,
-					result_storage, exact_type(result)});
+					.kind = InstKind::ZvalPayloadLoad,
+					.mir_instruction_index = i,
+					.argument_index = UINT32_MAX,
+					.result = result,
+					.operand_offset = load_operand_offset,
+					.operand_count = 1,
+					.has_result = true,
+					.storage_id = result_storage,
+					.exact_type = exact_type(result)});
 				set_instruction_result(i, result);
 			}
 			return;
@@ -7570,7 +7581,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 		return;
 	}
 	add_node(block_instructions, static_cast<uint32_t>(block), InstNode{
-		type_check_selection
+		.kind = type_check_selection
 					!= ScalarTypeCheckSelection::Invalid
 				|| register_cond_branch
 				|| register_bool_unary_operand != INVALID_VALUE_REF
@@ -7579,16 +7590,20 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 				&& !lazy_store
 			? InstKind::ZvalStore
 			: executable_kind(instruction, record),
-		i, UINT32_MAX, result, {},
-		operand_offset, operand_count, machine_result,
-		ZEND_MIR_ID_INVALID,
-		static_slot_isset_machine_fast
+		.mir_instruction_index = i,
+		.argument_index = UINT32_MAX,
+		.result = result,
+		.operand_offset = operand_offset,
+		.operand_count = operand_count,
+		.has_result = machine_result,
+		.storage_id = ZEND_MIR_ID_INVALID,
+		.exact_type = static_slot_isset_machine_fast
 			? static_slot_isset_exact_type
 			: canonical_bool_unary_exact_type,
-		false, {}, inlined_user_body.valid,
-		inlined_operand_index,
-		materialization_operand_index,
-		materialization_count});
+		.inlined_user_body = inlined_user_body.valid,
+		.inlined_operand_index = inlined_operand_index,
+		.materialization_operand_index = materialization_operand_index,
+		.materialization_count = materialization_count});
 	nodes_.back().direct_internal_argument_transport =
 		direct_internal_argument_transport;
 	nodes_.back().assign_op_right_operand_index =
@@ -7652,9 +7667,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 					ZEND_MIR_REFCOUNT_UNKNOWN)
 				: INVALID_VALUE_REF;
 		if (canonical_result == INVALID_VALUE_REF
-				|| canonical_index < MIR_VALUE_BASE
-				|| canonical_index - MIR_VALUE_BASE
-					>= plan_->value_count
+				|| !is_mir_value(canonical_index)
 				|| array == INVALID_VALUE_REF) {
 			valid_ = false;
 		} else {
@@ -7663,9 +7676,15 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 			operands_.push_back(address);
 			add_node(block_instructions,
 				static_cast<uint32_t>(block), InstNode{
-					InstKind::ZvalPayloadLoad, i, UINT32_MAX,
-					array, {}, load_operand_offset, 1, true,
-					storage_id, ZEND_MIR_SCALAR_TYPE_NONE});
+					.kind = InstKind::ZvalPayloadLoad,
+					.mir_instruction_index = i,
+					.argument_index = UINT32_MAX,
+					.result = array,
+					.operand_offset = load_operand_offset,
+					.operand_count = 1,
+					.has_result = true,
+					.storage_id = storage_id,
+					.exact_type = ZEND_MIR_SCALAR_TYPE_NONE});
 			set_instruction_result(i, array);
 			value_overrides[
 				canonical_index - MIR_VALUE_BASE] = array;
@@ -7722,8 +7741,7 @@ void ZendIRAdaptor::Builder::lower_typed_body_operation(
 		for (uint32_t depth = 0; value != INVALID_VALUE_REF
 				&& depth < plan_->value_count; ++depth) {
 			const uint32_t raw = static_cast<uint32_t>(value);
-			if (raw < MIR_VALUE_BASE
-					|| raw - MIR_VALUE_BASE >= plan_->value_count) {
+			if (!is_mir_value(raw)) {
 				break;
 			}
 			const int32_t definition =
@@ -7789,8 +7807,13 @@ void ZendIRAdaptor::Builder::lower_typed_body_operation(
 	operands_.push_back(left);
 	operands_.push_back(right);
 	add_node(block_instructions, block, InstNode{
-		InstKind::MIR, i, UINT32_MAX, result, {},
-		operand_offset, 2, true});
+		.kind = InstKind::MIR,
+		.mir_instruction_index = i,
+		.argument_index = UINT32_MAX,
+		.result = result,
+		.operand_offset = operand_offset,
+		.operand_count = 2,
+		.has_result = true});
 	set_instruction_result(i, result);
 	active_source_ssa_overrides()[
 		instruction.value_operation.result.ssa_variable_id] =
@@ -7847,9 +7870,15 @@ void ZendIRAdaptor::Builder::forward_typed_body_assign(
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(source);
 		add_node(block_instructions, block, InstNode{
-			InstKind::BoxScalar, i, UINT32_MAX, boxed, {},
-			box_offset, 1, true, ZEND_MIR_ID_INVALID,
-			source_type});
+			.kind = InstKind::BoxScalar,
+			.mir_instruction_index = i,
+			.argument_index = UINT32_MAX,
+			.result = boxed,
+			.operand_offset = box_offset,
+			.operand_count = 1,
+			.has_result = true,
+			.storage_id = ZEND_MIR_ID_INVALID,
+			.exact_type = source_type});
 		source = boxed;
 	}
 	set_instruction_result(i, source);
@@ -8200,8 +8229,7 @@ void ZendIRAdaptor::Builder::append_data_operands(
 				&& operand != INVALID_VALUE_REF
 				&& !machine_value_is_register_authoritative(operand)) {
 			const uint32_t raw = static_cast<uint32_t>(operand);
-			if (raw >= MIR_VALUE_BASE
-					&& raw - MIR_VALUE_BASE < plan_->value_count) {
+			if (is_mir_value(raw)) {
 				const IRValueRef materializable =
 					resolve_materializable_scalar(
 						raw - MIR_VALUE_BASE, block, i, 0);
@@ -8251,21 +8279,29 @@ void ZendIRAdaptor::Builder::append_data_operands(
 					data_operand_helpers = true;
 					if (transport->resolve_reference) {
 						add_node(block_instructions, block, InstNode{
-							InstKind::ZvalReferenceResolve,
-							i, UINT32_MAX, resolved, {},
-							load_operand_offset, 1, true,
-							storage_id,
-							ZEND_MIR_SCALAR_TYPE_NONE});
+							.kind = InstKind::ZvalReferenceResolve,
+							.mir_instruction_index = i,
+							.argument_index = UINT32_MAX,
+							.result = resolved,
+							.operand_offset = load_operand_offset,
+							.operand_count = 1,
+							.has_result = true,
+							.storage_id = storage_id,
+							.exact_type = ZEND_MIR_SCALAR_TYPE_NONE});
 					}
 					load_operand_offset =
 						static_cast<uint32_t>(operands_.size());
 					operands_.push_back(resolved);
 					add_node(block_instructions, block, InstNode{
-						InstKind::ZvalPayloadLoad,
-						i, UINT32_MAX, transported, {},
-						load_operand_offset, 1, true,
-						storage_id,
-						transport->exact_type});
+						.kind = InstKind::ZvalPayloadLoad,
+						.mir_instruction_index = i,
+						.argument_index = UINT32_MAX,
+						.result = transported,
+						.operand_offset = load_operand_offset,
+						.operand_count = 1,
+						.has_result = true,
+						.storage_id = storage_id,
+						.exact_type = transport->exact_type});
 					operand = transported;
 				}
 			}
@@ -8276,9 +8312,7 @@ void ZendIRAdaptor::Builder::append_data_operands(
 				&& !machine_value_is_register_authoritative(operand)) {
 			const uint32_t operand_index =
 				static_cast<uint32_t>(operand);
-			if (operand_index >= MIR_VALUE_BASE
-					&& operand_index - MIR_VALUE_BASE
-						< plan_->value_count
+			if (is_mir_value(operand_index)
 					&& plan_->value_definition_instructions
 						!= nullptr) {
 				const int32_t definition =
@@ -8366,10 +8400,15 @@ void ZendIRAdaptor::Builder::append_data_operands(
 					operands_.push_back(address);
 					data_operand_helpers = true;
 					add_node(block_instructions, block, InstNode{
-						InstKind::ZvalPayloadLoad,
-						i, UINT32_MAX, transported, {},
-						load_operand_offset, 1, true,
-						storage_id, exact_type(operand)});
+						.kind = InstKind::ZvalPayloadLoad,
+						.mir_instruction_index = i,
+						.argument_index = UINT32_MAX,
+						.result = transported,
+						.operand_offset = load_operand_offset,
+						.operand_count = 1,
+						.has_result = true,
+						.storage_id = storage_id,
+						.exact_type = exact_type(operand)});
 					operand = transported;
 				}
 			}
@@ -8399,8 +8438,7 @@ void ZendIRAdaptor::Builder::add_return_source_operands(
 				&& depth < plan_->value_count;
 			++depth) {
 		const uint32_t raw = static_cast<uint32_t>(returned);
-		if (raw < MIR_VALUE_BASE
-				|| raw - MIR_VALUE_BASE >= plan_->value_count
+		if (!is_mir_value(raw)
 				|| plan_->value_definition_instructions == nullptr) {
 			break;
 		}
@@ -8648,10 +8686,15 @@ void ZendIRAdaptor::Builder::add_user_call_operands(
 				operands_.push_back(boxed);
 				add_node(block_instructions,
 					guarded_hot_blocks[i], InstNode{
-						InstKind::UnboxPointer, i, UINT32_MAX,
-						transported, {}, unbox_operand_offset,
-						1, true, canonical_storage(boxed),
-						transport_abi.exact_type});
+						.kind = InstKind::UnboxPointer,
+						.mir_instruction_index = i,
+						.argument_index = UINT32_MAX,
+						.result = transported,
+						.operand_offset = unbox_operand_offset,
+						.operand_count = 1,
+						.has_result = true,
+						.storage_id = canonical_storage(boxed),
+						.exact_type = transport_abi.exact_type});
 				const uint32_t expected_zval_type =
 					zend_tpde_machine_value_zval_type(
 						transport_abi.machine_kind);
@@ -8679,10 +8722,15 @@ void ZendIRAdaptor::Builder::add_user_call_operands(
 				operands_.push_back(boxed);
 				add_node(block_instructions,
 					guarded_hot_blocks[i], InstNode{
-						InstKind::UnboxScalar, i, UINT32_MAX,
-						transported, {}, unbox_operand_offset,
-						1, true, canonical_storage(boxed),
-						transport_abi.exact_type});
+						.kind = InstKind::UnboxScalar,
+						.mir_instruction_index = i,
+						.argument_index = UINT32_MAX,
+						.result = transported,
+						.operand_offset = unbox_operand_offset,
+						.operand_count = 1,
+						.has_result = true,
+						.storage_id = canonical_storage(boxed),
+						.exact_type = transport_abi.exact_type});
 				typed_call_value_guards.emplace_back(
 					boxed, IS_LONG);
 				value = transported;
@@ -8720,11 +8768,16 @@ void ZendIRAdaptor::Builder::add_user_call_operands(
 					guarded_hot_blocks[i] != UINT32_MAX
 						? guarded_hot_blocks[i]
 						: static_cast<uint32_t>(block),
-					InstNode{InstKind::BoxScalar, i,
-						UINT32_MAX, boxed, {},
-						box_operand_offset, 1, true,
-						ZEND_MIR_ID_INVALID,
-						exact_type(value)});
+					InstNode{
+						.kind = InstKind::BoxScalar,
+						.mir_instruction_index = i,
+						.argument_index = UINT32_MAX,
+						.result = boxed,
+						.operand_offset = box_operand_offset,
+						.operand_count = 1,
+						.has_result = true,
+						.storage_id = ZEND_MIR_ID_INVALID,
+						.exact_type = exact_type(value)});
 				value = boxed;
 			}
 			if (function_mode_ == FunctionMode::ZendEntry
@@ -8763,11 +8816,15 @@ void ZendIRAdaptor::Builder::add_user_call_operands(
 							: static_cast<uint32_t>(block);
 					add_node(block_instructions,
 						transport_block, InstNode{
-							InstKind::ZvalPayloadLoad,
-							i, UINT32_MAX, transported, {},
-							load_operand_offset, 1, true,
-							storage_id,
-							transport_abi.exact_type});
+							.kind = InstKind::ZvalPayloadLoad,
+							.mir_instruction_index = i,
+							.argument_index = UINT32_MAX,
+							.result = transported,
+							.operand_offset = load_operand_offset,
+							.operand_count = 1,
+							.has_result = true,
+							.storage_id = storage_id,
+							.exact_type = transport_abi.exact_type});
 					value = transported;
 				}
 			}
@@ -9239,8 +9296,7 @@ void ZendIRAdaptor::Builder::reload_slot_authoritative_source_result(
 	const zend_mir_storage_id storage_id =
 		canonical_storage(canonical_result);
 	if (canonical_result == INVALID_VALUE_REF
-			|| canonical_index < MIR_VALUE_BASE
-			|| canonical_index - MIR_VALUE_BASE >= plan_->value_count
+			|| !is_mir_value(canonical_index)
 			|| !zend_mir_id_is_valid(storage_id)
 			|| exact_type(canonical_result)
 				== ZEND_MIR_SCALAR_TYPE_NULL) {
@@ -9278,9 +9334,16 @@ void ZendIRAdaptor::Builder::reload_slot_authoritative_source_result(
 	const uint32_t load_operand_offset =
 		static_cast<uint32_t>(operands_.size());
 	operands_.push_back(address);
-	InstNode load{InstKind::ZvalPayloadLoad, i, UINT32_MAX,
-		loaded, {}, load_operand_offset, 1, true,
-		storage_id, reload_type};
+	InstNode load{
+		.kind = InstKind::ZvalPayloadLoad,
+		.mir_instruction_index = i,
+		.argument_index = UINT32_MAX,
+		.result = loaded,
+		.operand_offset = load_operand_offset,
+		.operand_count = 1,
+		.has_result = true,
+		.storage_id = storage_id,
+		.exact_type = reload_type};
 	load.control_block = reload_block;
 	add_node(block_instructions, reload_block, std::move(load));
 	set_instruction_result(i, loaded);
@@ -9303,9 +9366,15 @@ void ZendIRAdaptor::Builder::materialize_boxed_result_for_helper(
 		static_cast<uint32_t>(operands_.size());
 	operands_.push_back(value);
 	operands_.push_back(IRValueRef{FRAME_VALUE});
-	InstNode store{InstKind::ZvalBoxedStore, i, UINT32_MAX,
-		INVALID_VALUE_REF, {}, store_operand_offset, 2, false,
-		storage};
+	InstNode store{
+		.kind = InstKind::ZvalBoxedStore,
+		.mir_instruction_index = i,
+		.argument_index = UINT32_MAX,
+		.result = INVALID_VALUE_REF,
+		.operand_offset = store_operand_offset,
+		.operand_count = 2,
+		.has_result = false,
+		.storage_id = storage};
 	store.control_block = materialization_block;
 	add_node(block_instructions, materialization_block,
 		std::move(store));
@@ -9512,22 +9581,25 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 				ZEND_MIR_ID_INVALID, true, expected_type));
 		}
 		InstNode guard{
-			InstKind::TypedCallGuard, i,
-			guarded_cold_block, INVALID_VALUE_REF, {},
-			guard_operand_offset,
-			static_cast<uint32_t>(guarded_boxed_values)
+			.kind = InstKind::TypedCallGuard,
+			.mir_instruction_index = i,
+			.argument_index = guarded_cold_block,
+			.result = INVALID_VALUE_REF,
+			.operand_offset = guard_operand_offset,
+			.operand_count = static_cast<uint32_t>(guarded_boxed_values)
 				+ materialization_count
 				+ static_cast<uint32_t>(
 					typed_call_value_guards.size()) * 2,
-			false,
-			ZEND_MIR_ID_INVALID,
-			ZEND_MIR_SCALAR_TYPE_NONE,
-			false, {}, false, UINT32_MAX,
-			materialization_count == 0
+			.has_result = false,
+			.storage_id = ZEND_MIR_ID_INVALID,
+			.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+			.inlined_user_body = false,
+			.inlined_operand_index = UINT32_MAX,
+			.materialization_operand_index = materialization_count == 0
 				? UINT32_MAX
 				: static_cast<uint32_t>(
 					guarded_boxed_values),
-			materialization_count};
+			.materialization_count = materialization_count};
 		guard.control_block = block;
 		guard.continuation_block = guarded_hot_block;
 		/* The guard reads all of its operands; liveness operands a
@@ -9574,14 +9646,19 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 			fast_inlined_operand_index;
 	}
 	InstNode fast{
-		InstKind::GuardedFast, i, guarded_cold_block,
-		fast_result, {}, fast_operand_offset,
-		fast_operand_count,
-		fast_result != INVALID_VALUE_REF,
-		ZEND_MIR_ID_INVALID, static_slot_isset_exact_type,
-		false, {}, false, UINT32_MAX,
-		fast_materialization_operand_index,
-		fast_materialization_count};
+		.kind = InstKind::GuardedFast,
+		.mir_instruction_index = i,
+		.argument_index = guarded_cold_block,
+		.result = fast_result,
+		.operand_offset = fast_operand_offset,
+		.operand_count = fast_operand_count,
+		.has_result = fast_result != INVALID_VALUE_REF,
+		.storage_id = ZEND_MIR_ID_INVALID,
+		.exact_type = static_slot_isset_exact_type,
+		.inlined_user_body = false,
+		.inlined_operand_index = UINT32_MAX,
+		.materialization_operand_index = fast_materialization_operand_index,
+		.materialization_count = fast_materialization_count};
 	fast.control_block = fast_block;
 	fast.continuation_block = continuation_block;
 	fast.machine_reference_operand_index =
@@ -9761,13 +9838,19 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 				cold_operand_count);
 	}
 	InstNode cold{
-		InstKind::GuardedCold, i, guarded_cold_block,
-		cold_result, {}, cold_operand_offset,
-		cold_operand_count, cold_result != INVALID_VALUE_REF,
-		ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
-		false, {}, false, UINT32_MAX,
-		cold_materialization_operand_index,
-		materialization_count};
+		.kind = InstKind::GuardedCold,
+		.mir_instruction_index = i,
+		.argument_index = guarded_cold_block,
+		.result = cold_result,
+		.operand_offset = cold_operand_offset,
+		.operand_count = cold_operand_count,
+		.has_result = cold_result != INVALID_VALUE_REF,
+		.storage_id = ZEND_MIR_ID_INVALID,
+		.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+		.inlined_user_body = false,
+		.inlined_operand_index = UINT32_MAX,
+		.materialization_operand_index = cold_materialization_operand_index,
+		.materialization_count = materialization_count};
 	cold.control_block = guarded_cold_block;
 	cold.continuation_block = continuation_block;
 	cold.assign_op_right_operand_index =
@@ -9810,10 +9893,15 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 				static_cast<uint32_t>(operands_.size());
 			operands_.push_back(mutation_slot);
 			InstNode reload{
-				InstKind::ZvalPayloadLoad, i, UINT32_MAX,
-				mutation_result, {}, reload_operand_offset,
-				1, true, mutation_storage,
-				exact_type(mutation_result)};
+				.kind = InstKind::ZvalPayloadLoad,
+				.mir_instruction_index = i,
+				.argument_index = UINT32_MAX,
+				.result = mutation_result,
+				.operand_offset = reload_operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = mutation_storage,
+				.exact_type = exact_type(mutation_result)};
 			reload.control_block = continuation_block;
 			add_node(block_instructions, continuation_block,
 				std::move(reload));
@@ -9823,8 +9911,14 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 		const uint32_t copy_operand_offset =
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(fast_result);
-		InstNode copy{InstKind::MIR, i, UINT32_MAX,
-			guarded_result, {}, copy_operand_offset, 1, true};
+		InstNode copy{
+			.kind = InstKind::MIR,
+			.mir_instruction_index = i,
+			.argument_index = UINT32_MAX,
+			.result = guarded_result,
+			.operand_offset = copy_operand_offset,
+			.operand_count = 1,
+			.has_result = true};
 		copy.synthetic = true;
 		copy.synthetic_record = record;
 		copy.synthetic_record.opcode = ZEND_MIR_OPCODE_COPY;
@@ -9874,9 +9968,15 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 			static_cast<uint32_t>(operands_.size());
 		operands_.push_back(guarded_result);
 		operands_.push_back(IRValueRef{FRAME_VALUE});
-		InstNode store{InstKind::ZvalBoxedStore, i, UINT32_MAX,
-			INVALID_VALUE_REF, {}, store_operand_offset, 2, false,
-			instruction.value_operation.op1_storage_id};
+		InstNode store{
+			.kind = InstKind::ZvalBoxedStore,
+			.mir_instruction_index = i,
+			.argument_index = UINT32_MAX,
+			.result = INVALID_VALUE_REF,
+			.operand_offset = store_operand_offset,
+			.operand_count = 2,
+			.has_result = false,
+			.storage_id = instruction.value_operation.op1_storage_id};
 		store.control_block = continuation_block;
 		add_node(block_instructions, continuation_block,
 			std::move(store));
@@ -9938,10 +10038,7 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 					== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
 				|| pointer_kind
 					== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR)
-				&& canonical_value_index >= 0
-				&& static_cast<uint32_t>(
-					canonical_value_index)
-					< plan_->value_count
+				&& valid_value_index(canonical_value_index)
 				&& reference != UINT32_MAX) {
 			const IRValueRef address = add_derived_value(
 				ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER,
@@ -9970,11 +10067,15 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 					operands_.size());
 			operands_.push_back(address);
 			InstNode load{
-				InstKind::ZvalPayloadLoad, i,
-				UINT32_MAX, pointer, {},
-				load_operand_offset, 1, true,
-				storage_id,
-				ZEND_MIR_SCALAR_TYPE_NONE};
+				.kind = InstKind::ZvalPayloadLoad,
+				.mir_instruction_index = i,
+				.argument_index = UINT32_MAX,
+				.result = pointer,
+				.operand_offset = load_operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = storage_id,
+				.exact_type = ZEND_MIR_SCALAR_TYPE_NONE};
 			load.control_block =
 				continuation_block;
 			add_node(block_instructions,
@@ -10009,14 +10110,19 @@ void ZendIRAdaptor::Builder::lower_boxed_cond_branch(
 			: materialization_operand_index;
 	add_node(block_instructions,
 		static_cast<uint32_t>(block), InstNode{
-			InstKind::BoxedCondGuard, i,
-			boxed_cond_cold_block, result, {},
-			operand_offset, operand_count,
-			false,
-			ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
-			false, {}, false, UINT32_MAX,
-			materialization_operand_index,
-			materialization_count});
+			.kind = InstKind::BoxedCondGuard,
+			.mir_instruction_index = i,
+			.argument_index = boxed_cond_cold_block,
+			.result = result,
+			.operand_offset = operand_offset,
+			.operand_count = operand_count,
+			.has_result = false,
+			.storage_id = ZEND_MIR_ID_INVALID,
+			.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+			.inlined_user_body = false,
+			.inlined_operand_index = UINT32_MAX,
+			.materialization_operand_index = materialization_operand_index,
+			.materialization_count = materialization_count});
 	nodes_.back().control_block = block;
 	nodes_.back().cold_phi_inputs =
 		has_pending_phi_inputs(boxed_cond_cold_block);
@@ -10070,17 +10176,21 @@ void ZendIRAdaptor::Builder::lower_boxed_cond_branch(
 			ZEND_TPDE_MACHINE_VALUE_BOOL)
 		: INVALID_VALUE_REF;
 	add_node(block_instructions, boxed_cond_cold_block, InstNode{
-		InstKind::BoxedCondCold, i,
-		boxed_cond_cold_block, cold_decision, {},
-		cold_operand_offset,
-		cold_semantic_operand_count
+		.kind = InstKind::BoxedCondCold,
+		.mir_instruction_index = i,
+		.argument_index = boxed_cond_cold_block,
+		.result = cold_decision,
+		.operand_offset = cold_operand_offset,
+		.operand_count = cold_semantic_operand_count
 			+ materialization_count,
-		split_cold_branch,
-		ZEND_MIR_ID_INVALID, ZEND_MIR_SCALAR_TYPE_NONE,
-		false, {}, false, UINT32_MAX,
-		materialization_count == 0
+		.has_result = split_cold_branch,
+		.storage_id = ZEND_MIR_ID_INVALID,
+		.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+		.inlined_user_body = false,
+		.inlined_operand_index = UINT32_MAX,
+		.materialization_operand_index = materialization_count == 0
 			? UINT32_MAX : cold_semantic_operand_count,
-		materialization_count});
+		.materialization_count = materialization_count});
 	nodes_.back().control_block = boxed_cond_cold_block;
 	if (split_cold_branch) {
 		emit_pending_phi_inputs(boxed_cond_cold_block, i);
@@ -10089,10 +10199,13 @@ void ZendIRAdaptor::Builder::lower_boxed_cond_branch(
 		operands_.push_back(cold_decision);
 		add_node(block_instructions,
 			boxed_cond_cold_block, InstNode{
-				InstKind::BoxedCondColdBranch, i,
-				boxed_cond_cold_block,
-				INVALID_VALUE_REF, {},
-				branch_operand_offset, 1, false});
+				.kind = InstKind::BoxedCondColdBranch,
+				.mir_instruction_index = i,
+				.argument_index = boxed_cond_cold_block,
+				.result = INVALID_VALUE_REF,
+				.operand_offset = branch_operand_offset,
+				.operand_count = 1,
+				.has_result = false});
 		nodes_.back().control_block =
 			boxed_cond_cold_block;
 	}
