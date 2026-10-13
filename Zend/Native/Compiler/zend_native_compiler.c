@@ -3044,7 +3044,6 @@ static bool zend_native_compiler_discover_native_callees(
 	for (index = 0; index < calls->call_site_count(calls->context); index++) {
 		zend_mir_call_site_ref site;
 		zend_mir_call_target_ref target;
-		zend_op_array *callee = NULL;
 		uint32_t argument_index;
 
 		if (!calls->call_site_at(calls->context, index, &site)) {
@@ -3055,10 +3054,6 @@ static bool zend_native_compiler_discover_native_callees(
 					calls->context, site.target_id, &target)
 				|| target.id != site.target_id) {
 			return false;
-		}
-		if (target.kind != ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
-			callee = zend_native_compiler_resolve_native_target(
-				compiler, function, calls, &target);
 		}
 		if (target.kind == ZEND_MIR_CALL_TARGET_DIRECT_INTERNAL) {
 			zend_function *internal = zend_native_compiler_resolve_internal_target(
@@ -3107,14 +3102,6 @@ static bool zend_native_compiler_discover_native_callees(
 					return false;
 				}
 			}
-			continue;
-		}
-		if (target.kind == ZEND_MIR_CALL_TARGET_DYNAMIC) {
-			continue;
-		}
-		if (target.kind == ZEND_MIR_CALL_TARGET_METHOD_USER
-				&& callee == function->op_array) {
-			continue;
 		}
 	}
 	return true;
