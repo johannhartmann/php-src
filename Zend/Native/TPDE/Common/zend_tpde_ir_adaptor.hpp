@@ -1579,6 +1579,9 @@ public:
 		}
 	}
 
+	/* The function adaptor being compiled: the backends ask it about the
+	 * current function directly. */
+	const ZendIRAdaptor &active() const { return *active_; }
 	bool valid() const {
 		return active_ != nullptr
 			&& std::all_of(members_.begin(), members_.end(),
@@ -1611,15 +1614,9 @@ public:
 	uint32_t current_function_index() const {
 		return active_->plan()->symbol_namespace;
 	}
-	bool typed_component_call(IRInstRef instruction) const {
-		return active_->typed_component_call(instruction);
-	}
-	bool compact_guarded_value_operation(IRInstRef instruction) const {
-		return active_->compact_guarded_value_operation(instruction);
-	}
 	ZendIRAdaptor::TypedBodyAbiType typed_body_return_type(
 			uint32_t component_index) const {
-		const zend_tpde_plan *body = component_plan(component_index);
+		const zend_tpde_plan *body = active_->component_plan(component_index);
 		return body != nullptr && body->typed_body_eligible
 			? body->typed_body_return_abi
 			: ZendIRAdaptor::TypedBodyAbiType{};
@@ -1627,7 +1624,7 @@ public:
 	bool typed_body_arguments_match(
 			uint32_t component_index,
 			std::span<const IRValueRef> operands) const {
-		const zend_tpde_plan *body = component_plan(component_index);
+		const zend_tpde_plan *body = active_->component_plan(component_index);
 		if (body == nullptr
 				|| body->argument_abi == nullptr
 				|| body->argument_value_indices == nullptr
@@ -1655,120 +1652,8 @@ public:
 		}
 		return true;
 	}
-	bool typed_body() const { return active_->typed_body(); }
-	const zend_tpde_plan *plan() const { return active_->plan(); }
-	const zend_tpde_plan *component_plan(uint32_t index) const {
-		return active_->component_plan(index);
-	}
-	bool component_compiled_variable_used(
-			uint32_t component_index, uint32_t variable_index) const {
-		return active_->component_compiled_variable_used(
-			component_index, variable_index);
-	}
 	IRBlockRef block_ref(zend_mir_block_id id) const {
 		return active_->block_ref(id);
-	}
-	const InstNode &node(IRInstRef inst) const { return active_->node(inst); }
-	const zend_tpde_source_call_phase_entry *source_call_phase(
-			const InstNode &node) const {
-		return active_->source_call_phase(node);
-	}
-	std::span<const ZendIRAdaptor::InlinedCheckedStep>
-	inlined_checked_steps(const InstNode &instruction) const {
-		return active_->inlined_checked_steps(instruction);
-	}
-	const zend_tpde_instruction &mir_instruction(IRInstRef inst) const {
-		return active_->mir_instruction(inst);
-	}
-	std::span<const ArgumentGuard> argument_guards() const {
-		return active_->argument_guards();
-	}
-	std::span<const uint32_t> user_opcode_next_landings() const {
-		return active_->user_opcode_next_landings();
-	}
-	std::span<const uint32_t> user_opcode_dispatch_to_sources() const {
-		return active_->user_opcode_dispatch_to_sources();
-	}
-	uint32_t deopt_resume_index(uint32_t index) const {
-		return active_->deopt_resume_index(index);
-	}
-	bool deopt_resume_landed(uint32_t resume) const {
-		return active_->deopt_resume_landed(resume);
-	}
-	std::span<const IRValueRef> deopt_landing_values(uint32_t resume) const {
-		return active_->deopt_landing_values(resume);
-	}
-	bool user_opcode_result_reload_source(uint32_t source) const {
-		return active_->user_opcode_result_reload_source(source);
-	}
-	std::span<const uint32_t> generator_resume_targets() const {
-		return active_->generator_resume_targets();
-	}
-	std::span<const zend_mir_block_id>
-	generator_resume_exception_blocks() const {
-		return active_->generator_resume_exception_blocks();
-	}
-	std::span<const IRValueRef> generator_resume_values(IRInstRef inst) const {
-		return active_->generator_resume_values(inst);
-	}
-	std::span<const zend_tpde_materialization>
-	materializations(IRInstRef inst) const {
-		return active_->materializations(inst);
-	}
-	zend_mir_storage_id slot_load_storage(IRValueRef value) const {
-		return active_->slot_load_storage(value);
-	}
-	zend_mir_instruction_record instruction_record(IRInstRef inst) const {
-		return active_->instruction_record(inst);
-	}
-	zend_mir_representation representation(IRValueRef value) const {
-		return active_->representation(value);
-	}
-	zend_mir_scalar_type_mask exact_type(IRValueRef value) const {
-		return active_->exact_type(value);
-	}
-	zend_tpde_machine_value_kind machine_kind(IRValueRef value) const {
-		return active_->machine_kind(value);
-	}
-	zend_mir_ownership_state ownership(IRValueRef value) const {
-		return active_->ownership(value);
-	}
-	zend_mir_refcount_state refcount_state(IRValueRef value) const {
-		return active_->refcount_state(value);
-	}
-	bool machine_value_is_register_authoritative(IRValueRef value) const {
-		return active_->machine_value_is_register_authoritative(value);
-	}
-	zend_mir_storage_id canonical_storage(IRValueRef value) const {
-		return active_->canonical_storage(value);
-	}
-	uint32_t frame_slot_reference_count() const {
-		return active_->frame_slot_reference_count();
-	}
-	IRValueRef frame_slot_reference(uint32_t index) const {
-		return active_->frame_slot_reference(index);
-	}
-	bool frame_slot_reference(
-			IRValueRef value, zend_mir_storage_id *storage_id) const {
-		return active_->frame_slot_reference(value, storage_id);
-	}
-	bool machine_reference(
-			IRValueRef value,
-			const zend_tpde_machine_reference **reference) const {
-		return active_->machine_reference(value, reference);
-	}
-	bool operation_machine_reference(
-			uint32_t instruction_index,
-			const zend_tpde_machine_reference **reference) const {
-		return active_->operation_machine_reference(
-			instruction_index, reference);
-	}
-	bool constant(IRValueRef value, uint64_t *bits) const {
-		return active_->constant(value, bits);
-	}
-	bool known_string_literal(
-			IRValueRef value, uint64_t *length, bool *truthy) const {
-		return active_->known_string_literal(value, length, truthy);
 	}
 
 	uint32_t func_count() const {

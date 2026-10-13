@@ -51,6 +51,9 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 
 	using Base::Base;
 
+	/* The adaptor of the function being compiled. */
+	const ZendIRAdaptor &ir() const { return this->adaptor->active(); }
+
 	struct TargetBranchAssignment {
 		::tpde::ValLocalIdx local_idx;
 		uint32_t part;
@@ -265,7 +268,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	 */
 	template <typename Dispatch>
 	void for_each_exception_handler(bool skip_unplaced, Dispatch &&dispatch) {
-		const zend_tpde_plan *plan = this->adaptor->plan();
+		const zend_tpde_plan *plan = this->ir().plan();
 		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 			const zend_mir_instruction_record &handler =
 				plan->instructions[i].record;
@@ -296,7 +299,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	 */
 	template <typename Dispatch>
 	void for_each_finally_continuation(Dispatch &&dispatch) {
-		const zend_tpde_plan *plan = this->adaptor->plan();
+		const zend_tpde_plan *plan = this->ir().plan();
 		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 			const zend_mir_instruction_record &call =
 				plan->instructions[i].record;
@@ -324,16 +327,16 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	template <typename Store>
 	bool for_each_materialization(IRInstRef instruction,
 			bool interrupt_slow_path, Store &&store) {
-		if (this->adaptor->typed_body()) {
+		if (this->ir().typed_body()) {
 			return true;
 		}
-		const typename Adaptor::InstNode &node = this->adaptor->node(instruction);
-		const auto materializations = this->adaptor->materializations(instruction);
+		const typename Adaptor::InstNode &node = this->ir().node(instruction);
+		const auto materializations = this->ir().materializations(instruction);
 		if (materializations.empty()) {
 			return true;
 		}
 		const zend_mir_instruction_record record =
-			this->adaptor->mir_instruction(instruction).record;
+			this->ir().mir_instruction(instruction).record;
 		if (!interrupt_slow_path
 				&& record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				&& (record.effects & ZEND_MIR_EFFECT_MASK(
@@ -384,8 +387,8 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	bool materialized_in_own_slot(IRValueRef value,
 			zend_mir_storage_id storage) const {
 		return value == IRValueRef{Adaptor::FRAME_VALUE}
-			|| (storage < this->adaptor->plan()->source_frame_variable_count
-				&& this->adaptor->slot_load_storage(value) == storage);
+			|| (storage < this->ir().plan()->source_frame_variable_count
+				&& this->ir().slot_load_storage(value) == storage);
 	}
 
 	/*
@@ -399,11 +402,11 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	bool reload_generator_resume_values(IRInstRef instruction,
 			AsmReg frame_reg, bool define, Reloaded &&reloaded) {
 		for (const IRValueRef operand :
-				this->adaptor->generator_resume_values(instruction)) {
+				this->ir().generator_resume_values(instruction)) {
 			const zend_mir_storage_id storage =
-				this->adaptor->canonical_storage(operand);
+				this->ir().canonical_storage(operand);
 			const zend_tpde_machine_value_kind machine_kind =
-				this->adaptor->machine_kind(operand);
+				this->ir().machine_kind(operand);
 			const uint64_t offset = frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
 					|| offset + offsetof(zval, u1.type_info)
@@ -496,9 +499,9 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	bool plan_user_opcode_dispatch(const typename Adaptor::InstNode &node,
 			size_t landing_count,
 			std::vector<UserOpcodeDispatchCase> &dispatch_cases) const {
-		const zend_tpde_plan *plan = this->adaptor->plan();
+		const zend_tpde_plan *plan = this->ir().plan();
 		const auto dispatch_sources =
-			this->adaptor->user_opcode_dispatch_to_sources();
+			this->ir().user_opcode_dispatch_to_sources();
 		const size_t dispatch_case_count =
 			dispatch_sources.size()
 				* plan->user_opcode_target_count;
@@ -699,13 +702,13 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	bool source_call_phases_chain(
 			const typename Adaptor::InstNode &init, typename Base::InstRange remaining) const {
 		for (auto it = remaining.from; it != remaining.to; ++it) {
-			const typename Adaptor::InstNode &phase = this->adaptor->node(*it);
+			const typename Adaptor::InstNode &phase = this->ir().node(*it);
 			if (phase.mir_instruction_index != init.mir_instruction_index
 					|| phase.deopt_landing != UINT32_MAX
 					|| (phase.materialization_operand_index != UINT32_MAX
 						&& phase.materialization_count != 0)
 					|| phase.deopt_store_operand_index != UINT32_MAX
-					|| !this->adaptor->generator_resume_values(*it).empty()) {
+					|| !this->ir().generator_resume_values(*it).empty()) {
 				return false;
 			}
 			switch (phase.kind) {
@@ -716,8 +719,8 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 					break;
 				case Adaptor::InstKind::UserCallCheck:
 					if (phase.source_position
-							>= this->adaptor->plan()->source_opcode_count
-						|| this->adaptor->plan()->source_opcodes[
+							>= this->ir().plan()->source_opcode_count
+						|| this->ir().plan()->source_opcodes[
 								phase.source_position].opcode
 							!= ZEND_CHECK_UNDEF_ARGS) {
 						return false;
@@ -769,7 +772,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	bool compute_source_call_fast_dynamic(
 			const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
-		const zend_tpde_plan *plan = this->adaptor->plan();
+		const zend_tpde_plan *plan = this->ir().plan();
 		/* $object->$method(...): a method named by a CV takes the
 		 * dynamic path (zend_native_call_fast_dynamic_init()). */
 		const bool variable_method = descriptor != nullptr
@@ -788,7 +791,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 							== ZEND_MIR_SOURCE_SLOT_TMP
 						|| descriptor->init_op1.slot_kind
 							== ZEND_MIR_SOURCE_SLOT_VAR)));
-		if (!this->adaptor->generator_resume_targets().empty()
+		if (!this->ir().generator_resume_targets().empty()
 				|| descriptor == nullptr || descriptor->flags != 0
 				|| (descriptor->init_opcode != ZEND_INIT_USER_CALL
 					&& descriptor->init_opcode != ZEND_INIT_DYNAMIC_CALL
@@ -870,7 +873,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 		const bool temporary = callable.slot_kind != ZEND_MIR_SOURCE_SLOT_CV;
 		return (uint64_t{ZEND_CALL_FRAME_SLOT} + callable.index
 				+ (temporary ? uint64_t{
-					this->adaptor->plan()->source_frame_variable_count} : 0))
+					this->ir().plan()->source_frame_variable_count} : 0))
 				* sizeof(zval)
 			| ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_SLOT
 			| (temporary ? ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_TEMPORARY : 0);
@@ -892,13 +895,13 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	bool compute_source_call_fast_static(
 			const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
-		const zend_tpde_plan *plan = this->adaptor->plan();
+		const zend_tpde_plan *plan = this->ir().plan();
 		const bool scalar_result = descriptor != nullptr
 			&& (descriptor->flags
 				& ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0;
 		/* The fast-path flag lives in a native stack slot, which a
 		 * generator resume does not restore. */
-		if (!this->adaptor->generator_resume_targets().empty()) {
+		if (!this->ir().generator_resume_targets().empty()) {
 			return false;
 		}
 		if (descriptor == nullptr
@@ -1073,9 +1076,9 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	std::unordered_map<uint32_t, uint32_t> block_entries_;
 	bool block_entries_counted_ = false;
 	IRInstRef lookup_reuse_consumer(IRInstRef producer_inst) {
-		const typename Adaptor::InstNode &producer = this->adaptor->node(producer_inst);
+		const typename Adaptor::InstNode &producer = this->ir().node(producer_inst);
 		const zend_tpde_instruction &producer_mir =
-			this->adaptor->mir_instruction(producer_inst);
+			this->ir().mir_instruction(producer_inst);
 		const zend_mir_executable_value_ref &isset =
 			producer_mir.value_operation;
 		auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
@@ -1112,10 +1115,10 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 		}
 		for (size_t index = 0; index < branch_insts.size(); ++index) {
 			const typename Adaptor::InstNode &branch_node =
-				this->adaptor->node(branch_insts[index]);
+				this->ir().node(branch_insts[index]);
 			const bool last = index + 1 == branch_insts.size();
 			if (last ? branch_node.kind != Adaptor::InstKind::MIR
-					|| this->adaptor->instruction_record(branch_insts[index]).opcode
+					|| this->ir().instruction_record(branch_insts[index]).opcode
 						!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				: branch_node.kind != Adaptor::InstKind::ZvalPayloadLoad
 					|| branch_node.mir_instruction_index
@@ -1171,14 +1174,14 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 			return IRInstRef{UINT32_MAX};
 		}
 		const IRInstRef consumer_inst = read_insts[0];
-		const typename Adaptor::InstNode &consumer = this->adaptor->node(consumer_inst);
+		const typename Adaptor::InstNode &consumer = this->ir().node(consumer_inst);
 		const zend_tpde_instruction &consumer_mir =
-			this->adaptor->mir_instruction(consumer_inst);
+			this->ir().mir_instruction(consumer_inst);
 		const zend_mir_executable_value_ref &read =
 			consumer_mir.value_operation;
 		/* Literal keys match by value: the same string or integer. */
 		auto same_literal = [&](uint32_t left, uint32_t right) {
-			const zend_tpde_plan *plan = this->adaptor->plan();
+			const zend_tpde_plan *plan = this->ir().plan();
 			if (plan->source_literals == nullptr
 					|| left >= plan->source_literal_count
 					|| right >= plan->source_literal_count) {
@@ -1218,7 +1221,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	bool frameless_inline_allowed(
 			const zend_mir_executable_value_ref &operation,
 			const zend_tpde_frameless_direct &direct) {
-		const zend_tpde_plan *plan = this->adaptor->plan();
+		const zend_tpde_plan *plan = this->ir().plan();
 		const uint32_t position = operation.source_position_id;
 		const uint32_t count =
 			operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
@@ -1264,7 +1267,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 
 	bool try_force_fixed_assignment(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
-			this->adaptor->machine_kind(value);
+			this->ir().machine_kind(value);
 		const bool pointer_value =
 			kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
@@ -1272,21 +1275,21 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 			|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
 			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
 		return value == IRValueRef{Adaptor::FRAME_VALUE}
-			|| (!this->adaptor->typed_body()
+			|| (!this->ir().typed_body()
 				&& value == IRValueRef{
 					Adaptor::EXECUTION_CONTEXT_ARGUMENT})
 			|| (pointer_value
-				&& this->adaptor->machine_value_is_register_authoritative(value))
+				&& this->ir().machine_value_is_register_authoritative(value))
 			|| (this->adaptor->val_is_phi(value)
 				&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& this->adaptor->machine_value_is_register_authoritative(value));
+				&& this->ir().machine_value_is_register_authoritative(value));
 	}
 	ValueParts val_parts(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
-			this->adaptor->machine_kind(value);
+			this->ir().machine_kind(value);
 		const zend_tpde_machine_representation_desc representation =
 			zend_tpde_machine_representation(
-				kind, this->adaptor->machine_value_is_register_authoritative(value));
+				kind, this->ir().machine_value_is_register_authoritative(value));
 		return {
 			representation.parts[0].register_bank
 					== ZEND_TPDE_MACHINE_REGISTER_FP
@@ -1295,7 +1298,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	}
 	std::optional<ValRefSpecial> val_ref_special(IRValueRef value) {
 		uint64_t bits;
-		if (!this->adaptor->constant(value, &bits)) {
+		if (!this->ir().constant(value, &bits)) {
 			return {};
 		}
 		return ValRefSpecial{
@@ -1312,9 +1315,9 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	}
 	void setup_var_ref_assignments() {
 		for (uint32_t index = 0;
-				index < this->adaptor->frame_slot_reference_count(); ++index) {
+				index < this->ir().frame_slot_reference_count(); ++index) {
 			this->init_variable_ref(
-				this->adaptor->frame_slot_reference(index), index);
+				this->ir().frame_slot_reference(index), index);
 		}
 	}
 };

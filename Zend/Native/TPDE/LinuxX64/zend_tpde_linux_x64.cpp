@@ -71,7 +71,7 @@ class ZendCompilerX64 final
 	uint64_t encode_source_operand(const zend_mir_source_operand_ref &operand,
 			uint32_t unused_payload = ZEND_MIR_ID_INVALID) const {
 		return zend_tpde_encode_value_operand(operand,
-			adaptor->plan()->source_frame_variable_count, unused_payload);
+			ir().plan()->source_frame_variable_count, unused_payload);
 	}
 	std::array<tpde::SymRef, ZEND_NATIVE_HELPER_COUNT> runtime_symbols_{};
 	std::vector<tpde::SymRef> image_symbols_;
@@ -121,7 +121,7 @@ class ZendCompilerX64 final
 	 * Every other entry arms them and runs the function from the start.
 	 */
 	bool emit_deopt_gateway(const Adaptor::InstNode &node) {
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		if (node.operands.size() != 2
 				|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
 				|| node.operands[1]
@@ -186,7 +186,7 @@ class ZendCompilerX64 final
 				const uint64_t byte_offset =
 					uint64_t{plan->deopt_resume_targets[index]}
 						* sizeof(zend_op);
-				if (!adaptor->deopt_resume_landed(index)) {
+				if (!ir().deopt_resume_landed(index)) {
 					continue;
 				}
 				if (byte_offset > INT32_MAX) {
@@ -215,8 +215,8 @@ class ZendCompilerX64 final
 	 */
 	bool emit_deopt_stress_transfer(uint32_t mir_instruction_index) {
 		const uint32_t resume =
-			adaptor->deopt_resume_index(mir_instruction_index);
-		if (resume == UINT32_MAX || !adaptor->plan()->deopt_stress) {
+			ir().deopt_resume_index(mir_instruction_index);
+		if (resume == UINT32_MAX || !ir().plan()->deopt_stress) {
 			return true;
 		}
 		if (deopt_disarmed_slot_ == 0
@@ -234,7 +234,7 @@ class ZendCompilerX64 final
 			builder.add_arg(std::move(frame_part), tpde::CCAssignment{});
 		}
 		add_const_arg(builder,
-			adaptor->plan()->deopt_resume_targets[resume], 4);
+			ir().plan()->deopt_resume_targets[resume], 4);
 		{
 			ScratchReg self{this};
 			const AsmReg self_reg = self.alloc_gp();
@@ -332,9 +332,9 @@ class ZendCompilerX64 final
 				return false;
 			}
 		}
-		for (const IRValueRef value : adaptor->deopt_landing_values(resume)) {
+		for (const IRValueRef value : ir().deopt_landing_values(resume)) {
 			const zend_mir_storage_id storage =
-				adaptor->canonical_storage(value);
+				ir().canonical_storage(value);
 			const uint64_t offset =
 				frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
@@ -343,7 +343,7 @@ class ZendCompilerX64 final
 			}
 
 			const zend_tpde_machine_value_kind kind =
-				adaptor->machine_kind(value);
+				ir().machine_kind(value);
 			const ValueParts parts = val_parts(value);
 			for (uint32_t part = 0; part < parts.count(); ++part) {
 				const zend_tpde_machine_part_role role =
@@ -375,11 +375,11 @@ class ZendCompilerX64 final
 	 * status.
 	 */
 	bool emit_deopt_exit(IRInstRef instruction) {
-		const Adaptor::InstNode &node = adaptor->node(instruction);
-		const zend_tpde_plan *plan = adaptor->plan();
+		const Adaptor::InstNode &node = ir().node(instruction);
+		const zend_tpde_plan *plan = ir().plan();
 		const uint32_t generic = plan->deopt_generic_member_plus_one;
 		const uint32_t position =
-			adaptor->mir_instruction(instruction).record.source_position_id;
+			ir().mir_instruction(instruction).record.source_position_id;
 		if (generic == 0 || generic - 1 >= this->func_syms.size()
 				|| position == UINT32_MAX) {
 			return false;
@@ -428,7 +428,7 @@ class ZendCompilerX64 final
 	/* The scalars a deoptimizing slow node stores to their slots before
 	 * its transfer point (Adaptor::add_deopt_stores()). */
 	bool emit_deopt_stores(IRInstRef instruction) {
-		const Adaptor::InstNode &node = adaptor->node(instruction);
+		const Adaptor::InstNode &node = ir().node(instruction);
 		if (node.deopt_store_operand_index == UINT32_MAX) {
 			return true;
 		}
@@ -441,7 +441,7 @@ class ZendCompilerX64 final
 			const IRValueRef value = node.liveness_operands[
 				node.deopt_store_operand_index + index];
 			const zend_mir_storage_id storage =
-				adaptor->canonical_storage(value);
+				ir().canonical_storage(value);
 			const uint64_t offset =
 				frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
@@ -449,7 +449,7 @@ class ZendCompilerX64 final
 				return false;
 			}
 			const zend_tpde_machine_value_kind kind =
-				adaptor->machine_kind(value);
+				ir().machine_kind(value);
 			const zend_mir_scalar_type_mask type =
 				kind == ZEND_TPDE_MACHINE_VALUE_F64 ? ZEND_MIR_SCALAR_TYPE_F64
 				: kind == ZEND_TPDE_MACHINE_VALUE_I64 ? ZEND_MIR_SCALAR_TYPE_I64
@@ -550,7 +550,7 @@ class ZendCompilerX64 final
 			}
 		};
 		for (IRInstRef inst : adaptor->block_insts(cold)) {
-			for (IRValueRef operand : adaptor->node(inst).liveness_operands) {
+			for (IRValueRef operand : ir().node(inst).liveness_operands) {
 				spill_value(operand);
 			}
 		}
@@ -832,7 +832,7 @@ public:
 	 * other types, or missing ones, run the function's tier-1 code.
 	 */
 	bool emit_tier2_arg_guards(AsmReg frame_reg, AsmReg context_reg) {
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		if (plan->tier2_fallback_entry == nullptr) {
 			return true;
 		}
@@ -910,8 +910,8 @@ public:
 	 * payload and type register. Returns false for any other value.
 	 */
 	bool add_boxed_scalar_return(RetBuilder &return_builder, IRValueRef value) {
-		const zend_tpde_machine_value_kind kind = adaptor->machine_kind(value);
-		if (adaptor->plan()->typed_body_return_abi.machine_kind
+		const zend_tpde_machine_value_kind kind = ir().machine_kind(value);
+		if (ir().plan()->typed_body_return_abi.machine_kind
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 				|| (kind != ZEND_TPDE_MACHINE_VALUE_I64
 					&& kind != ZEND_TPDE_MACHINE_VALUE_F64
@@ -960,9 +960,9 @@ public:
 	 * return register. Reserve it before the value parts are assigned.
 	 */
 	bool typed_return_needs_status() const {
-		return adaptor->typed_body()
-			&& adaptor->plan()->typed_body_may_fail
-			&& adaptor->plan()->typed_body_return_abi.machine_kind
+		return ir().typed_body()
+			&& ir().plan()->typed_body_may_fail
+			&& ir().plan()->typed_body_return_abi.machine_kind
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 	}
 	void reserve_typed_return_status(ScratchReg &status) {
@@ -970,7 +970,7 @@ public:
 			return;
 		}
 		auto status_reg = status.alloc_specific(
-			adaptor->plan()->typed_body_return_abi.machine_kind
+			ir().plan()->typed_body_return_abi.machine_kind
 					== ZEND_TPDE_MACHINE_VALUE_F64
 				? tpde::x64::AsmReg{tpde::x64::AsmReg::AX}
 				: tpde::x64::AsmReg{tpde::x64::AsmReg::DX});
@@ -1045,7 +1045,7 @@ public:
 	 */
 	bool check_typed_call_status(uint32_t target, CallBuilder &builder,
 			std::vector<ValuePart> &results, ScratchReg *decision) {
-		const zend_tpde_plan *body = adaptor->component_plan(target);
+		const zend_tpde_plan *body = ir().component_plan(target);
 		if (body == nullptr || !body->typed_body_may_fail) {
 			return true;
 		}
@@ -1073,7 +1073,7 @@ public:
 	}
 	/* Return a number as int (failing for a double) or as float. */
 	bool emit_number_return(IRValueRef value) {
-		const bool as_long = adaptor->plan()->typed_body_return_abi.machine_kind
+		const bool as_long = ir().plan()->typed_body_return_abi.machine_kind
 			== ZEND_TPDE_MACHINE_VALUE_I64;
 		ScratchReg result{this};
 		{
@@ -1157,7 +1157,7 @@ public:
 	 * a generator resume value (reload_generator_values()).
 	 */
 	bool materialized_operand(IRInstRef instruction, size_t index) {
-		const Adaptor::InstNode &node = adaptor->node(instruction);
+		const Adaptor::InstNode &node = ir().node(instruction);
 		if (node.deopt_store_operand_index != UINT32_MAX
 				&& index >= node.deopt_store_operand_index
 				&& index < node.deopt_store_operand_index
@@ -1165,7 +1165,7 @@ public:
 			return true;
 		}
 		const auto resumed_values =
-			adaptor->generator_resume_values(instruction);
+			ir().generator_resume_values(instruction);
 		if (node.kind != Adaptor::InstKind::GeneratorResume
 				&& !resumed_values.empty()) {
 			/* The reload also took the execution context's use. */
@@ -1179,11 +1179,11 @@ public:
 				}
 			}
 		}
-		if (adaptor->typed_body()
+		if (ir().typed_body()
 				|| node.materialization_operand_index == UINT32_MAX) {
 			return false;
 		}
-		const size_t count = adaptor->materializations(instruction).size();
+		const size_t count = ir().materializations(instruction).size();
 		return index >= node.materialization_operand_index
 			&& index < node.materialization_operand_index + count;
 	}
@@ -1272,7 +1272,7 @@ public:
 	/* The source opcode facts of a fused operation, or nullptr. */
 	const zend_tpde_source_opcode *fused_source_opcode(
 			const zend_tpde_instruction *operation) const {
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		const uint32_t position =
 			operation->value_operation.source_position_id;
 		return plan->source_opcodes != nullptr
@@ -1300,7 +1300,7 @@ public:
 			== ZEND_IS_NOT_IDENTICAL;
 		const tpde::Label matches = negated ? falsey : truthy;
 		const tpde::Label differs = negated ? truthy : falsey;
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		const zend_tpde_source_opcode *source = fused_source_opcode(compare);
 		const uint32_t literal_index = right.offset / sizeof(zval);
 		const zval *known_literal = right.literal
@@ -1431,7 +1431,7 @@ public:
 			generate_raw_jump(Jump::jmp, slow);
 			return true;
 		}
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		const zend_tpde_source_opcode *source = fused_source_opcode(isset);
 		const int32_t container_offset =
 			static_cast<int32_t>(container.offset);
@@ -1834,7 +1834,7 @@ public:
 		 * types of a loop bound or an equality test: a known long needs no
 		 * type or reference test, and an integer literal is an immediate.
 		 */
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		const uint32_t position = compare->value_operation.source_position_id;
 		const zend_tpde_source_opcode *source = plan->source_opcodes != nullptr
 				&& position < plan->source_opcode_count
@@ -2515,7 +2515,7 @@ public:
 			const zend_mir_executable_value_ref &operation, bool init,
 			bool *handled) {
 		*handled = false;
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		const uint32_t position = operation.source_position_id;
 		if ((operation.extended_value & ZEND_ARRAY_ELEMENT_REF) != 0
 				|| plan->source_opcodes == nullptr
@@ -2784,7 +2784,7 @@ public:
 			zend_native_runtime_helper_id helper,
 			const zend_tpde_concat_direct &direct, bool *handled) {
 		*handled = false;
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		const uint32_t position = operation.source_position_id;
 		if (plan->source_opcodes == nullptr
 				|| plan->source_literals == nullptr) {
@@ -3206,14 +3206,14 @@ public:
 		const uint64_t physical_slot =
 			operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 				? uint64_t{operand.index}
-				: uint64_t{adaptor->plan()->source_frame_variable_count}
+				: uint64_t{ir().plan()->source_frame_variable_count}
 					+ operand.index;
 		const uint64_t offset =
 			frame_slot_offset(physical_slot);
 		if (offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
-		const zend_mir_scalar_type_mask type = adaptor->exact_type(node.result);
+		const zend_mir_scalar_type_mask type = ir().exact_type(node.result);
 		if (type != ZEND_MIR_SCALAR_TYPE_NULL
 				&& type != ZEND_MIR_SCALAR_TYPE_I1
 				&& type != ZEND_MIR_SCALAR_TYPE_I64
@@ -3470,7 +3470,7 @@ public:
 	} layout_region_;
 	void layout_start_function(uint32_t index) {
 		const uint64_t key = layout_function_key(
-			index, adaptor->typed_body(), adaptor->plan());
+			index, ir().typed_body(), ir().plan());
 		layout_function_key_ = key;
 		layout_jump_ordinal_ = 0;
 		layout_region_.active = false;
@@ -3720,8 +3720,8 @@ public:
 		Base::start_func(index);
 		layout_start_function(index);
 		entry_variant_dispatch_pending_ = has_entry_variant();
-		if (!adaptor->typed_body() && adaptor->plan() != nullptr
-				&& adaptor->plan()->fast_call_eligible) {
+		if (!ir().typed_body() && ir().plan() != nullptr
+				&& ir().plan()->fast_call_eligible) {
 			emit_fast_call_entry(index);
 		}
 	}
@@ -3739,7 +3739,7 @@ public:
 	 * across calls.
 	 */
 	void emit_fast_call_entry(uint32_t function_index) {
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		const uint32_t num_args = plan->source_num_args;
 		const uint32_t last_var = plan->source_frame_variable_count;
 		const tpde::SymRef leave_symbol =
@@ -4413,13 +4413,13 @@ public:
 	 */
 	bool entry_variant_dispatch_pending_ = false;
 	bool has_entry_variant() const {
-		const zend_tpde_plan *plan = adaptor->plan();
-		return !adaptor->typed_body() && plan != nullptr
+		const zend_tpde_plan *plan = ir().plan();
+		return !ir().typed_body() && plan != nullptr
 			&& plan->entry_variant_member_plus_one != 0
 			&& plan->entry_variant_long_mask != 0;
 	}
 	bool emit_entry_variant_dispatch() {
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		if (plan->entry_variant_member_plus_one - 1
 				>= this->func_syms.size()) {
 			return false;
@@ -4496,9 +4496,9 @@ public:
 	void load_address_of_var_reference(
 			AsmReg destination, ::tpde::AssignmentPartRef reference) {
 		const IRValueRef value =
-			adaptor->frame_slot_reference(reference.variable_ref_data());
+			ir().frame_slot_reference(reference.variable_ref_data());
 		const zend_tpde_machine_reference *descriptor = nullptr;
-		if (!adaptor->machine_reference(value, &descriptor)) {
+		if (!ir().machine_reference(value, &descriptor)) {
 			ZEND_UNREACHABLE();
 		}
 		AsmReg base;
@@ -4815,8 +4815,8 @@ public:
 	bool emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path = false);
 	void consume_materializations(IRInstRef instruction) {
-		const Adaptor::InstNode &node = adaptor->node(instruction);
-		if (adaptor->typed_body()
+		const Adaptor::InstNode &node = ir().node(instruction);
+		if (ir().typed_body()
 				|| node.materialization_operand_index == UINT32_MAX) {
 			return;
 		}
@@ -4949,7 +4949,7 @@ public:
 };
 
 uint32_t zval_type(const Adaptor &adaptor, IRValueRef value) {
-	return zend_tpde_zval_type(adaptor.exact_type(value));
+	return zend_tpde_zval_type(adaptor.active().exact_type(value));
 }
 
 uint32_t zval_type(zend_mir_scalar_type_mask type) {
@@ -5150,7 +5150,7 @@ bool ZendCompilerX64::emit_materializations(
 			[&](AsmReg frame_reg, IRValueRef value,
 				zend_mir_storage_id storage, uint64_t offset) {
 		const zend_tpde_machine_value_kind machine_kind =
-			adaptor->machine_kind(value);
+			ir().machine_kind(value);
 		auto value_ref = val_ref(value);
 		if (materialized_in_own_slot(value, storage)) {
 			return true;
@@ -5220,17 +5220,17 @@ bool ZendCompilerX64::emit_materializations(
 }
 
 bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
-	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const Adaptor::InstNode &node = ir().node(instruction);
 	const zend_tpde_instruction &mir =
-		adaptor->mir_instruction(instruction);
+		ir().mir_instruction(instruction);
 	zend_tpde_value_condition layout;
 	const bool register_string = node.operands.size() == 2
 		&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE}
-		&& adaptor->machine_kind(node.operands[1])
+		&& ir().machine_kind(node.operands[1])
 			== ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
 	const bool register_boxed = node.operands.size() == 2
 		&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE}
-		&& adaptor->machine_kind(node.operands[1])
+		&& ir().machine_kind(node.operands[1])
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 	if ((node.operands.size() != 1 && !register_string && !register_boxed)
 			|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
@@ -5368,7 +5368,7 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 		generate_raw_jump(Jump::jmp, falsey);
 	} else if (register_string) {
 		bool literal_truthy = false;
-		if (adaptor->known_string_literal(
+		if (ir().known_string_literal(
 				node.operands[1], nullptr, &literal_truthy)) {
 			auto [string_ref, string] = val_ref_single(node.operands[1]);
 			string.reset();
@@ -5571,9 +5571,9 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 }
 
 bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
-	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const Adaptor::InstNode &node = ir().node(instruction);
 	const zend_tpde_instruction &mir =
-		adaptor->mir_instruction(instruction);
+		ir().mir_instruction(instruction);
 	const auto successors =
 		adaptor->block_succs(IRBlockRef{node.argument_index});
 	if (node.operands.size() != 1 || !mir.has_value_operation
@@ -5696,7 +5696,7 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 
 bool ZendCompilerX64::compile_boxed_cond_cold_branch(
 		IRInstRef instruction) {
-	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const Adaptor::InstNode &node = ir().node(instruction);
 	const auto successors =
 		adaptor->block_succs(IRBlockRef{node.argument_index});
 	if (node.operands.size() != 1 || successors.size() != 2) {
@@ -5738,21 +5738,21 @@ bool ZendCompilerX64::reload_generator_values(
 bool ZendCompilerX64::compile_scalar_select(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	if (node.operands.size() != 3 || !node.has_result
-			|| adaptor->exact_type(node.operands[0])
+			|| ir().exact_type(node.operands[0])
 				!= ZEND_MIR_SCALAR_TYPE_I1
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOOL
-			|| adaptor->exact_type(node.operands[1])
-				!= adaptor->exact_type(node.result)
-			|| adaptor->exact_type(node.operands[2])
-				!= adaptor->exact_type(node.result)
-			|| adaptor->machine_kind(node.operands[1])
-				!= adaptor->machine_kind(node.result)
-			|| adaptor->machine_kind(node.operands[2])
-				!= adaptor->machine_kind(node.result)
-			|| (adaptor->machine_kind(node.result)
+			|| ir().exact_type(node.operands[1])
+				!= ir().exact_type(node.result)
+			|| ir().exact_type(node.operands[2])
+				!= ir().exact_type(node.result)
+			|| ir().machine_kind(node.operands[1])
+				!= ir().machine_kind(node.result)
+			|| ir().machine_kind(node.operands[2])
+				!= ir().machine_kind(node.result)
+			|| (ir().machine_kind(node.result)
 					!= ZEND_TPDE_MACHINE_VALUE_I64
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
 		return false;
 	}
@@ -5775,9 +5775,9 @@ bool ZendCompilerX64::compile_scalar_select(InstContext &ctx) {
 bool ZendCompilerX64::compile_unbox_pointer(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_machine_value_kind result_kind =
-		adaptor->machine_kind(node.result);
+		ir().machine_kind(node.result);
 	if (node.operands.size() != 1 || !node.has_result
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			|| (result_kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 				&& result_kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
@@ -5848,18 +5848,18 @@ bool ZendCompilerX64::compile_typed_call_guard(InstContext &ctx) {
 	guarded_offsets.reserve(guarded_count);
 	for (uint32_t operand = guarded_operand_offset;
 			operand < guard_operands.size(); operand += 2) {
-		if (adaptor->machine_kind(guard_operands[operand])
+		if (ir().machine_kind(guard_operands[operand])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			return false;
 		}
 		uint64_t expected_type;
-		if (!adaptor->constant(
+		if (!ir().constant(
 				guard_operands[operand + 1], &expected_type)
 				|| expected_type > UINT32_MAX) {
 			return false;
 		}
 		const zend_mir_storage_id storage_id =
-			adaptor->canonical_storage(guard_operands[operand]);
+			ir().canonical_storage(guard_operands[operand]);
 		const uint64_t offset =
 			frame_slot_offset(storage_id);
 		if (!zend_mir_id_is_valid(storage_id)
@@ -5921,9 +5921,9 @@ bool ZendCompilerX64::compile_typed_call_guard(InstContext &ctx) {
 bool ZendCompilerX64::compile_string_length_value(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	if (node.operands.size() != 1 || !node.has_result
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| adaptor->exact_type(node.result)
+			|| ir().exact_type(node.result)
 				!= ZEND_MIR_SCALAR_TYPE_I64) {
 		return false;
 	}
@@ -5939,20 +5939,20 @@ bool ZendCompilerX64::compile_string_length_value(InstContext &ctx) {
 bool ZendCompilerX64::compile_box_scalar(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	if (node.operands.size() != 1 || !node.has_result
-			|| adaptor->machine_kind(node.result)
+			|| ir().machine_kind(node.result)
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		return false;
 	}
 	const zend_mir_scalar_type_mask input_type =
-		adaptor->exact_type(node.operands[0]);
+		ir().exact_type(node.operands[0]);
 	if (!((input_type == ZEND_MIR_SCALAR_TYPE_I64
-					&& adaptor->machine_kind(node.operands[0])
+					&& ir().machine_kind(node.operands[0])
 						== ZEND_TPDE_MACHINE_VALUE_I64)
 				|| (input_type == ZEND_MIR_SCALAR_TYPE_I1
-					&& adaptor->machine_kind(node.operands[0])
+					&& ir().machine_kind(node.operands[0])
 						== ZEND_TPDE_MACHINE_VALUE_BOOL)
 				|| (input_type == ZEND_MIR_SCALAR_TYPE_F64
-					&& adaptor->machine_kind(node.operands[0])
+					&& ir().machine_kind(node.operands[0])
 						== ZEND_TPDE_MACHINE_VALUE_F64))) {
 		return false;
 	}
@@ -5992,11 +5992,11 @@ bool ZendCompilerX64::compile_box_scalar(InstContext &ctx) {
 bool ZendCompilerX64::compile_unbox_scalar(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	if (node.operands.size() != 1 || !node.has_result
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			|| (adaptor->machine_kind(node.result)
+			|| (ir().machine_kind(node.result)
 					!= ZEND_TPDE_MACHINE_VALUE_I64
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
 		return false;
 	}
@@ -6019,9 +6019,9 @@ bool ZendCompilerX64::compile_unbox_scalar(InstContext &ctx) {
 bool ZendCompilerX64::compile_unbox_reference_scalar(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	if (node.operands.size() != 1 || !node.has_result
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
-			|| adaptor->machine_kind(node.result)
+			|| ir().machine_kind(node.result)
 				!= ZEND_TPDE_MACHINE_VALUE_I64) {
 		return false;
 	}
@@ -6043,8 +6043,8 @@ bool ZendCompilerX64::compile_load_frame(InstContext &ctx) {
 	ASM(MOV64rr, result_reg, source_reg);
 	/* Tier 2 (ADR 0025 section 4): count the call down in the entry
 	 * cell; the last one queues the function for recompilation. */
-	if (adaptor->plan()->call_count_cell != nullptr
-			&& !adaptor->typed_body()
+	if (ir().plan()->call_count_cell != nullptr
+			&& !ir().typed_body()
 			&& runtime_symbol(ZEND_NATIVE_HELPER_TIER2_NOTE).valid()
 			&& runtime_symbol(ZEND_NATIVE_HELPER_TIER2_RECORD).valid()) {
 		ValuePart cell = image_symbol_value(
@@ -6126,15 +6126,15 @@ bool ZendCompilerX64::compile_load_frame(InstContext &ctx) {
 		 * may not change. */
 		context_reg = context_use->second.load_to_reg();
 	}
-	if (adaptor->plan()->tier2_fallback_entry != nullptr
-			&& context_use.has_value() && !adaptor->typed_body()) {
+	if (ir().plan()->tier2_fallback_entry != nullptr
+			&& context_use.has_value() && !ir().typed_body()) {
 		if (!emit_tier2_arg_guards(result_reg, context_reg)) {
 			return false;
 		}
 	}
 	std::optional<tpde::Label> deopt_entry;
 	if (context_use.has_value()
-			&& adaptor->plan()->deopt_resume_count != 0) {
+			&& ir().plan()->deopt_resume_count != 0) {
 		/* A deoptimization entry continues a frame whose temporaries
 		 * are live. */
 		deopt_entry = text_writer.label_create();
@@ -6144,11 +6144,11 @@ bool ZendCompilerX64::compile_load_frame(InstContext &ctx) {
 			0);
 		generate_raw_jump(Jump::jne, *deopt_entry);
 	}
-	if (adaptor->plan()->entry_undef_temporary_count != 0) {
+	if (ir().plan()->entry_undef_temporary_count != 0) {
 		auto initialized = text_writer.label_create();
 		/* A resumed generator frame keeps its temporaries; only a
 		 * generator's entry can see one. */
-		if (adaptor->plan()->source_generator) {
+		if (ir().plan()->source_generator) {
 			ScratchReg call_info{this};
 			auto call_info_reg = call_info.alloc_gp();
 			ASM(MOV32rm, call_info_reg,
@@ -6161,23 +6161,23 @@ bool ZendCompilerX64::compile_load_frame(InstContext &ctx) {
 		}
 		for (uint32_t required = 0;
 				required
-					< adaptor->plan()->entry_undef_temporary_count;
+					< ir().plan()->entry_undef_temporary_count;
 				++required) {
 			/* A branch-fused operation's result is a placeholder the
 			 * branch stores before its helper runs. */
-			if (!adaptor->typed_body()
-					&& adaptor->plan()->entry_undef_temporary_fused_only
+			if (!ir().typed_body()
+					&& ir().plan()->entry_undef_temporary_fused_only
 						!= nullptr
-					&& adaptor->plan()->entry_undef_temporary_fused_only[
+					&& ir().plan()->entry_undef_temporary_fused_only[
 						required] != 0) {
 				continue;
 			}
 			const uint32_t index =
-				adaptor->plan()->entry_undef_temporary_indices[
+				ir().plan()->entry_undef_temporary_indices[
 					required];
 			const int32_t offset = static_cast<int32_t>(
 				(uint64_t{ZEND_CALL_FRAME_SLOT}
-					+ adaptor->plan()->source_frame_variable_count
+					+ ir().plan()->source_frame_variable_count
 					+ index)
 					* sizeof(zval)
 				+ sizeof(uint64_t));
@@ -6195,7 +6195,7 @@ bool ZendCompilerX64::compile_load_frame(InstContext &ctx) {
 
 bool ZendCompilerX64::compile_user_opcode_landing(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
-	const zend_tpde_plan *plan = adaptor->plan();
+	const zend_tpde_plan *plan = ir().plan();
 	if (plan->source_opcodes == nullptr
 			|| node.argument_index >= plan->source_opcode_count) {
 		return false;
@@ -6214,9 +6214,9 @@ bool ZendCompilerX64::compile_user_opcode_landing(InstContext &ctx) {
 bool ZendCompilerX64::compile_user_opcode_gateway(InstContext &ctx) {
 	const IRInstRef instruction = ctx.instruction;
 	const Adaptor::InstNode &node = ctx.node;
-	const zend_tpde_plan *plan = adaptor->plan();
+	const zend_tpde_plan *plan = ir().plan();
 	const auto dispatch_sources =
-		adaptor->user_opcode_dispatch_to_sources();
+		ir().user_opcode_dispatch_to_sources();
 	std::vector<UserOpcodeDispatchCase> dispatch_cases;
 	if (!plan_user_opcode_dispatch(
 			node, user_opcode_labels_.size(), dispatch_cases)) {
@@ -6224,7 +6224,7 @@ bool ZendCompilerX64::compile_user_opcode_gateway(InstContext &ctx) {
 	}
 	const uint32_t source_position = node.argument_index;
 	const auto &next_landings =
-		adaptor->user_opcode_next_landings();
+		ir().user_opcode_next_landings();
 	tpde::x64::CCAssignerSysV assigner{false};
 	CallBuilder builder{*this, assigner};
 	builder.add_arg(CallArg{node.operands[0]});
@@ -6782,7 +6782,7 @@ bool ZendCompilerX64::compile_user_opcode_gateway(InstContext &ctx) {
 			dispatch_case.instruction != nullptr
 				? dispatch_case.instruction->exception_block_id
 				: ZEND_MIR_ID_INVALID);
-		if (adaptor->user_opcode_result_reload_source(
+		if (ir().user_opcode_result_reload_source(
 					dispatch_case.source)
 				&& dispatch_case.source
 					< user_opcode_result_reload_labels_.size()) {
@@ -6842,7 +6842,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 	const InstRange &remaining_instructions = ctx.remaining_instructions;
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_source_call_phase_entry *phase =
-		adaptor->source_call_phase(node);
+		ir().source_call_phase(node);
 	if (phase == nullptr) {
 		return false;
 	}
@@ -6869,12 +6869,12 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 	};
 	if (node.kind == Adaptor::InstKind::UserCallInit) {
 		const zend_tpde_instruction &call =
-			adaptor->plan()->instructions[node.mir_instruction_index];
+			ir().plan()->instructions[node.mir_instruction_index];
 		if (call.user_call == nullptr) {
 			return false;
 		}
 		zend_tpde_user_call_setup setup;
-		if (!zend_tpde_user_call_setup_layout(adaptor->plan(),
+		if (!zend_tpde_user_call_setup_layout(ir().plan(),
 				call.user_call, INT32_MAX, &setup)) {
 			return false;
 		}
@@ -6918,7 +6918,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 				 * object in the result slot and pushes the frame. */
 				const uint64_t object_offset =
 					(uint64_t{ZEND_CALL_FRAME_SLOT}
-						+ adaptor->plan()->source_frame_variable_count
+						+ ir().plan()->source_frame_variable_count
 						+ descriptor->init_result.index) * sizeof(zval);
 				if (object_offset > INT32_MAX - sizeof(zval)) {
 					return false;
@@ -7003,7 +7003,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 				? (uint64_t{ZEND_CALL_FRAME_SLOT}
 					+ descriptor->init_op1.index
 					+ (temporary_receiver ? uint64_t{
-						adaptor->plan()->source_frame_variable_count} : 0))
+						ir().plan()->source_frame_variable_count} : 0))
 					* sizeof(zval)
 				: 0;
 			if (receiver_offset > INT32_MAX - sizeof(zval)) {
@@ -7398,7 +7398,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 		return true;
 	}
 	const zend_tpde_instruction &call =
-		adaptor->plan()->instructions[node.mir_instruction_index];
+		ir().plan()->instructions[node.mir_instruction_index];
 	if (call.user_call == nullptr
 			|| call.user_call->argument_count != call.call_argument_count) {
 		return false;
@@ -7548,7 +7548,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 			/* Store the scalar into ZEND_CALL_ARG(call, target + 1) directly, as the
 			 * setter helpers do. */
 			const zend_mir_scalar_type_mask direct_type =
-				adaptor->exact_type(node.operands[2]);
+				ir().exact_type(node.operands[2]);
 			const int32_t argument_base = static_cast<int32_t>(
 				ZEND_CALL_FRAME_SLOT * sizeof(zval));
 			const int32_t argument_type = argument_base
@@ -7597,7 +7597,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 				? static_cast<uint64_t>(send_source.index) * sizeof(zval)
 				: (uint64_t{ZEND_CALL_FRAME_SLOT} + send_source.index
 					+ (send_tmp ? uint64_t{
-						adaptor->plan()->source_frame_variable_count} : 0))
+						ir().plan()->source_frame_variable_count} : 0))
 					* sizeof(zval);
 			const uint64_t send_target_offset =
 				(uint64_t{ZEND_CALL_FRAME_SLOT} + send_number - 1) * sizeof(zval);
@@ -7644,10 +7644,10 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 					static_cast<int32_t>(send_number));
 				generate_raw_jump(Jump::jb, send_slow);
 				const zval *literal_value = send_literal
-						&& adaptor->plan()->source_literals != nullptr
+						&& ir().plan()->source_literals != nullptr
 						&& send_source.index
-							< adaptor->plan()->source_literal_count
-					? &adaptor->plan()->source_literals[send_source.index]
+							< ir().plan()->source_literal_count
+					? &ir().plan()->source_literals[send_source.index]
 					: nullptr;
 				if (literal_value != nullptr
 						&& store_scalar_literal(callee_reg,
@@ -7977,13 +7977,13 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 				|| send_source.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP);
 		const zval *send_literal = send_source.kind
 				== ZEND_MIR_SOURCE_OPERAND_LITERAL
-				&& adaptor->plan()->source_literals != nullptr
-			? &adaptor->plan()->source_literals[send_source.index]
+				&& ir().plan()->source_literals != nullptr
+			? &ir().plan()->source_literals[send_source.index]
 			: nullptr;
 		const uint64_t send_offset = send_slot
 			? (uint64_t{ZEND_CALL_FRAME_SLOT} + send_source.index
 				+ (send_source.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-					? adaptor->plan()->source_frame_variable_count : 0))
+					? ir().plan()->source_frame_variable_count : 0))
 				* sizeof(zval)
 			: 0;
 		if (send_argument.mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
@@ -8162,7 +8162,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 			? uint64_t{source.index} * sizeof(zval)
 			: (uint64_t{ZEND_CALL_FRAME_SLOT} + source.index
 				+ (cv ? 0 : uint64_t{
-					adaptor->plan()->source_frame_variable_count}))
+					ir().plan()->source_frame_variable_count}))
 				* sizeof(zval);
 		const uint64_t target_offset =
 			frame_slot_offset(node.argument_index);
@@ -8198,9 +8198,9 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 		 * the warning call. */
 		auto undefined = text_writer.label_create();
 		const zval *scalar_literal = literal
-				&& adaptor->plan()->source_literals != nullptr
-				&& source.index < adaptor->plan()->source_literal_count
-			? &adaptor->plan()->source_literals[source.index] : nullptr;
+				&& ir().plan()->source_literals != nullptr
+				&& source.index < ir().plan()->source_literal_count
+			? &ir().plan()->source_literals[source.index] : nullptr;
 		if (scalar_literal != nullptr
 				&& (Z_TYPE_INFO_P(scalar_literal) > IS_DOUBLE
 					|| Z_TYPE_P(scalar_literal) == IS_UNDEF)) {
@@ -8210,7 +8210,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 			/* A scalar held in a register goes straight into the
 			 * argument zval. */
 			const zend_mir_scalar_type_mask direct_type =
-				adaptor->exact_type(node.operands[2]);
+				ir().exact_type(node.operands[2]);
 			ScratchReg callee{this};
 			auto callee_reg = callee.alloc_gp();
 			ASM(MOV64rm, callee_reg,
@@ -8525,11 +8525,11 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 		return true;
 	};
 	if (node.kind == Adaptor::InstKind::UserCallCheck) {
-		if (node.source_position >= adaptor->plan()->source_opcode_count) {
+		if (node.source_position >= ir().plan()->source_opcode_count) {
 			return false;
 		}
 		const uint8_t source_opcode =
-			adaptor->plan()->source_opcodes[node.source_position].opcode;
+			ir().plan()->source_opcodes[node.source_position].opcode;
 		if (source_opcode == ZEND_CHECK_UNDEF_ARGS) {
 			return node.argument_index == UINT32_MAX;
 		}
@@ -8681,7 +8681,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 			!= ZEND_MIR_SOURCE_OPERAND_UNUSED;
 		const uint64_t result_offset = result_used
 			? (uint64_t{ZEND_CALL_FRAME_SLOT}
-				+ adaptor->plan()->source_frame_variable_count
+				+ ir().plan()->source_frame_variable_count
 				+ result_operand.index) * sizeof(zval)
 			: 0;
 		if (result_offset > INT32_MAX - sizeof(zval)) {
@@ -8896,14 +8896,14 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 				== ZEND_MIR_SOURCE_SLOT_CV
 			? result_operand.index
 			: static_cast<uint64_t>(
-				adaptor->plan()->source_frame_variable_count)
+				ir().plan()->source_frame_variable_count)
 				+ result_operand.index;
 		const uint64_t offset =
 			frame_slot_offset(storage);
 		if (offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
-		if (adaptor->machine_kind(node.result)
+		if (ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto result = result_ref(node.result);
 			if (val_parts(node.result).count() != 2) {
@@ -8923,7 +8923,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 		} else {
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
-			if (adaptor->machine_kind(node.result)
+			if (ir().machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_F64) {
 				ScratchReg payload{this};
 				auto payload_reg = payload.alloc_gp();
@@ -8931,7 +8931,7 @@ bool ZendCompilerX64::compile_user_call(InstContext &ctx) {
 					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
 						static_cast<int32_t>(offset)));
 				ASM(SSE_MOVQ_G2Xrr, result_reg, payload_reg);
-			} else if (adaptor->machine_kind(node.result)
+			} else if (ir().machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_BOOL) {
 				ASM(MOV32rm, result_reg,
 					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
@@ -8953,11 +8953,11 @@ bool ZendCompilerX64::compile_user_opcode_call_fragment(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	if (node.operands.size() != 1
 			|| node.mir_instruction_index >=
-				adaptor->plan()->instruction_count) {
+				ir().plan()->instruction_count) {
 		return false;
 	}
 	const zend_tpde_instruction &call =
-		adaptor->plan()->instructions[node.mir_instruction_index];
+		ir().plan()->instructions[node.mir_instruction_index];
 	if (!call.user_opcode_call_fragments || call.user_call == nullptr
 			|| (call.entry_cell == nullptr)
 				== (call.internal_call_cell == nullptr)) {
@@ -9002,11 +9002,11 @@ bool ZendCompilerX64::compile_generator_gateway(InstContext &ctx) {
 			|| node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
 			|| node.operands[1]
 				!= IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT}
-			|| adaptor->generator_resume_targets().empty()) {
+			|| ir().generator_resume_targets().empty()) {
 		return false;
 	}
 	while (generator_resume_labels_.size()
-			< adaptor->generator_resume_targets().size()) {
+			< ir().generator_resume_targets().size()) {
 		generator_resume_labels_.push_back(text_writer.label_create());
 	}
 	auto normal = text_writer.label_create();
@@ -9060,9 +9060,9 @@ bool ZendCompilerX64::compile_generator_gateway(InstContext &ctx) {
 		ASM(MOV64rm, exception_reg,
 			FE_MEM(exception_reg, 0, FE_NOREG, 0));
 		for (uint32_t index = 0;
-				index < adaptor->generator_resume_targets().size(); ++index) {
+				index < ir().generator_resume_targets().size(); ++index) {
 			const uint64_t byte_offset =
-				uint64_t{adaptor->generator_resume_targets()[index]}
+				uint64_t{ir().generator_resume_targets()[index]}
 					* sizeof(zend_op);
 			if (byte_offset > INT32_MAX) {
 				return false;
@@ -9089,9 +9089,9 @@ bool ZendCompilerX64::compile_generator_gateway(InstContext &ctx) {
 		ASM(MOV64rm, opline_reg,
 			FE_MEM(opline_reg, 0, FE_NOREG, 0));
 		for (uint32_t index = 0;
-				index < adaptor->generator_resume_targets().size(); ++index) {
+				index < ir().generator_resume_targets().size(); ++index) {
 			const uint64_t byte_offset =
-				uint64_t{adaptor->generator_resume_targets()[index] - 1}
+				uint64_t{ir().generator_resume_targets()[index] - 1}
 					* sizeof(zend_op);
 			if (byte_offset > INT32_MAX) {
 				return false;
@@ -9108,7 +9108,7 @@ bool ZendCompilerX64::compile_generator_gateway(InstContext &ctx) {
 			ASM(CMP64rr, opline_reg, target_reg);
 			generate_raw_jump(Jump::jne, next);
 			const zend_mir_block_id exception_block =
-				adaptor->generator_resume_exception_blocks()[index];
+				ir().generator_resume_exception_blocks()[index];
 			if (zend_mir_id_is_valid(exception_block)) {
 				ASM(MOV64mr,
 					FE_MEM(frame_reg, 0, FE_NOREG,
@@ -9165,14 +9165,14 @@ bool ZendCompilerX64::compile_zval_guard_arguments(InstContext &ctx) {
 	if (node.operands.size() != 1
 			|| node.operands[0]
 				!= IRValueRef{Adaptor::FRAME_VALUE}
-			|| adaptor->argument_guards().empty()) {
+			|| ir().argument_guards().empty()) {
 		return false;
 	}
 	auto [frame_ref, frame] = val_ref_single(node.operands[0]);
 	auto frame_reg = frame.load_to_reg();
 	auto mismatch = text_writer.label_create();
 	for (const Adaptor::ArgumentGuard &guard :
-			adaptor->argument_guards()) {
+			ir().argument_guards()) {
 		const uint32_t expected_type =
 			zend_mir_scalar_type_is_exact(guard.exact_type)
 				? zval_type(guard.exact_type)
@@ -9224,7 +9224,7 @@ bool ZendCompilerX64::compile_zval_reference_resolve(InstContext &ctx) {
 		return false;
 	}
 	zend_mir_storage_id storage_id = ZEND_MIR_ID_INVALID;
-	const bool frame_slot = adaptor->frame_slot_reference(
+	const bool frame_slot = ir().frame_slot_reference(
 		node.operands[0], &storage_id);
 	const uint64_t frame_offset = frame_slot
 		? frame_slot_offset(storage_id)
@@ -9266,7 +9266,7 @@ bool ZendCompilerX64::compile_zval_boxed_store(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	if (node.operands.size() != 2
 			|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			|| !zend_mir_id_is_valid(node.storage_id)) {
 		return false;
@@ -9295,16 +9295,16 @@ bool ZendCompilerX64::compile_zval_payload_load(InstContext &ctx) {
 			|| ((!zend_mir_scalar_type_is_exact(node.exact_type)
 					|| node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL)
 				&& zend_tpde_machine_value_zval_type(
-					adaptor->machine_kind(node.result))
+					ir().machine_kind(node.result))
 					== IS_UNDEF
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
 		return false;
 	}
 	const zend_tpde_machine_value_kind result_kind =
-		adaptor->machine_kind(node.result);
+		ir().machine_kind(node.result);
 	zend_mir_storage_id storage_id = ZEND_MIR_ID_INVALID;
-	const bool frame_slot = adaptor->frame_slot_reference(
+	const bool frame_slot = ir().frame_slot_reference(
 		node.operands[0], &storage_id);
 	const uint64_t frame_offset = frame_slot
 		? frame_slot_offset(storage_id)
@@ -9478,7 +9478,7 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 		}
 		const IRValueRef input = node.operands[0];
 		const zend_mir_scalar_type_mask exact_type =
-			adaptor->exact_type(input);
+			ir().exact_type(input);
 		auto frame_value = val_ref(node.operands[1]);
 		(void) frame_value;
 		const int32_t payload_offset = static_cast<int32_t>(offset);
@@ -9522,7 +9522,7 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 	const IRValueRef input = node.operands[0];
 	const zend_mir_storage_id storage = mir.zval_store_storage_id;
 	const zend_mir_scalar_type_mask exact_type =
-		adaptor->exact_type(input);
+		ir().exact_type(input);
 	const uint64_t offset =
 		frame_slot_offset(storage);
 	if (!zend_mir_id_is_valid(storage)
@@ -9735,7 +9735,7 @@ auto ZendCompilerX64::binary(InstContext &ctx) {
 
 bool ZendCompilerX64::copy_result(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
-	if (adaptor->machine_kind(node.result)
+	if (ir().machine_kind(node.result)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		auto source_value = val_ref(node.operands[0]);
 		auto result_value = result_ref(node.result);
@@ -9778,15 +9778,15 @@ bool ZendCompilerX64::can_fuse_compare_branch(InstContext &ctx) {
 		return false;
 	}
 	const IRInstRef next = *remaining_instructions.from;
-	const Adaptor::InstNode &consumer = adaptor->node(next);
+	const Adaptor::InstNode &consumer = ir().node(next);
 	/* A generator continuation's terminal reloads its resume values;
 	 * a fused branch would never run that reload. */
 	return consumer.kind == Adaptor::InstKind::MIR
 		&& consumer.operands.size() == 1
 		&& consumer.operands[0] == node.result
-		&& adaptor->instruction_record(next).opcode
+		&& ir().instruction_record(next).opcode
 			== ZEND_MIR_OPCODE_COND_BRANCH
-		&& adaptor->generator_resume_values(next).empty()
+		&& ir().generator_resume_values(next).empty()
 		&& this->analyzer.liveness_info(
 			adaptor->val_local_idx(node.result)).ref_count == 2;
 }
@@ -9797,7 +9797,7 @@ bool ZendCompilerX64::fuse_compare_branch(InstContext &ctx, Jump condition) {
 		return false;
 	}
 	const IRInstRef next = *remaining_instructions.from;
-	const Adaptor::InstNode &consumer = adaptor->node(next);
+	const Adaptor::InstNode &consumer = ir().node(next);
 	const auto &successors = adaptor->block_succs(
 		IRBlockRef{consumer.control_block});
 	if (successors.size() != 2) {
@@ -9815,7 +9815,7 @@ bool ZendCompilerX64::integer_compare(InstContext &ctx, Jump condition) {
 	auto &[right_ref, right] = right_pair;
 	uint64_t immediate_bits;
 	auto left_reg = left.load_to_reg();
-	if (adaptor->constant(node.operands[1], &immediate_bits)
+	if (ir().constant(node.operands[1], &immediate_bits)
 			&& static_cast<int64_t>(immediate_bits) >= INT32_MIN
 			&& static_cast<int64_t>(immediate_bits) <= INT32_MAX) {
 		ASM(CMP64ri, left_reg,
@@ -9888,7 +9888,7 @@ bool ZendCompilerX64::materialize_boxed_boundary_operand(
 		return false;
 	}
 	const IRValueRef operand = node.liveness_operands[operand_index];
-	if (adaptor->machine_kind(operand)
+	if (ir().machine_kind(operand)
 			!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		return false;
 	}
@@ -10299,7 +10299,7 @@ bool ZendCompilerX64::execute_value_operation_with(
 				>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
 				!= 0;
 			const zend_tpde_source_opcode &source =
-				adaptor->plan()->source_opcodes[
+				ir().plan()->source_opcodes[
 					operation.source_position_id + (index == 2 ? 1 : 0)];
 			const uint32_t may_be = index == 1
 				? source.op2_may_be : source.op1_may_be;
@@ -10540,7 +10540,7 @@ bool ZendCompilerX64::execute_value_operation_with(
 	 * result before OPcache reuses the temporary frame slot.
 	 */
 	if (node.kind != Adaptor::InstKind::GuardedCold && node.has_result
-			&& adaptor->machine_kind(node.result)
+			&& ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		const zend_mir_storage_id storage = node.mutation_result
 			? operation.op1_storage_id : operation.result_storage_id;
@@ -10584,7 +10584,7 @@ bool ZendCompilerX64::rope_literal_inline(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &mir = *ctx.mir;
 	const zend_mir_executable_value_ref &operation = mir.value_operation;
-	const zend_tpde_plan *plan = adaptor->plan();
+	const zend_tpde_plan *plan = ir().plan();
 	if (!mir.has_value_operation || node.has_result
 			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 			|| plan->source_literals == nullptr
@@ -10662,7 +10662,7 @@ bool ZendCompilerX64::materialize_cold_operand(
 		return false;
 	}
 	const zend_tpde_machine_value_kind kind =
-		adaptor->machine_kind(operand);
+		ir().machine_kind(operand);
 	auto value = val_ref(operand);
 	const ValueParts parts = val_parts(operand);
 	std::vector<ValuePartRef> locked_parts;
@@ -10791,7 +10791,7 @@ bool ZendCompilerX64::compile_guarded_cold(InstContext &ctx) {
 	}
 	if (record.source_position_id
 				< user_opcode_result_reload_labels_.size()
-			&& adaptor->user_opcode_result_reload_source(
+			&& ir().user_opcode_result_reload_source(
 				record.source_position_id)) {
 		label_place(user_opcode_result_reload_labels_[
 			record.source_position_id]);
@@ -10806,40 +10806,40 @@ bool ZendCompilerX64::compile_guarded_cold(InstContext &ctx) {
 		if (!zend_mir_id_is_valid(storage)
 				|| frame_offset > INT32_MAX - sizeof(zval)
 				|| (node.mutation_result
-					? !((adaptor->representation(node.result)
+					? !((ir().representation(node.result)
 								== ZEND_MIR_REPRESENTATION_I64
-							&& adaptor->exact_type(node.result)
+							&& ir().exact_type(node.result)
 								== ZEND_MIR_SCALAR_TYPE_I64
-							&& adaptor->machine_kind(node.result)
+							&& ir().machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_I64)
-						|| (adaptor->representation(node.result)
+						|| (ir().representation(node.result)
 								== ZEND_MIR_REPRESENTATION_ZVAL
-							&& adaptor->machine_kind(node.result)
+							&& ir().machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
-					: !((adaptor->representation(node.result)
+					: !((ir().representation(node.result)
 									== ZEND_MIR_REPRESENTATION_I64
-								&& adaptor->exact_type(node.result)
+								&& ir().exact_type(node.result)
 									== ZEND_MIR_SCALAR_TYPE_I64
-								&& adaptor->machine_kind(node.result)
+								&& ir().machine_kind(node.result)
 									== ZEND_TPDE_MACHINE_VALUE_I64)
-							|| (adaptor->representation(node.result)
+							|| (ir().representation(node.result)
 									== ZEND_MIR_REPRESENTATION_I1
-								&& adaptor->exact_type(node.result)
+								&& ir().exact_type(node.result)
 									== ZEND_MIR_SCALAR_TYPE_I1
-								&& adaptor->machine_kind(node.result)
+								&& ir().machine_kind(node.result)
 									== ZEND_TPDE_MACHINE_VALUE_BOOL)
-							|| adaptor->machine_kind(node.result)
+							|| ir().machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))) {
 			return false;
 		}
-		if (adaptor->machine_kind(node.result)
+		if (ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64
-				|| adaptor->machine_kind(node.result)
+				|| ir().machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_BOOL) {
 			auto [result_ref, result] =
 				result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
-			load_slot_scalar(result_reg, adaptor->machine_kind(node.result),
+			load_slot_scalar(result_reg, ir().machine_kind(node.result),
 				frame_offset);
 			result.set_modified();
 			generate_branch_to_block(Jump::jmp,
@@ -10885,14 +10885,14 @@ bool ZendCompilerX64::branch_to_guarded_cold(InstContext &ctx) {
 		return false;
 	}
 	for (IRValueRef operand : node.operands) {
-		if (adaptor->machine_reference(operand, nullptr)) {
+		if (ir().machine_reference(operand, nullptr)) {
 			continue;
 		}
 		auto consumed = val_ref(operand);
 		(void) consumed;
 	}
 	if (node.has_result && mir.deopt_exit_resume_plus_one != 0
-			&& !adaptor->typed_body()) {
+			&& !ir().typed_body()) {
 		/*
 		 * A deoptimization exit's continuation copies the fast result
 		 * (no PHI). The fast path always exits here; define the
@@ -10942,7 +10942,7 @@ const zend_tpde_machine_reference *ZendCompilerX64::operation_machine_reference(
 		InstContext &ctx, zend_tpde_machine_reference_kind expected) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_machine_reference *reference = nullptr;
-	return adaptor->operation_machine_reference(
+	return ir().operation_machine_reference(
 				node.mir_instruction_index, &reference)
 			&& reference->kind == expected
 		? reference : nullptr;
@@ -11017,21 +11017,21 @@ bool ZendCompilerX64::copy_slot(
 	const bool register_source = !literal_source
 		&& !node.operands.empty()
 		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-		&& adaptor->machine_value_is_register_authoritative(
+		&& ir().machine_value_is_register_authoritative(
 			node.operands[0]);
 	/* A register long, double or boolean is defined, no reference
 	 * and owns nothing: its type tests are decided here. */
 	const bool scalar_source = register_source
-		&& (adaptor->machine_kind(node.operands[0])
+		&& (ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_I64
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_F64
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_BOOL);
 
 	if (register_source) {
 		const zend_tpde_machine_value_kind source_kind =
-			adaptor->machine_kind(node.operands[0]);
+			ir().machine_kind(node.operands[0]);
 		if (source_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto source = val_ref(node.operands[0]);
 			const ValueParts parts = val_parts(node.operands[0]);
@@ -11484,12 +11484,12 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		&& !node.operands.empty()
 		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
 		&& !zend_mir_id_is_valid(
-			adaptor->canonical_storage(node.operands[0]))
-		&& adaptor->machine_kind(node.operands[0])
+			ir().canonical_storage(node.operands[0]))
+		&& ir().machine_kind(node.operands[0])
 			== ZEND_TPDE_MACHINE_VALUE_I64
-		&& adaptor->exact_type(node.operands[0])
+		&& ir().exact_type(node.operands[0])
 			== ZEND_MIR_SCALAR_TYPE_I64
-		&& adaptor->representation(node.operands[0])
+		&& ir().representation(node.operands[0])
 			== ZEND_MIR_REPRESENTATION_I64;
 	/* A container or key held as a machine value is published to its
 	 * frame slot first, as the helper of the cold block reads it. */
@@ -11505,23 +11505,23 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		 * table. */
 		uint64_t constant_bits = 0;
 		if ((register_key && operand == node.operands[0])
-				|| adaptor->machine_reference(operand, nullptr)
+				|| ir().machine_reference(operand, nullptr)
 				|| (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-					&& adaptor->constant(operand, &constant_bits)
-					&& adaptor->plan()->source_literals != nullptr
+					&& ir().constant(operand, &constant_bits)
+					&& ir().plan()->source_literals != nullptr
 					&& operation.op2.index
-						< adaptor->plan()->source_literal_count
-					&& Z_TYPE(adaptor->plan()->source_literals[
+						< ir().plan()->source_literal_count
+					&& Z_TYPE(ir().plan()->source_literals[
 						operation.op2.index]) == IS_LONG
 					&& static_cast<zend_long>(constant_bits)
-						== Z_LVAL(adaptor->plan()->source_literals[
+						== Z_LVAL(ir().plan()->source_literals[
 							operation.op2.index]))) {
 			continue;
 		}
 		const zend_mir_storage_id storage =
-			adaptor->canonical_storage(operand);
+			ir().canonical_storage(operand);
 		const zend_tpde_machine_value_kind kind =
-			adaptor->machine_kind(operand);
+			ir().machine_kind(operand);
 		if (!zend_mir_id_is_valid(storage)
 				|| (storage != operation.op1_storage_id
 					&& storage != operation.op2_storage_id
@@ -11603,18 +11603,18 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 					|| operation.result_storage_id
 						== operation.op2_storage_id))
 			|| (node.has_result && reads
-				&& !((adaptor->machine_kind(node.result)
+				&& !((ir().machine_kind(node.result)
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 						&& val_parts(node.result).count() == 2)
-					|| (adaptor->machine_kind(node.result)
+					|| (ir().machine_kind(node.result)
 							== ZEND_TPDE_MACHINE_VALUE_I64
-						&& adaptor->exact_type(node.result)
+						&& ir().exact_type(node.result)
 							== ZEND_MIR_SCALAR_TYPE_I64
 						&& val_parts(node.result).count() == 1)))
 			|| (node.has_result && tests
 				&& val_parts(node.result).count() != 1)
 			|| (node.has_result && access == ElementAccess::Coalesce
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
 		return 0;
 	}
@@ -11635,14 +11635,14 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	/* An assignment's literal key is an integer or a string with its
 	 * hash, which the compiler made non-numeric. */
 	if (assigns && key_literal
-			&& (adaptor->plan()->source_literals == nullptr
+			&& (ir().plan()->source_literals == nullptr
 				|| operation.op2.index
-					>= adaptor->plan()->source_literal_count
-				|| (Z_TYPE(adaptor->plan()->source_literals[
+					>= ir().plan()->source_literal_count
+				|| (Z_TYPE(ir().plan()->source_literals[
 						operation.op2.index]) != IS_LONG
-					&& (Z_TYPE(adaptor->plan()->source_literals[
+					&& (Z_TYPE(ir().plan()->source_literals[
 							operation.op2.index]) != IS_STRING
-						|| ZSTR_H(Z_STR(adaptor->plan()->source_literals[
+						|| ZSTR_H(Z_STR(ir().plan()->source_literals[
 							operation.op2.index])) == 0)))) {
 		return 0;
 	}
@@ -11655,7 +11655,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	 * table without testing the zval. Some of them need one scratch
 	 * register more than the general lookups. */
 	const bool known_array = [&] {
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		if (container_literal || container_temporary || container_var
 				|| unlocked_gp_registers() < 10
 				|| plan->source_opcodes == nullptr
@@ -11706,7 +11706,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	uint64_t literal_key_value = 0;
 	bool register_key_checked = false;
 	{
-		const zend_tpde_plan *plan = adaptor->plan();
+		const zend_tpde_plan *plan = ir().plan();
 		if (register_key) {
 			literal_key = LiteralKey::Register;
 		} else if (!key_literal && unlocked_gp_registers() >= 10
@@ -12439,7 +12439,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		generate_raw_jump(Jump::je, slow);
 	}
 	if (access == ElementAccess::Read && node.has_result
-			&& adaptor->machine_kind(node.result)
+			&& ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
 		/* An integer result needs an integer element
 		 * (zend_native_zval_is_long()), tested in memory. */
@@ -12575,7 +12575,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			static_cast<int32_t>(value_offset) + type_offset));
 		ASM(MOV64rm, payload_reg, FE_MEM(value_base, 0, FE_NOREG,
 			static_cast<int32_t>(value_offset)));
-		const zend_tpde_plan *value_plan = adaptor->plan();
+		const zend_tpde_plan *value_plan = ir().plan();
 		const bool counted_literal = value_literal
 			&& (value_plan->source_literals == nullptr
 				|| operation.auxiliary.index
@@ -12713,25 +12713,25 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 	const auto successors = adaptor->guarded_successors_of(node);
 	const IRValueRef key_value = node.operands[0];
 	const zend_tpde_machine_value_kind key_kind =
-		adaptor->machine_kind(key_value);
+		ir().machine_kind(key_value);
 	const bool key_long = key_kind == ZEND_TPDE_MACHINE_VALUE_I64
-		&& adaptor->exact_type(key_value) == ZEND_MIR_SCALAR_TYPE_I64
-		&& adaptor->representation(key_value)
+		&& ir().exact_type(key_value) == ZEND_MIR_SCALAR_TYPE_I64
+		&& ir().representation(key_value)
 			== ZEND_MIR_REPRESENTATION_I64;
 	const bool key_string =
 		key_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
 	const bool key_boxed = key_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-		&& adaptor->representation(key_value)
+		&& ir().representation(key_value)
 			== ZEND_MIR_REPRESENTATION_ZVAL
 		&& val_parts(key_value).count() == 2;
 	const bool result_long =
-		adaptor->machine_kind(node.result) == ZEND_TPDE_MACHINE_VALUE_I64
-		&& adaptor->exact_type(node.result) == ZEND_MIR_SCALAR_TYPE_I64
-		&& adaptor->representation(node.result)
+		ir().machine_kind(node.result) == ZEND_TPDE_MACHINE_VALUE_I64
+		&& ir().exact_type(node.result) == ZEND_MIR_SCALAR_TYPE_I64
+		&& ir().representation(node.result)
 			== ZEND_MIR_REPRESENTATION_I64;
-	const bool result_boxed = adaptor->machine_kind(node.result)
+	const bool result_boxed = ir().machine_kind(node.result)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-		&& adaptor->representation(node.result)
+		&& ir().representation(node.result)
 			== ZEND_MIR_REPRESENTATION_ZVAL
 		&& val_parts(node.result).count() == 2;
 	/* A temporary key is consumed by the read: only an integer, which
@@ -12746,11 +12746,11 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 	}
 	const bool register_receiver = node.operands.size() > 1
 		&& node.machine_reference_operand_index != 1
-		&& (adaptor->machine_kind(node.operands[1])
+		&& (ir().machine_kind(node.operands[1])
 				== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| (adaptor->machine_kind(node.operands[1])
+			|| (ir().machine_kind(node.operands[1])
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& adaptor->representation(node.operands[1])
+				&& ir().representation(node.operands[1])
 					== ZEND_MIR_REPRESENTATION_ZVAL
 				&& val_parts(node.operands[1]).count() == 2));
 	if (!register_receiver && layout.container_literal
@@ -12790,7 +12790,7 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 	ValuePart table{tpde::x64::PlatformConfig::GP_BANK, 8};
 	if (register_receiver) {
 		auto receiver = val_ref(node.operands[1]);
-		if (adaptor->machine_kind(node.operands[1])
+		if (ir().machine_kind(node.operands[1])
 				== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR) {
 			mov(table.alloc_reg(this), receiver.part(0).load_to_reg(), 8);
 		} else {
@@ -12957,7 +12957,7 @@ bool ZendCompilerX64::fused_into_branch_placeholder(InstContext &ctx) {
 				|| operand == IRValueRef{
 					Adaptor::EXECUTION_CONTEXT_ARGUMENT}
 			? ZEND_MIR_ID_INVALID
-			: adaptor->canonical_storage(operand);
+			: ir().canonical_storage(operand);
 		if (zend_mir_id_is_valid(storage)
 				&& (storage == compare_operation.op1_storage_id
 					|| storage
@@ -13133,7 +13133,7 @@ int ZendCompilerX64::identical_literal(InstContext &ctx) {
 		&& node.materialization_count == 0
 		&& node.operands[2] == IRValueRef{Adaptor::FRAME_VALUE}
 		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-		&& adaptor->machine_kind(node.operands[0])
+		&& ir().machine_kind(node.operands[0])
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 		&& val_parts(node.operands[0]).count() == 2;
 	if (!register_temporary) {
@@ -13186,18 +13186,18 @@ int ZendCompilerX64::identical_literal(InstContext &ctx) {
 	 * payload; an undefined or referenced operand takes the cold
 	 * block. */
 	const zval *known_literal = !variable_other
-			&& adaptor->plan()->source_literals != nullptr
+			&& ir().plan()->source_literals != nullptr
 			&& operation.op2.index
-				< adaptor->plan()->source_literal_count
-		? &adaptor->plan()->source_literals[operation.op2.index]
+				< ir().plan()->source_literal_count
+		? &ir().plan()->source_literals[operation.op2.index]
 		: nullptr;
 	const bool typed_literal = known_literal != nullptr
 		&& (Z_TYPE_P(known_literal) <= IS_TRUE
 			|| Z_TYPE_P(known_literal) == IS_LONG)
 		&& Z_TYPE_P(known_literal) != IS_UNDEF;
 	if (typed_literal) {
-		const uint32_t may_be = adaptor->plan()->source_opcodes != nullptr
-			? adaptor->plan()->source_opcodes[
+		const uint32_t may_be = ir().plan()->source_opcodes != nullptr
+			? ir().plan()->source_opcodes[
 				operation.source_position_id].op1_may_be
 			: UINT32_MAX;
 		ScratchReg match{this};
@@ -13513,7 +13513,7 @@ int ZendCompilerX64::copy_literal(InstContext &ctx) {
 					!= ZEND_MIR_SOURCE_SLOT_VAR)
 			|| !zend_mir_id_is_valid(operation.result_storage_id)
 			|| (node.has_result
-				&& (adaptor->machine_kind(node.result)
+				&& (ir().machine_kind(node.result)
 						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 					|| val_parts(node.result).count() != 2))
 			|| unlocked_gp_registers() < 6) {
@@ -13763,13 +13763,13 @@ bool ZendCompilerX64::append_packed_array(InstContext &ctx) {
 	const auto successors = adaptor->guarded_successors_of(node);
 	const bool scalar_value =
 		node.packed_append_value_operand_index < node.operands.size()
-		&& adaptor->representation(node.operands[
+		&& ir().representation(node.operands[
 			node.packed_append_value_operand_index])
 			== ZEND_MIR_REPRESENTATION_I64
-		&& adaptor->exact_type(node.operands[
+		&& ir().exact_type(node.operands[
 			node.packed_append_value_operand_index])
 			== ZEND_MIR_SCALAR_TYPE_I64
-		&& adaptor->machine_kind(node.operands[
+		&& ir().machine_kind(node.operands[
 			node.packed_append_value_operand_index])
 			== ZEND_TPDE_MACHINE_VALUE_I64;
 	auto slow = text_writer.label_create();
@@ -13959,9 +13959,9 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 			&& node.has_result
 			&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
 			&& node.operands.size() == 2
-			&& adaptor->exact_type(node.operands[0])
+			&& ir().exact_type(node.operands[0])
 				== ZEND_MIR_SCALAR_TYPE_I1
-			&& adaptor->machine_kind(node.operands[0])
+			&& ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_BOOL
 			&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
 		if (register_boolean) {
@@ -14118,7 +14118,7 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 	const bool frame_only = node.operands.size() == 1
 		&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE};
 	const bool register_string = node.operands.size() == 2
-		&& adaptor->machine_kind(node.operands[0])
+		&& ir().machine_kind(node.operands[0])
 			== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 		&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
 	const bool normal_register_string = register_string
@@ -14144,7 +14144,7 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
 		uint64_t known_length = 0;
-		if (adaptor->known_string_literal(
+		if (ir().known_string_literal(
 				node.operands[0], &known_length, nullptr)) {
 			ASM(MOV64ri, result_reg, known_length);
 		} else {
@@ -14210,7 +14210,7 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
 		uint64_t known_length = 0;
-		if (adaptor->known_string_literal(
+		if (ir().known_string_literal(
 				node.operands[0], &known_length, nullptr)) {
 			ASM(MOV64ri, result_reg, known_length);
 		} else {
@@ -14297,11 +14297,11 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 	const bool framed_layout =
 		zend_tpde_long_binary_at(mir, &layout);
 	auto register_long_operand = [&](IRValueRef operand) {
-		return adaptor->exact_type(operand)
+		return ir().exact_type(operand)
 					== ZEND_MIR_SCALAR_TYPE_I64
-			|| (adaptor->exact_type(operand)
+			|| (ir().exact_type(operand)
 					== ZEND_MIR_SCALAR_TYPE_NONE
-				&& adaptor->machine_kind(operand)
+				&& ir().machine_kind(operand)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 	};
 	const bool register_layout =
@@ -14358,33 +14358,33 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 		 * overflow continues in double. A typed body emits it without a
 		 * guarded diamond; in a Zend entry its cold edge is dead. */
 		const bool proven =
-			zend_tpde_numeric_binary_proven(adaptor->plan(), mir);
+			zend_tpde_numeric_binary_proven(ir().plan(), mir);
 		const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
 		if ((!arithmetic && !comparison && !integer_op)
-				|| (!guarded && !(proven && adaptor->typed_body()))
+				|| (!guarded && !(proven && ir().typed_body()))
 				|| !mir.has_value_operation
 				|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
 			return -1;
 		}
 		/* The plan keeps the result of two longs an exact long only where
 		 * Zend's range inference excludes overflow. */
-		if (adaptor->typed_body() && !guarded && arithmetic
+		if (ir().typed_body() && !guarded && arithmetic
 				&& opcode != ZEND_DIV && node.has_result
 				&& node.operands.size() == 2
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_I64) {
 			ScratchReg left_value{this};
 			ScratchReg right_value{this};
 			auto left_reg = left_value.alloc_gp();
 			auto right_reg = right_value.alloc_gp();
 			auto load_long = [&](IRValueRef operand, AsmReg target) {
-				if (adaptor->machine_kind(operand)
+				if (ir().machine_kind(operand)
 						== ZEND_TPDE_MACHINE_VALUE_I64) {
 					auto [value_ref, value] = val_ref_single(operand);
 					ASM(MOV64rr, target, value.load_to_reg());
 					return true;
 				}
-				if (adaptor->machine_kind(operand)
+				if (ir().machine_kind(operand)
 						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 					return false;
 				}
@@ -14429,13 +14429,13 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 		 * operand.
 		 */
 		const bool register_operands = register_layout
-			|| (adaptor->typed_body() && !guarded
+			|| (ir().typed_body() && !guarded
 				&& node.has_result && node.operands.size() == 2
 				&& register_long_operand(node.operands[0])
 				&& register_long_operand(node.operands[1]));
 		if (register_operands) {
 			const zend_tpde_machine_value_kind kind = node.has_result
-				? adaptor->machine_kind(node.result)
+				? ir().machine_kind(node.result)
 				: ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 			if (!(opcode == ZEND_MUL || opcode == ZEND_DIV
 					|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
@@ -14445,12 +14445,12 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 			}
 			for (uint32_t index = 0; index < 2; ++index) {
 				const IRValueRef operand = node.operands[index];
-				if (!(adaptor->machine_kind(operand)
+				if (!(ir().machine_kind(operand)
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 						&& val_parts(operand).count() == 2)
-						&& !(adaptor->machine_kind(operand)
+						&& !(ir().machine_kind(operand)
 								== ZEND_TPDE_MACHINE_VALUE_I64
-							&& adaptor->exact_type(operand)
+							&& ir().exact_type(operand)
 								== ZEND_MIR_SCALAR_TYPE_I64)) {
 					return -1;
 				}
@@ -14515,7 +14515,7 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 		/* A typed body has no frame; its result lives in registers. */
 		const bool result_slot =
 			zend_mir_id_is_valid(operation.result_storage_id)
-			&& !adaptor->typed_body();
+			&& !ir().typed_body();
 		/* A CV result only replaces a non-refcounted value: OPcache
 		 * contracts ASSIGN into it only then, and an aliased input was
 		 * just checked to be numeric. A temporary never aliases input. */
@@ -14534,7 +14534,7 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 		const int32_t result_offset =
 			static_cast<int32_t>(result_offset64);
 		const zend_tpde_machine_value_kind result_kind = node.has_result
-			? adaptor->machine_kind(node.result)
+			? ir().machine_kind(node.result)
 			: ZEND_TPDE_MACHINE_VALUE_I64;
 		if (node.has_result
 				&& result_kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
@@ -14563,9 +14563,9 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 		uint8_t right_known = IS_UNDEF;
 		if (!register_operands
 				&& operation.source_position_id
-					< adaptor->plan()->source_opcode_count) {
+					< ir().plan()->source_opcode_count) {
 			const zend_tpde_source_opcode &source =
-				adaptor->plan()->source_opcodes[
+				ir().plan()->source_opcodes[
 					operation.source_position_id];
 			if (source.opcode == opcode) {
 				left_known = source.op1_known_type;
@@ -14757,7 +14757,7 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 				zend_mir_storage_id storage) {
 			if (operand.reg) {
 				const IRValueRef source = node.operands[operand.index];
-				if (adaptor->machine_kind(source)
+				if (ir().machine_kind(source)
 						== ZEND_TPDE_MACHINE_VALUE_I64) {
 					auto [value_ref, value] = val_ref_single(source);
 					ASM(MOV64rr, value_reg, value.load_to_reg());
@@ -15061,7 +15061,7 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 
 	auto load_register_long =
 		[&](IRValueRef operand, AsmReg target) {
-			if (adaptor->machine_kind(operand)
+			if (ir().machine_kind(operand)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				auto value = val_ref(operand);
 				const ValueParts parts = val_parts(operand);
@@ -15170,7 +15170,7 @@ bool ZendCompilerX64::long_binary(InstContext &ctx) {
 				IS_LONG);
 		}
 	}
-	if (adaptor->machine_kind(node.result)
+	if (ir().machine_kind(node.result)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		auto fast_result = result_ref(node.result);
 		auto payload = fast_result.part(0);
@@ -15237,13 +15237,13 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 	bool left_from_register = false;
 
 		if (node.assign_op_left_operand_index < node.operands.size()
-				&& adaptor->representation(
+				&& ir().representation(
 					node.operands[node.assign_op_left_operand_index])
 					== ZEND_MIR_REPRESENTATION_I64
-				&& adaptor->exact_type(
+				&& ir().exact_type(
 					node.operands[node.assign_op_left_operand_index])
 					== ZEND_MIR_SCALAR_TYPE_I64
-				&& adaptor->machine_kind(
+				&& ir().machine_kind(
 					node.operands[node.assign_op_left_operand_index])
 					== ZEND_TPDE_MACHINE_VALUE_I64) {
 			auto [left_ref, left_value] =
@@ -15252,7 +15252,7 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 			ASM(MOV64rr, left_reg, left_value.load_to_reg());
 			left_from_register = true;
 		} else if (node.assign_op_left_operand_index < node.operands.size()
-				&& adaptor->machine_kind(
+				&& ir().machine_kind(
 					node.operands[node.assign_op_left_operand_index])
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto left_value = val_ref(
@@ -15277,13 +15277,13 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 	}
 
 		if (node.assign_op_right_operand_index < node.operands.size()
-				&& adaptor->representation(
+				&& ir().representation(
 					node.operands[node.assign_op_right_operand_index])
 					== ZEND_MIR_REPRESENTATION_I64
-				&& adaptor->exact_type(
+				&& ir().exact_type(
 					node.operands[node.assign_op_right_operand_index])
 					== ZEND_MIR_SCALAR_TYPE_I64
-				&& adaptor->machine_kind(
+				&& ir().machine_kind(
 					node.operands[node.assign_op_right_operand_index])
 					== ZEND_TPDE_MACHINE_VALUE_I64) {
 			auto [right_ref, right_value] =
@@ -15291,7 +15291,7 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 					node.operands[node.assign_op_right_operand_index]);
 			ASM(MOV64rr, right_reg, right_value.load_to_reg());
 		} else if (node.assign_op_right_operand_index < node.operands.size()
-				&& adaptor->machine_kind(
+				&& ir().machine_kind(
 					node.operands[node.assign_op_right_operand_index])
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto right_value = val_ref(
@@ -15364,14 +15364,14 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 			return false;
 	}
 	if (node.mutation_result) {
-		if (adaptor->machine_kind(node.result)
+		if (ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
 			auto [result_ref, result] =
 				result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
 			ASM(MOV64rr, result_reg, left_reg);
 			result.set_modified();
-		} else if (adaptor->machine_kind(node.result)
+		} else if (ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto result = result_ref(node.result);
 			const ValueParts parts = val_parts(node.result);
@@ -15479,29 +15479,29 @@ bool ZendCompilerX64::long_incdec(InstContext &ctx) {
 		node.mutation_result && mir.mutation_lazy_scalar
 		&& !node.operands.empty()
 		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-		&& ((adaptor->representation(node.operands[0])
+		&& ((ir().representation(node.operands[0])
 					== ZEND_MIR_REPRESENTATION_I64
-				&& adaptor->exact_type(node.operands[0])
+				&& ir().exact_type(node.operands[0])
 					== ZEND_MIR_SCALAR_TYPE_I64
-				&& adaptor->machine_kind(node.operands[0])
+				&& ir().machine_kind(node.operands[0])
 					== ZEND_TPDE_MACHINE_VALUE_I64)
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 
 	if (!node.operands.empty()
 			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-			&& adaptor->representation(node.operands[0])
+			&& ir().representation(node.operands[0])
 				== ZEND_MIR_REPRESENTATION_I64
-			&& adaptor->exact_type(node.operands[0])
+			&& ir().exact_type(node.operands[0])
 				== ZEND_MIR_SCALAR_TYPE_I64
-			&& adaptor->machine_kind(node.operands[0])
+			&& ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
 		auto [operand_ref, operand] =
 			val_ref_single(node.operands[0]);
 		ASM(MOV64rr, value_reg, operand.load_to_reg());
 	} else if (!node.operands.empty()
 			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-			&& adaptor->machine_kind(node.operands[0])
+			&& ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		auto operand = val_ref(node.operands[0]);
 		auto payload = operand.part(0);
@@ -15630,14 +15630,14 @@ bool ZendCompilerX64::long_incdec(InstContext &ctx) {
 		}
 	}
 	if (node.mutation_result) {
-		if (adaptor->machine_kind(node.result)
+		if (ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
 			auto [result_ref, result] =
 				result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
 			ASM(MOV64rr, result_reg, value_reg);
 			result.set_modified();
-		} else if (adaptor->machine_kind(node.result)
+		} else if (ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto result = result_ref(node.result);
 			const ValueParts parts = val_parts(node.result);
@@ -15768,7 +15768,7 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 		const IRValueRef operand = has_scalar_operand
 			? node.operands[0] : IRValueRef{Adaptor::FRAME_VALUE};
 		const zend_mir_scalar_type_mask type = has_scalar_operand
-			? adaptor->exact_type(operand) : node.exact_type;
+			? ir().exact_type(operand) : node.exact_type;
 		if (type == ZEND_MIR_SCALAR_TYPE_NULL
 				|| type == ZEND_MIR_SCALAR_TYPE_I1
 				|| type == ZEND_MIR_SCALAR_TYPE_I64) {
@@ -16021,9 +16021,9 @@ bool ZendCompilerX64::object_property_read(InstContext &ctx) {
 	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	const zend_tpde_machine_value_kind result_kind = frame_result
 		? ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-		: adaptor->machine_kind(node.result);
+		: ir().machine_kind(node.result);
 	const zend_mir_scalar_type_mask exact = frame_result
-		? ZEND_MIR_SCALAR_TYPE_NONE : adaptor->exact_type(node.result);
+		? ZEND_MIR_SCALAR_TYPE_NONE : ir().exact_type(node.result);
 	const bool boxed = result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 	const bool pointer = result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 		|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
@@ -16249,10 +16249,10 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 	const bool scalar_value =
 		node.property_write_value_operand_index != UINT32_MAX
 		&& node.property_write_value_operand_index < node.operands.size()
-		&& adaptor->machine_kind(node.operands[
+		&& ir().machine_kind(node.operands[
 			node.property_write_value_operand_index])
 			== ZEND_TPDE_MACHINE_VALUE_I64
-		&& adaptor->exact_type(node.operands[
+		&& ir().exact_type(node.operands[
 			node.property_write_value_operand_index])
 			== ZEND_MIR_SCALAR_TYPE_I64;
 	const auto successors = adaptor->guarded_successors_of(node);
@@ -16936,11 +16936,11 @@ bool ZendCompilerX64::dynamic_fetch_read(InstContext &ctx) {
 		const uint64_t value_offset =
 			frame_slot_offset(layout.cv_index);
 		if (value_offset > INT32_MAX - sizeof(zval)
-				|| adaptor->representation(node.result)
+				|| ir().representation(node.result)
 					!= ZEND_MIR_REPRESENTATION_I64
-				|| adaptor->exact_type(node.result)
+				|| ir().exact_type(node.result)
 					!= ZEND_MIR_SCALAR_TYPE_I64
-				|| adaptor->machine_kind(node.result)
+				|| ir().machine_kind(node.result)
 					!= ZEND_TPDE_MACHINE_VALUE_I64) {
 			return false;
 		}
@@ -17010,7 +17010,7 @@ bool ZendCompilerX64::dynamic_fetch_read(InstContext &ctx) {
 	generate_raw_jump(Jump::je, slow);
 
 	ASM(MOV32ri, decision_reg, 0);
-	if (adaptor->machine_kind(node.result)
+	if (ir().machine_kind(node.result)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		auto result = result_ref(node.result);
 		auto payload = result.part(0);
@@ -17034,7 +17034,7 @@ bool ZendCompilerX64::dynamic_fetch_read(InstContext &ctx) {
 		auto [result_ref, result] =
 			result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
-		switch (adaptor->exact_type(node.result)) {
+		switch (ir().exact_type(node.result)) {
 			case ZEND_MIR_SCALAR_TYPE_I1:
 				ASM(CMP32ri, type_reg, IS_TRUE);
 				generate_raw_set(Jump::je, result_reg);
@@ -17048,7 +17048,7 @@ bool ZendCompilerX64::dynamic_fetch_read(InstContext &ctx) {
 					FE_MEM(slot_reg, 0, FE_NOREG, 0));
 				break;
 			default:
-				switch (adaptor->machine_kind(node.result)) {
+				switch (ir().machine_kind(node.result)) {
 					case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
 					case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
 					case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
@@ -17093,7 +17093,7 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 			continue;
 		}
 		if (!materialize_cold_operand(ctx,
-				operand, adaptor->canonical_storage(operand))) {
+				operand, ir().canonical_storage(operand))) {
 			return false;
 		}
 	}
@@ -17161,7 +17161,7 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 			/* A literal key or value has a compile-time type (and an
 			 * integer one its value): only the arm it can take is
 			 * emitted. */
-			const zend_tpde_plan *dim_plan = adaptor->plan();
+			const zend_tpde_plan *dim_plan = ir().plan();
 			auto literal_at = [&](bool literal, int32_t offset)
 					-> const zval * {
 				const uint32_t index =
@@ -17478,7 +17478,7 @@ bool ZendCompilerX64::compile_object_dynamic(InstContext &ctx) {
 	const zend_tpde_instruction &mir = *ctx.mir;
 	const zend_mir_instruction_record &record = ctx.record;
 	if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
-			&& mir.fused_into_branch && !adaptor->typed_body()) {
+			&& mir.fused_into_branch && !ir().typed_body()) {
 		return fused_into_branch_placeholder(ctx);
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
@@ -17554,7 +17554,7 @@ bool ZendCompilerX64::compile_func_num_args(InstContext &ctx) {
 			static_cast<int32_t>(
 				result_offset + offsetof(zval, u1.type_info))),
 		IS_LONG);
-	if (adaptor->machine_kind(node.result)
+	if (ir().machine_kind(node.result)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		auto result = result_ref(node.result);
 		auto payload = result.part(0);
@@ -17581,12 +17581,12 @@ bool ZendCompilerX64::compile_value_multi_branch(InstContext &ctx) {
 	const zend_mir_instruction_record &record = ctx.record;
 	zend_tpde_multi_branch layout;
 	if (!zend_tpde_multi_branch_at(
-				adaptor->plan(), mir, record, &layout)
+				ir().plan(), mir, record, &layout)
 			|| node.operands.size() != 1
 			|| layout.operand_offset > INT32_MAX) {
 		return false;
 	}
-	const zend_tpde_plan *plan = adaptor->plan();
+	const zend_tpde_plan *plan = ir().plan();
 	std::vector<IRBlockRef> targets;
 	std::vector<tpde::Label> case_labels;
 	targets.reserve(layout.successor_count);
@@ -17701,9 +17701,9 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 	const bool fused = record.opcode
 			== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 		&& mir.fused_compare_plus_one != 0
-		&& !adaptor->typed_body()
+		&& !ir().typed_body()
 		&& mir.fused_compare_plus_one
-			<= adaptor->plan()->instruction_count;
+			<= ir().plan()->instruction_count;
 	/* A fused operation's register result is a placeholder. */
 	const bool register_machine_condition =
 		record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
@@ -17711,19 +17711,19 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 		&& node.operands.size() == 1
 		&& node.operands[0]
 			!= IRValueRef{Adaptor::FRAME_VALUE}
-		&& (adaptor->machine_kind(node.operands[0])
+		&& (ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_BOOL
-			|| adaptor->machine_kind(node.operands[0])
+			|| ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_I64);
 	const bool register_boxed_condition =
 		record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 		&& node.operands.size() == 2
 		&& node.operands[0]
 			== IRValueRef{Adaptor::FRAME_VALUE}
-		&& adaptor->machine_kind(node.operands[1])
+		&& ir().machine_kind(node.operands[1])
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 	const zend_tpde_instruction *fused_compare = fused
-		? &adaptor->plan()->instructions[
+		? &ir().plan()->instructions[
 			mir.fused_compare_plus_one - 1]
 		: nullptr;
 	const bool register_condition =
@@ -17907,11 +17907,11 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 				&& layout.key_offset <= INT32_MAX
 				&& (!layout.has_key || !node.has_result)) {
 			if (node.has_result
-					&& !((adaptor->machine_kind(node.result)
+					&& !((ir().machine_kind(node.result)
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 						&& val_parts(node.result).count() == 2)
 						|| (layout.destination_scalar_only
-							&& adaptor->machine_kind(node.result)
+							&& ir().machine_kind(node.result)
 								== ZEND_TPDE_MACHINE_VALUE_I64
 							&& val_parts(node.result).count() == 1))) {
 				return false;
@@ -18301,7 +18301,7 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 					&& this->analyzer.liveness_info(
 						adaptor->val_local_idx(node.result)).ref_count
 						> 1) {
-				if (adaptor->machine_kind(node.result)
+				if (ir().machine_kind(node.result)
 						== ZEND_TPDE_MACHINE_VALUE_I64) {
 					auto [result_ref, result] =
 						result_ref_single(node.result);
@@ -18738,10 +18738,10 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 				const uint32_t condition_position =
 					mir.value_operation.source_position_id;
 				const bool known_bool = !layout.has_result
-					&& adaptor->plan()->source_opcodes != nullptr
+					&& ir().plan()->source_opcodes != nullptr
 					&& condition_position
-						< adaptor->plan()->source_opcode_count
-					&& adaptor->plan()->source_opcodes[
+						< ir().plan()->source_opcode_count
+					&& ir().plan()->source_opcodes[
 							condition_position].op1_known_type
 						== ZEND_TPDE_KNOWN_BOOL;
 				if (known_bool) {
@@ -19109,22 +19109,22 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 		const uint64_t frame_offset =
 			frame_slot_offset(storage);
 		const bool scalar_result =
-			(adaptor->representation(node.result)
+			(ir().representation(node.result)
 					== ZEND_MIR_REPRESENTATION_I64
-				&& adaptor->exact_type(node.result)
+				&& ir().exact_type(node.result)
 					== ZEND_MIR_SCALAR_TYPE_I64
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_I64)
-			|| (adaptor->representation(node.result)
+			|| (ir().representation(node.result)
 					== ZEND_MIR_REPRESENTATION_I1
-				&& adaptor->exact_type(node.result)
+				&& ir().exact_type(node.result)
 					== ZEND_MIR_SCALAR_TYPE_I1
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_BOOL);
 		const zend_tpde_machine_value_kind result_kind =
-			adaptor->machine_kind(node.result);
+			ir().machine_kind(node.result);
 		const bool pointer_result =
-			adaptor->representation(node.result)
+			ir().representation(node.result)
 					== ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
 			&& (result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 				|| result_kind
@@ -19155,7 +19155,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 	const IRInstRef instruction = ctx.instruction;
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &call =
-		adaptor->mir_instruction(instruction);
+		ir().mir_instruction(instruction);
 	if (call.direct_call != nullptr) {
 		const bool local_component_call =
 			call.component_target_index != UINT32_MAX;
@@ -19174,7 +19174,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 		const bool private_inline_body = leaf_scalar_frame;
 		const uint32_t typed_body_function =
 			local_component_call
-				&& adaptor->typed_component_call(instruction)
+				&& ir().typed_component_call(instruction)
 				? call.component_body_function_index
 				: UINT32_MAX;
 		const bool result_unused =
@@ -19185,7 +19185,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 			|| (call.direct_call->flags
 				& ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED) != 0;
 		const uint32_t argument_count = call.call_argument_count;
-		if (adaptor->typed_body()
+		if (ir().typed_body()
 				&& typed_body_function != UINT32_MAX) {
 			if (typed_body_function >= this->func_syms.size()
 					|| node.operands.size() != argument_count) {
@@ -19220,7 +19220,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 			[&](uint32_t variable_index) {
 				return variable_index < owned_argument_variable_count
 					|| !local_component_call
-					|| adaptor->component_compiled_variable_used(
+					|| ir().component_compiled_variable_used(
 						call.component_target_index,
 						variable_index);
 			};
@@ -19249,7 +19249,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 			static_cast<int32_t>((ZEND_CALL_FRAME_SLOT
 				+ (call.direct_call->result_operand.slot_kind
 						== ZEND_MIR_SOURCE_SLOT_CV ? 0
-					: adaptor->plan()->source_frame_variable_count)
+					: ir().plan()->source_frame_variable_count)
 				+ call.direct_call->result_operand.index)
 				* sizeof(zval));
 		/* A frame register the caller holds addresses the result
@@ -19267,7 +19267,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 						result_frame_reg, 0, FE_NOREG, slot));
 					slot = 0;
 				}
-				if (adaptor->machine_kind(node.result)
+				if (ir().machine_kind(node.result)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 					auto result = result_ref(node.result);
 					const ValueParts parts = val_parts(node.result);
@@ -19303,7 +19303,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 							== tpde::x64::PlatformConfig::FP_BANK) {
 						ASM(SSE_MOVSDrm, result_reg,
 							FE_MEM(result_slot_reg, 0, FE_NOREG, slot));
-					} else if (adaptor->exact_type(node.result)
+					} else if (ir().exact_type(node.result)
 							== ZEND_MIR_SCALAR_TYPE_I1) {
 						/*
 						 * A bool zval carries its value in the type;
@@ -19374,7 +19374,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 				return false;
 			}
 			const auto checked_steps =
-				adaptor->inlined_checked_steps(node);
+				ir().inlined_checked_steps(node);
 			const uint32_t inline_operand_count =
 				checked_steps.empty()
 					? 1 : node.inlined_checked_operand_count;
@@ -19555,7 +19555,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 		}
 		if (typed_body_call) {
 			const zend_tpde_plan *body_plan =
-				adaptor->component_plan(
+				ir().component_plan(
 					call.component_target_index);
 			if (body_plan == nullptr
 					|| body_plan->argument_count != argument_count
@@ -19579,9 +19579,9 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 			 */
 			for (uint32_t operand = argument_count;
 					operand < node.operands.size(); ++operand) {
-				if (adaptor->machine_kind(node.operands[operand])
+				if (ir().machine_kind(node.operands[operand])
 						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						|| adaptor->ownership(node.operands[operand])
+						|| ir().ownership(node.operands[operand])
 							!= ZEND_MIR_OWNERSHIP_STATE_OWNED) {
 					return false;
 				}
@@ -19714,7 +19714,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 						index < argument_count; ++index) {
 					zend_mir_call_argument_ref source_argument;
 					if (!zend_tpde_call_argument_at(
-							adaptor->plan(),
+							ir().plan(),
 							call.call_argument_offset + index,
 							&source_argument)) {
 						return false;
@@ -19730,12 +19730,12 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 						&descriptor_argument =
 							call.direct_call->arguments[index];
 					if (source_argument.send_opline_index
-							>= adaptor->plan()
+							>= ir().plan()
 								->source_opcode_count) {
 						return false;
 					}
 					const uint8_t source_argument_type =
-						adaptor->plan()->source_opcodes[
+						ir().plan()->source_opcodes[
 							source_argument.send_opline_index]
 								.op1_type;
 					const bool copy_argument =
@@ -19828,11 +19828,11 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 								source_frame_reg, source_offset,
 								low_word_reg, high_word_reg);
 						}
-					} else if (adaptor->machine_kind(
+					} else if (ir().machine_kind(
 							node.operands[index])
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-							&& adaptor
-								->machine_value_is_register_authoritative(
+							&& ir()
+								.machine_value_is_register_authoritative(
 									node.operands[index])) {
 						auto low_word =
 							std::move(argument).into_scratch();
@@ -20269,9 +20269,9 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 					const bool register_boxed_argument =
 						node.operands[index]
 							!= IRValueRef{Adaptor::FRAME_VALUE}
-						&& adaptor->machine_kind(node.operands[index])
+						&& ir().machine_kind(node.operands[index])
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						&& adaptor->machine_value_is_register_authoritative(
+						&& ir().machine_value_is_register_authoritative(
 							node.operands[index])
 						&& val_assignment(adaptor->val_local_idx(
 							node.operands[index])) != nullptr;
@@ -20615,7 +20615,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 
 			for (uint32_t index = 0; index < argument_count; ++index) {
 				zend_mir_call_argument_ref source_argument;
-				if (!zend_tpde_call_argument_at(adaptor->plan(),
+				if (!zend_tpde_call_argument_at(ir().plan(),
 						call.call_argument_offset + index,
 						&source_argument)) {
 					return false;
@@ -20626,11 +20626,11 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 				const zend_native_direct_call_argument &descriptor_argument =
 					call.direct_call->arguments[index];
 				if (source_argument.send_opline_index
-						>= adaptor->plan()->source_opcode_count) {
+						>= ir().plan()->source_opcode_count) {
 					return false;
 				}
 				const uint8_t source_argument_type =
-					adaptor->plan()->source_opcodes[
+					ir().plan()->source_opcodes[
 						source_argument.send_opline_index].op1_type;
 				const bool copy_argument =
 					source_argument_type == IS_CV
@@ -20645,9 +20645,9 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 					(ZEND_CALL_FRAME_SLOT + frame_slot)
 						* sizeof(zval));
 				const zend_tpde_machine_value_kind argument_kind =
-					adaptor->machine_kind(node.operands[index]);
+					ir().machine_kind(node.operands[index]);
 				const bool register_pointer_argument =
-					adaptor->machine_value_is_register_authoritative(
+					ir().machine_value_is_register_authoritative(
 						node.operands[index])
 					&& (argument_kind
 							== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
@@ -20746,11 +20746,11 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 							== ZEND_MIR_SOURCE_OPERAND_LITERAL
 						&& node.operands[frame_operand]
 							== IRValueRef{Adaptor::FRAME_VALUE}
-						&& adaptor->plan()->source_literals != nullptr
+						&& ir().plan()->source_literals != nullptr
 						&& descriptor_argument.source_operand.index
-							< adaptor->plan()->source_literal_count
+							< ir().plan()->source_literal_count
 						&& store_scalar_literal(callee_reg, offset,
-							&adaptor->plan()->source_literals[
+							&ir().plan()->source_literals[
 								descriptor_argument.source_operand.index])) {
 						/* Stored with immediates. */
 					} else if (descriptor_argument.source_operand.kind
@@ -20817,11 +20817,11 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 										+ offsetof(zval, u1.type_info))),
 								IS_UNDEF);
 						}
-					} else if (adaptor->machine_kind(
+					} else if (ir().machine_kind(
 							node.operands[index])
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-							&& adaptor
-								->machine_value_is_register_authoritative(
+							&& ir()
+								.machine_value_is_register_authoritative(
 									node.operands[index])) {
 						auto low_word =
 							std::move(argument).into_scratch();
@@ -21700,7 +21700,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 			label_place(successful);
 			finish_generated_result();
 		} else if (node.has_result
-				&& adaptor->machine_kind(node.result)
+				&& ir().machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			payload.reset(this);
 			auto [result_frame_ref, result_frame] =
@@ -21754,7 +21754,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 			add_const_arg(result_builder,
 				encode_source_operand(call.call_site->result_operand), 8);
 		add_const_arg(result_builder,
-			static_cast<uint32_t>(adaptor->exact_type(node.result)), 4);
+			static_cast<uint32_t>(ir().exact_type(node.result)), 4);
 		result_builder.call(runtime_symbol(ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR));
 		ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
 		result_builder.add_ret(payload, tpde::CCAssignment{});
@@ -21767,7 +21767,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 	const IRInstRef instruction = ctx.instruction;
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &call =
-		adaptor->mir_instruction(instruction);
+		ir().mir_instruction(instruction);
 	/*
 	 * A positional by-value SEND of a CV, temporary or literal in its
 	 * frame slot moves into ZEND_CALL_ARG(call, n) directly while the
@@ -21795,7 +21795,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 			? static_cast<uint64_t>(source.index) * sizeof(zval)
 			: (uint64_t{ZEND_CALL_FRAME_SLOT} + source.index
 				+ (from_tmp ? uint64_t{
-					adaptor->plan()->source_frame_variable_count} : 0))
+					ir().plan()->source_frame_variable_count} : 0))
 				* sizeof(zval);
 		const uint64_t target_offset =
 			(uint64_t{ZEND_CALL_FRAME_SLOT} + number - 1) * sizeof(zval);
@@ -21809,7 +21809,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 				|| !(from_cv || from_tmp || from_literal)
 				|| number == 0 || number > 32
 				|| (from_tmp && source.index
-					>= adaptor->plan()->source_temporary_count)
+					>= ir().plan()->source_temporary_count)
 				|| source_offset > INT32_MAX - sizeof(zval)
 				|| target_offset > INT32_MAX - sizeof(zval)) {
 			return false;
@@ -22125,9 +22125,9 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 			 * argument helper instead of through its frame slot. */
 			const bool direct_boxed_argument =
 				operand != IRValueRef{Adaptor::FRAME_VALUE}
-				&& adaptor->machine_kind(operand)
+				&& ir().machine_kind(operand)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& adaptor->machine_value_is_register_authoritative(
+				&& ir().machine_value_is_register_authoritative(
 					operand)
 				&& (argument.source_opcode == ZEND_SEND_VAL
 					|| argument.source_opcode == ZEND_SEND_VAL_EX);
@@ -22158,11 +22158,11 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 						: argument.ordinal + 1;
 				const zend_mir_scalar_type_mask exact =
 					operand != IRValueRef{Adaptor::FRAME_VALUE}
-						? adaptor->exact_type(operand)
+						? ir().exact_type(operand)
 						: ZEND_MIR_SCALAR_TYPE_NONE;
 				const bool scalar = operand
 						!= IRValueRef{Adaptor::FRAME_VALUE}
-					&& adaptor->machine_kind(operand)
+					&& ir().machine_kind(operand)
 						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 					&& (exact == ZEND_MIR_SCALAR_TYPE_I64
 						|| exact == ZEND_MIR_SCALAR_TYPE_I1
@@ -22232,7 +22232,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
 			if (operand != IRValueRef{Adaptor::FRAME_VALUE}
-					&& adaptor->machine_kind(operand)
+					&& ir().machine_kind(operand)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 					&& !direct_boxed_argument) {
 				const zend_mir_source_operand_ref &source =
@@ -22243,12 +22243,12 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 						|| (source.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
 							&& source.slot_kind
 								!= ZEND_MIR_SOURCE_SLOT_VAR)
-						|| source.index >= adaptor->plan()
+						|| source.index >= ir().plan()
 							->source_temporary_count) {
 					return false;
 				}
 				const uint64_t storage = static_cast<uint64_t>(
-					adaptor->plan()->source_frame_variable_count)
+					ir().plan()->source_frame_variable_count)
 					+ source.index;
 				const uint64_t offset =
 					frame_slot_offset(storage);
@@ -22303,7 +22303,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 					ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_SOURCE_ARGUMENT));
 				continue;
 			}
-			if (adaptor->machine_kind(operand)
+			if (ir().machine_kind(operand)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				builder.add_arg(image_symbol_value(
 					ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR,
@@ -22318,13 +22318,13 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 				call.record.id, &assigner), tpde::CCAssignment{});
 			add_const_arg(builder, index, 4);
 			builder.add_arg(CallArg{operand});
-			if (adaptor->exact_type(operand)
+			if (ir().exact_type(operand)
 					== ZEND_MIR_SCALAR_TYPE_F64) {
 				builder.call(runtime_symbol(
 					ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_DOUBLE_ARGUMENT));
 			} else {
 				add_const_arg(builder,
-					static_cast<uint32_t>( adaptor->exact_type(operand)), 4);
+					static_cast<uint32_t>( ir().exact_type(operand)), 4);
 				builder.call(runtime_symbol(
 					ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_INTEGER_ARGUMENT));
 			}
@@ -22341,7 +22341,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 		const uint64_t do_result_offset =
 			plain_internal && !unused_result
 			? (uint64_t{ZEND_CALL_FRAME_SLOT}
-				+ adaptor->plan()->source_frame_variable_count
+				+ ir().plan()->source_frame_variable_count
 				+ internal_descriptor->result_operand.index)
 				* sizeof(zval)
 			: 0;
@@ -22641,7 +22641,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 			add_const_arg(result_builder,
 				encode_source_operand( call.call_site->result_operand), 8);
 			add_const_arg(result_builder,
-				static_cast<uint32_t>( adaptor->exact_type(node.result)), 4);
+				static_cast<uint32_t>( ir().exact_type(node.result)), 4);
 			result_builder.call(runtime_symbol(
 				ZEND_NATIVE_HELPER_CALL_READ_SOURCE_SCALAR));
 			ValuePart payload{
@@ -22683,7 +22683,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 bool ZendCompilerX64::compile_finally_call(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_mir_instruction_record &record = ctx.record;
-	const zend_tpde_plan *plan = adaptor->plan();
+	const zend_tpde_plan *plan = ir().plan();
 	if (plan->source_opcodes == nullptr
 			|| record.source_position_id
 				>= plan->source_opcode_count) {
@@ -22725,7 +22725,7 @@ bool ZendCompilerX64::compile_finally_call(InstContext &ctx) {
 bool ZendCompilerX64::compile_finally_return(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_mir_instruction_record &record = ctx.record;
-	const zend_tpde_plan *plan = adaptor->plan();
+	const zend_tpde_plan *plan = ir().plan();
 	if (plan->source_opcodes == nullptr
 			|| record.source_position_id
 				>= plan->source_opcode_count) {
@@ -22758,7 +22758,7 @@ bool ZendCompilerX64::compile_finally_return(InstContext &ctx) {
 	generate_raw_jump(Jump::je, slow_exception);
 	if (plan->user_opcode_callbacks) {
 		const auto &next_landings =
-			adaptor->user_opcode_next_landings();
+			ir().user_opcode_next_landings();
 		for (uint32_t source = 0;
 				source + 1 < next_landings.size(); ++source) {
 			const uint32_t landing = next_landings[source + 1];
@@ -22862,7 +22862,7 @@ bool ZendCompilerX64::compile_catch_enter(InstContext &ctx) {
 bool ZendCompilerX64::compile_return(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_mir_instruction_record &record = ctx.record;
-	if (adaptor->typed_body()) {
+	if (ir().typed_body()) {
 		if (node.operands.size() != 1) {
 			return false;
 		}
@@ -22926,16 +22926,16 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &mir = *ctx.mir;
 	const zend_mir_instruction_record &record = ctx.record;
-	if (adaptor->typed_body()) {
+	if (ir().typed_body()) {
 		if (node.operands.size() != 1) {
 			return false;
 		}
 		const auto kind =
-			adaptor->machine_kind(node.operands[0]);
+			ir().machine_kind(node.operands[0]);
 		const zend_mir_ownership_state ownership =
-			adaptor->ownership(node.operands[0]);
+			ir().ownership(node.operands[0]);
 		const zend_mir_refcount_state refcount_state =
-			adaptor->refcount_state(node.operands[0]);
+			ir().refcount_state(node.operands[0]);
 		const bool return_addref =
 			ownership == ZEND_MIR_OWNERSHIP_STATE_BORROWED
 			&& refcount_state != ZEND_MIR_REFCOUNT_IMMORTAL;
@@ -22947,11 +22947,11 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 		}
 		/* Read a returned number before reserving the status
 		 * register, so that no live part of it is evicted. */
-		if (adaptor->machine_kind(node.operands[0])
+		if (ir().machine_kind(node.operands[0])
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& (adaptor->plan()->typed_body_return_abi.machine_kind
+				&& (ir().plan()->typed_body_return_abi.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_I64
-					|| adaptor->plan()->typed_body_return_abi
+					|| ir().plan()->typed_body_return_abi
 							.machine_kind
 						== ZEND_TPDE_MACHINE_VALUE_F64)) {
 			return emit_number_return(node.operands[0]);
@@ -23005,11 +23005,11 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 				!= IRValueRef{Adaptor::FRAME_VALUE}) {
 		const IRValueRef returned_ref = node.operands[0];
 		const zend_tpde_machine_value_kind kind =
-			adaptor->machine_kind(returned_ref);
+			ir().machine_kind(returned_ref);
 		const zend_mir_ownership_state ownership =
-			adaptor->ownership(returned_ref);
+			ir().ownership(returned_ref);
 		const zend_mir_refcount_state refcount_state =
-			adaptor->refcount_state(returned_ref);
+			ir().refcount_state(returned_ref);
 		const bool copy_source =
 			mir.value_operation.op1.kind
 					== ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -23117,7 +23117,7 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 			uint64_t constant_bits = 0;
 			ScratchReg constant_value{this};
 			tpde::x64::AsmReg value_reg;
-			if (adaptor->constant(
+			if (ir().constant(
 					returned_ref, &constant_bits)) {
 				value_reg = constant_value.alloc(
 					val_parts(returned_ref).bank);
@@ -23289,7 +23289,7 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 		auto helper = text_writer.label_create();
 		/* Zend's type inference may rule out a reference or an
 		 * undefined value; the helper takes whatever it does not. */
-		const zend_tpde_plan *return_plan = adaptor->plan();
+		const zend_tpde_plan *return_plan = ir().plan();
 		const uint32_t return_position =
 			mir.value_operation.source_position_id;
 		const uint32_t returned_may_be =
@@ -23459,7 +23459,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
 			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
-			if (mir.fused_into_branch && !adaptor->typed_body()) {
+			if (mir.fused_into_branch && !ir().typed_body()) {
 				return fused_into_branch_placeholder(ctx);
 			}
 			return isset_array(ctx);
@@ -23474,7 +23474,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 			}
 			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
-			if (mir.fused_into_branch && !adaptor->typed_body()) {
+			if (mir.fused_into_branch && !ir().typed_body()) {
 				return fused_into_branch_placeholder(ctx);
 			}
 			return long_binary(ctx);
@@ -23483,7 +23483,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 		case ZEND_MIR_OPCODE_VALUE_CAST:
 			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
-			if (mir.fused_into_branch && !adaptor->typed_body()) {
+			if (mir.fused_into_branch && !ir().typed_body()) {
 				return fused_into_branch_placeholder(ctx);
 			}
 			return slot_isset_empty(ctx);
@@ -23501,7 +23501,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 			 * references and errors.
 			 */
 		{
-			const bool needs_helper = !adaptor->typed_body()
+			const bool needs_helper = !ir().typed_body()
 				&& mir.runtime_helper != ZEND_NATIVE_HELPER_COUNT;
 			const bool inline_check = needs_helper
 				&& mir.has_value_operation
@@ -23517,7 +23517,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 							Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
 					auto verified = val_ref(operand);
 					if (inline_check && !have_type
-							&& adaptor->machine_kind(operand)
+							&& ir().machine_kind(operand)
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 							&& val_parts(operand).count() == 2) {
 						auto type_info = verified.part(1);
@@ -23532,7 +23532,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 				 * with a result the RETURN reads: publish the literal. */
 				const zend_mir_executable_value_ref &verify =
 					mir.value_operation;
-				if (!adaptor->typed_body() && mir.has_value_operation
+				if (!ir().typed_body() && mir.has_value_operation
 						&& verify.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
 						&& verify.result.kind
 							!= ZEND_MIR_SOURCE_OPERAND_UNUSED
@@ -23580,7 +23580,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 				auto mask_reg = mask.alloc_gp();
 				/* The compiled function's return type is fixed. */
 				const uint32_t return_mask =
-					adaptor->plan()->source_return_type_mask;
+					ir().plan()->source_return_type_mask;
 				if (return_mask != 0) {
 					ASM(MOV32ri, mask_reg, static_cast<int32_t>(return_mask));
 				} else {
@@ -23974,7 +23974,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 
 bool ZendCompilerX64::compile_inst_impl(
 	IRInstRef instruction, InstRange remaining_instructions) {
-	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const Adaptor::InstNode &node = ir().node(instruction);
 	cold_sections_at_inst_ = cold_sections_.size();
 	std::vector<ValueRef> generator_reload_locks;
 	InstContext ctx{instruction, remaining_instructions, node};
@@ -23999,7 +23999,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		return emit_deopt_exit(instruction);
 	}
 	if (node.kind != Adaptor::InstKind::GeneratorResume
-			&& !adaptor->generator_resume_values(instruction).empty()
+			&& !ir().generator_resume_values(instruction).empty()
 			&& !reload_generator_values(
 				instruction, generator_reload_locks)) {
 		return false;
@@ -24094,9 +24094,9 @@ bool ZendCompilerX64::compile_inst_impl(
 	if (node.kind == Adaptor::InstKind::ZvalPayloadLoad) {
 		return compile_zval_payload_load(ctx);
 	}
-	const zend_tpde_instruction &mir = adaptor->mir_instruction(instruction);
+	const zend_tpde_instruction &mir = ir().mir_instruction(instruction);
 	const zend_mir_instruction_record record =
-		adaptor->instruction_record(instruction);
+		ir().instruction_record(instruction);
 	ctx.mir = &mir;
 	ctx.record = record;
 	if (!zend_mir_id_is_valid(record.id)) {
@@ -24122,7 +24122,7 @@ bool ZendCompilerX64::compile_inst_impl(
 	/* A guarded operation of a very large component emits no fast
 	 * sequence: it branches to its cold block, which calls the
 	 * operation's runtime helper. */
-	if (adaptor->compact_guarded_value_operation(instruction)) {
+	if (ir().compact_guarded_value_operation(instruction)) {
 		return branch_to_guarded_cold(ctx);
 	}
 
@@ -24182,12 +24182,12 @@ bool ZendCompilerX64::compile_inst(
 		}
 	}
 	layout_count_block();
-	const Adaptor::InstNode &node = adaptor->node(instruction);
+	const Adaptor::InstNode &node = ir().node(instruction);
 	current_continuation_block_ = node.continuation_block;
 	continuation_edge_emitted_ = false;
 	deopt_exit_fast_ = node.kind == Adaptor::InstKind::GuardedFast
-		&& !adaptor->typed_body()
-		&& adaptor->mir_instruction(instruction).deopt_exit_resume_plus_one
+		&& !ir().typed_body()
+		&& ir().mir_instruction(instruction).deopt_exit_resume_plus_one
 			!= 0;
 	layout_in_inst_ = true;
 	const bool compiled =
