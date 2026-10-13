@@ -637,6 +637,11 @@ struct zend_tpde_instruction {
 	 * rebind it (see zend_tpde_ssa_variable_rebindable) and inference
 	 * excludes MAY_BE_REF, so its value lives in the slot itself. */
 	bool source_op1_reference_free;
+	/* The SSA value the op1/op2 CV operand reads may be a reference (bound by
+	 * global, static or &, or rebindable by any call), so its slot holds
+	 * the reference rather than the value. */
+	bool source_op1_may_reference;
+	bool source_op2_may_reference;
 	uint32_t source_op1_reference_index;
 	uint32_t source_op2_reference_index;
 	uint32_t operation_reference_index;

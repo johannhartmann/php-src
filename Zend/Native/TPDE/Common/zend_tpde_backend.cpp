@@ -4102,14 +4102,25 @@ bool freeze_source_value_bindings(
 				source_position, index, definitions);
 			if (source_ssa != nullptr && source_ssa->var_info != nullptr
 					&& source_position < source_op_array->last) {
-				const int use = source_ssa->ops[source_position].op1_use;
-				instruction.source_op1_reference_free = use >= 0
-					&& use < source_ssa->vars_count
-					&& source_ssa->vars[use].alias == NO_ALIAS
-					&& !zend_tpde_ssa_variable_rebindable(
-						source_op_array, source_ssa,
-						static_cast<uint32_t>(use))
-					&& (source_ssa->var_info[use].type & MAY_BE_REF) == 0;
+				auto reference_free = [&](int use) {
+					return source_ssa->vars[use].alias == NO_ALIAS
+						&& !zend_tpde_ssa_variable_rebindable(
+							source_op_array, source_ssa,
+							static_cast<uint32_t>(use))
+						&& (source_ssa->var_info[use].type & MAY_BE_REF) == 0;
+				};
+				const int op1_use = source_ssa->ops[source_position].op1_use;
+				const int op2_use = source_ssa->ops[source_position].op2_use;
+				const bool op1_known =
+					op1_use >= 0 && op1_use < source_ssa->vars_count;
+				const bool op2_known =
+					op2_use >= 0 && op2_use < source_ssa->vars_count;
+				instruction.source_op1_reference_free =
+					op1_known && reference_free(op1_use);
+				instruction.source_op1_may_reference =
+					op1_known && !reference_free(op1_use);
+				instruction.source_op2_may_reference =
+					op2_known && !reference_free(op2_use);
 			}
 			if (source_ssa != nullptr && source_ssa->var_info != nullptr
 					&& source_position < source_op_array->last

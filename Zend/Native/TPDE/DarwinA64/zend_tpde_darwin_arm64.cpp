@@ -5039,9 +5039,22 @@ bool ZendCompilerA64::compile_inst_impl(
 	};
 	if (node.kind == Adaptor::InstKind::GuardedCold
 			&& record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+		/* The slot of a CV operand that may be a reference holds that
+		 * reference, which the assignment of the value already wrote
+		 * through: it stays. */
 		auto materialize_cold_operand = [&](
 				IRValueRef operand, zend_mir_storage_id storage) {
-			if (!zend_mir_id_is_valid(storage)) {
+			const bool reference_slot = mir.has_value_operation
+				&& zend_mir_id_is_valid(storage)
+				&& ((mir.source_op1_may_reference
+						&& mir.value_operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV
+						&& storage == mir.value_operation.op1_storage_id)
+					|| (mir.source_op2_may_reference
+						&& mir.value_operation.op2.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV
+						&& storage == mir.value_operation.op2_storage_id));
+			if (!zend_mir_id_is_valid(storage) || reference_slot) {
 				auto consumed = val_ref(operand);
 				(void) consumed;
 				return true;
