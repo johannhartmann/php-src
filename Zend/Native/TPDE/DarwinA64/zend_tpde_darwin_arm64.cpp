@@ -454,6 +454,141 @@ public:
 			|| static_cast<uint32_t>(guarded_successors[1])
 				!= node.argument_index);
 	}
+	/* Copies the payload and type_info parts of boxed, the caller's reference
+	 * to value, to payload_reg and type_reg; false when the representation
+	 * lacks either part. */
+	bool load_boxed_parts(ValueRef &boxed, IRValueRef value,
+			AsmReg payload_reg, AsmReg type_reg) {
+		const ValueParts parts = val_parts(value);
+		bool have_payload = false;
+		bool have_type_info = false;
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			auto part_value = boxed.part(part);
+			auto value_reg = part_value.load_to_reg();
+			switch (parts.representation.parts[part].semantic_role) {
+				case ZEND_TPDE_MACHINE_PART_PAYLOAD:
+					ASM(ORRx, payload_reg, value_reg, value_reg);
+					have_payload = true;
+					break;
+				case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
+					ASM(ORRw, type_reg, value_reg, value_reg);
+					have_type_info = true;
+					break;
+				default:
+					return false;
+			}
+		}
+		return have_payload && have_type_info;
+	}
+	/* Loads a register operand into payload_reg: the payload of a boxed
+	 * value, whose type must be boxed_type or branch to slow, otherwise the
+	 * pointer or integer itself. */
+	bool load_register_operand(IRValueRef value, AsmReg payload_reg,
+			AsmReg type_reg, uint32_t boxed_type, ::tpde::Label slow) {
+		if (adaptor->machine_kind(value)
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto boxed = val_ref(value);
+			if (!load_boxed_parts(boxed, value, payload_reg, type_reg)) {
+				return false;
+			}
+			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+			ASM(CMPwi, type_reg, boxed_type);
+			generate_raw_jump(Jump::Jne, slow);
+		} else {
+			auto [value_ref, value_part] = val_ref_single(value);
+			auto value_reg = value_part.load_to_reg();
+			ASM(ORRx, payload_reg, value_reg, value_reg);
+		}
+		return true;
+	}
+	/* Loads the array in the frame slot at offset into array_reg; a slot
+	 * holding no array branches to slow. */
+	void load_frame_array(AsmReg frame_reg, uint32_t offset, AsmReg type_reg,
+			AsmReg array_reg, ::tpde::Label slow) {
+		load_off(type_reg, frame_reg,
+			offset + static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_ARRAY);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(array_reg, frame_reg, offset, 8);
+	}
+	/* An integer key in the frame slot at key_offset branches to key_long; a
+	 * string key is loaded into key_reg with kind_reg = 1 and continues at
+	 * key_ready; any other key branches to slow. */
+	void load_frame_string_key(AsmReg frame_reg, uint32_t key_offset,
+			AsmReg type_reg, AsmReg key_reg, AsmReg kind_reg,
+			::tpde::Label key_long, ::tpde::Label key_ready,
+			::tpde::Label slow) {
+		load_off(type_reg, frame_reg,
+			key_offset + static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_LONG);
+		generate_raw_jump(Jump::Jeq, key_long);
+		ASM(CMPwi, type_reg, IS_STRING);
+		generate_raw_jump(Jump::Jne, slow);
+		load_off(key_reg, frame_reg, key_offset, 8);
+		materialize_constant(1, DarwinConfig::GP_BANK, 4, kind_reg);
+		generate_raw_jump(Jump::jmp, key_ready);
+	}
+	/* Follows the hash chain of the integer key_reg in the hash array_reg,
+	 * with its arData in element_reg: at found, slot_reg holds the bucket; a
+	 * missing key branches to missing. limit_reg and type_reg are scratch. */
+	void emit_hash_long_lookup(AsmReg array_reg, AsmReg key_reg,
+			AsmReg element_reg, AsmReg limit_reg, AsmReg slot_reg,
+			AsmReg type_reg, ::tpde::Label loop, ::tpde::Label next,
+			::tpde::Label found, ::tpde::Label missing) {
+		load_off(element_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
+		load_off(limit_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
+		ASM(ORRw, limit_reg, key_reg, limit_reg);
+		ASM(ADDx_sxtw, slot_reg, element_reg, limit_reg, 2);
+		load_off(limit_reg, slot_reg, 0, 4);
+		label_place(loop);
+		ASM(CMPwi, limit_reg, HT_INVALID_IDX);
+		generate_raw_jump(Jump::Jeq, missing);
+		ASM(ADDx_lsl, slot_reg, element_reg, limit_reg, 5);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, h)), 8);
+		ASM(CMPx, type_reg, key_reg);
+		generate_raw_jump(Jump::Jne, next);
+		load_off(type_reg, slot_reg,
+			static_cast<uint32_t>(offsetof(Bucket, key)), 8);
+		ASM(CMPxi, type_reg, 0);
+		generate_raw_jump(Jump::Jeq, found);
+		label_place(next);
+		load_off(limit_reg, slot_reg,
+			static_cast<uint32_t>(
+				offsetof(Bucket, val) + offsetof(zval, u2.next)),
+			4);
+		generate_raw_jump(Jump::jmp, loop);
+	}
+	/* element_reg = the element key_reg of the packed array_reg; a key at or
+	 * above nNumUsed branches to missing. limit_reg is scratch. */
+	void emit_packed_element(AsmReg array_reg, AsmReg key_reg,
+			AsmReg limit_reg, AsmReg element_reg, ::tpde::Label missing) {
+		load_off(limit_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
+		ASM(CMPx, key_reg, limit_reg);
+		generate_raw_jump(Jump::Jhs, missing);
+		load_off(element_reg, array_reg,
+			static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
+		ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
+	}
+	/* Branches to slow unless type_reg holds the type_info of a plain
+	 * element: undefined, indirect and reference elements are left to the
+	 * helper. kind_reg is scratch. */
+	void emit_plain_element_check(AsmReg type_reg, AsmReg kind_reg,
+			::tpde::Label slow) {
+		ASM(ANDwi, kind_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, kind_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(CMPwi, kind_reg, IS_INDIRECT);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(CMPwi, kind_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::Jeq, slow);
+	}
 	/* GC_REFCOUNT(counted) += amount, through scratch. */
 	void emit_gc_addref(AsmReg counted, AsmReg scratch, uint32_t amount = 1) {
 		load_off(scratch, counted,
@@ -2472,40 +2607,9 @@ bool ZendCompilerA64::read_array() {
 				adaptor->machine_kind(node.operands[0])
 					== ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
 
-			if (adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				auto key = val_ref(node.operands[0]);
-				const ValueParts parts = val_parts(node.operands[0]);
-				bool have_payload = false;
-				bool have_type_info = false;
-				for (uint32_t part = 0; part < parts.count(); ++part) {
-					auto value = key.part(part);
-					auto value_reg = value.load_to_reg();
-					switch (parts.representation.parts[part]
-							.semantic_role) {
-						case ZEND_TPDE_MACHINE_PART_PAYLOAD:
-							ASM(ORRx, key_reg, value_reg, value_reg);
-							have_payload = true;
-							break;
-						case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
-							ASM(ORRw, type_reg, value_reg, value_reg);
-							have_type_info = true;
-							break;
-						default:
-							return false;
-					}
-				}
-				if (!have_payload || !have_type_info) {
-					return false;
-				}
-				ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-				ASM(CMPwi, type_reg, IS_LONG);
-				generate_raw_jump(Jump::Jne, slow);
-			} else {
-				auto [key_ref, key] =
-					val_ref_single(node.operands[0]);
-				auto source_key_reg = key.load_to_reg();
-				ASM(ORRx, key_reg, source_key_reg, source_key_reg);
+			if (!load_register_operand(node.operands[0], key_reg,
+					type_reg, IS_LONG, slow)) {
+				return false;
 			}
 
 			const bool register_receiver =
@@ -2518,40 +2622,9 @@ bool ZendCompilerA64::read_array() {
 						&& adaptor->machine_kind(node.operands[1])
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
 			if (register_receiver) {
-				if (adaptor->machine_kind(node.operands[1])
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-					auto receiver = val_ref(node.operands[1]);
-					const ValueParts parts = val_parts(node.operands[1]);
-					bool have_payload = false;
-					bool have_type_info = false;
-					for (uint32_t part = 0; part < parts.count(); ++part) {
-						auto value = receiver.part(part);
-						auto value_reg = value.load_to_reg();
-						switch (parts.representation.parts[part]
-								.semantic_role) {
-							case ZEND_TPDE_MACHINE_PART_PAYLOAD:
-								ASM(ORRx, array_reg, value_reg, value_reg);
-								have_payload = true;
-								break;
-							case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
-								ASM(ORRw, type_reg, value_reg, value_reg);
-								have_type_info = true;
-								break;
-							default:
-								return false;
-						}
-					}
-					if (!have_payload || !have_type_info) {
-						return false;
-					}
-					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-					ASM(CMPwi, type_reg, IS_ARRAY);
-					generate_raw_jump(Jump::Jne, slow);
-				} else {
-					auto [receiver_ref, receiver] =
-						val_ref_single(node.operands[1]);
-					auto receiver_reg = receiver.load_to_reg();
-					ASM(ORRx, array_reg, receiver_reg, receiver_reg);
+				if (!load_register_operand(node.operands[1], array_reg,
+						type_reg, IS_ARRAY, slow)) {
+					return false;
 				}
 			} else if (layout.container_literal) {
 				if (node.machine_reference_operand_index
@@ -2570,16 +2643,8 @@ bool ZendCompilerA64::read_array() {
 				generate_raw_jump(Jump::Jne, slow);
 				load_off(array_reg, literal_reg, 0, 8);
 			} else {
-				load_off(type_reg, frame_reg,
-					layout.container_offset
-						+ static_cast<uint32_t>(
-							offsetof(zval, u1.type_info)),
-					4);
-				ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-				ASM(CMPwi, type_reg, IS_ARRAY);
-				generate_raw_jump(Jump::Jne, slow);
-				load_off(array_reg, frame_reg,
-					layout.container_offset, 8);
+				load_frame_array(frame_reg, layout.container_offset, type_reg,
+					array_reg, slow);
 			}
 			load_off(type_reg, array_reg,
 				static_cast<uint32_t>(offsetof(HashTable, u)), 4);
@@ -2649,17 +2714,8 @@ bool ZendCompilerA64::read_array() {
 				ASM(ORRx, element_reg, slot_reg, slot_reg);
 			} else {
 				generate_raw_jump(Jump::Jeq, slow);
-				load_off(limit_reg, array_reg,
-					static_cast<uint32_t>(
-						offsetof(HashTable, nNumUsed)),
-					4);
-				ASM(CMPx, key_reg, limit_reg);
-				generate_raw_jump(Jump::Jhs, slow);
-				load_off(element_reg, array_reg,
-					static_cast<uint32_t>(
-						offsetof(HashTable, arPacked)),
-					8);
-				ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
+				emit_packed_element(array_reg, key_reg, limit_reg, element_reg,
+					slow);
 			}
 			load_off(type_reg, element_reg,
 				static_cast<uint32_t>(
@@ -2669,13 +2725,7 @@ bool ZendCompilerA64::read_array() {
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				/* A hole, an indirect or a reference element is left to
 				 * the helper. */
-				ASM(ANDwi, limit_reg, type_reg, Z_TYPE_MASK);
-				ASM(CMPwi, limit_reg, IS_UNDEF);
-				generate_raw_jump(Jump::Jeq, slow);
-				ASM(CMPwi, limit_reg, IS_INDIRECT);
-				generate_raw_jump(Jump::Jeq, slow);
-				ASM(CMPwi, limit_reg, IS_REFERENCE);
-				generate_raw_jump(Jump::Jeq, slow);
+				emit_plain_element_check(type_reg, limit_reg, slow);
 				auto result = result_ref(node.result);
 				auto payload = result.part(0);
 				auto type_info = result.part(1);
@@ -2758,28 +2808,11 @@ bool ZendCompilerA64::read_array() {
 	auto high_word_reg = high_word.alloc_gp();
 	auto decision_reg = decision.alloc_gp();
 
-	load_off(type_reg, frame_reg,
-		layout.container_offset
-			+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
-		4);
-	ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-	ASM(CMPwi, type_reg, IS_ARRAY);
-	generate_raw_jump(Jump::Jne, slow);
-	load_off(array_reg, frame_reg, layout.container_offset, 8);
+	load_frame_array(frame_reg, layout.container_offset, type_reg,
+		array_reg, slow);
 
-	load_off(type_reg, frame_reg,
-		layout.key_offset
-			+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
-		4);
-	ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-	ASM(CMPwi, type_reg, IS_LONG);
-	generate_raw_jump(Jump::Jeq, key_long);
-	ASM(CMPwi, type_reg, IS_STRING);
-	generate_raw_jump(Jump::Jne, slow);
-	load_off(key_reg, frame_reg, layout.key_offset, 8);
-	materialize_constant(
-		1, DarwinConfig::GP_BANK, 4, high_word_reg);
-	generate_raw_jump(Jump::jmp, key_ready);
+	load_frame_string_key(frame_reg, layout.key_offset, type_reg, key_reg,
+		high_word_reg, key_long, key_ready, slow);
 	label_place(key_long);
 	load_off(key_reg, frame_reg, layout.key_offset, 8);
 	materialize_constant(
@@ -2804,31 +2837,9 @@ bool ZendCompilerA64::read_array() {
 
 	ASM(CMPwi, high_word_reg, 0);
 	generate_raw_jump(Jump::Jne, mixed_string);
-	load_off(element_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
-	load_off(limit_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
-	ASM(ORRw, limit_reg, key_reg, limit_reg);
-	ASM(ADDx_sxtw, slot_reg, element_reg, limit_reg, 2);
-	load_off(limit_reg, slot_reg, 0, 4);
-	label_place(mixed_loop);
-	ASM(CMPwi, limit_reg, HT_INVALID_IDX);
-	generate_raw_jump(Jump::Jeq, slow);
-	ASM(ADDx_lsl, slot_reg, element_reg, limit_reg, 5);
-	load_off(type_reg, slot_reg,
-		static_cast<uint32_t>(offsetof(Bucket, h)), 8);
-	ASM(CMPx, type_reg, key_reg);
-	generate_raw_jump(Jump::Jne, mixed_next);
-	load_off(type_reg, slot_reg,
-		static_cast<uint32_t>(offsetof(Bucket, key)), 8);
-	ASM(CMPxi, type_reg, 0);
-	generate_raw_jump(Jump::Jeq, found);
-	label_place(mixed_next);
-	load_off(limit_reg, slot_reg,
-		static_cast<uint32_t>(
-			offsetof(Bucket, val) + offsetof(zval, u2.next)),
-		4);
-	generate_raw_jump(Jump::jmp, mixed_loop);
+	emit_hash_long_lookup(array_reg, key_reg, element_reg, limit_reg,
+		slot_reg, type_reg, mixed_loop, mixed_next, found,
+		slow);
 
 	label_place(mixed_string);
 	load_off(element_reg, array_reg,
@@ -2862,14 +2873,8 @@ bool ZendCompilerA64::read_array() {
 	label_place(packed);
 	ASM(CMPwi, high_word_reg, 0);
 	generate_raw_jump(Jump::Jne, slow);
-	load_off(limit_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
-	ASM(CMPx, key_reg, limit_reg);
-	generate_raw_jump(Jump::Jhs, slow);
-
-	load_off(element_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
-	ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
+	emit_packed_element(array_reg, key_reg, limit_reg, element_reg,
+		slow);
 	ASM(ORRx, slot_reg, element_reg, element_reg);
 	label_place(found);
 	/*
@@ -2881,13 +2886,7 @@ bool ZendCompilerA64::read_array() {
 		static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 	/* An undefined, indirect or reference element is left to the
 	 * helper, which dereferences like FETCH_DIM_R. */
-	ASM(ANDwi, limit_reg, type_reg, Z_TYPE_MASK);
-	ASM(CMPwi, limit_reg, IS_UNDEF);
-	generate_raw_jump(Jump::Jeq, slow);
-	ASM(CMPwi, limit_reg, IS_INDIRECT);
-	generate_raw_jump(Jump::Jeq, slow);
-	ASM(CMPwi, limit_reg, IS_REFERENCE);
-	generate_raw_jump(Jump::Jeq, slow);
+	emit_plain_element_check(type_reg, limit_reg, slow);
 
 	if (adaptor->machine_kind(node.result)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
@@ -3059,76 +3058,21 @@ bool ZendCompilerA64::isset_array() {
 	auto decision_reg = decision.alloc_gp();
 
 	if (register_receiver) {
-		if (adaptor->machine_kind(node.operands[1])
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			auto receiver = val_ref(node.operands[1]);
-			const ValueParts parts = val_parts(node.operands[1]);
-			bool have_payload = false;
-			bool have_type_info = false;
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto value = receiver.part(part);
-				auto value_reg = value.load_to_reg();
-				switch (parts.representation.parts[part].semantic_role) {
-					case ZEND_TPDE_MACHINE_PART_PAYLOAD:
-						ASM(ORRx, array_reg, value_reg, value_reg);
-						have_payload = true;
-						break;
-					case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
-						ASM(ORRw, type_reg, value_reg, value_reg);
-						have_type_info = true;
-						break;
-					default:
-						return false;
-				}
-			}
-			if (!have_payload || !have_type_info) {
-				return false;
-			}
-			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-			ASM(CMPwi, type_reg, IS_ARRAY);
-			generate_raw_jump(Jump::Jne, slow);
-		} else {
-			auto [receiver_ref, receiver] =
-				val_ref_single(node.operands[1]);
-			auto receiver_reg = receiver.load_to_reg();
-			ASM(ORRx, array_reg, receiver_reg, receiver_reg);
+		if (!load_register_operand(node.operands[1], array_reg,
+				type_reg, IS_ARRAY, slow)) {
+			return false;
 		}
 	} else {
-		load_off(type_reg, frame_reg,
-			layout.container_offset
-				+ static_cast<uint32_t>(
-					offsetof(zval, u1.type_info)),
-			4);
-		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-		ASM(CMPwi, type_reg, IS_ARRAY);
-		generate_raw_jump(Jump::Jne, slow);
-		load_off(array_reg, frame_reg, layout.container_offset, 8);
+		load_frame_array(frame_reg, layout.container_offset, type_reg,
+			array_reg, slow);
 	}
 
 	if (register_key) {
 		if (adaptor->machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 			auto key_value = val_ref(node.operands[0]);
-			const ValueParts parts = val_parts(node.operands[0]);
-			bool have_payload = false;
-			bool have_type_info = false;
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto value = key_value.part(part);
-				auto value_reg = value.load_to_reg();
-				switch (parts.representation.parts[part].semantic_role) {
-					case ZEND_TPDE_MACHINE_PART_PAYLOAD:
-						ASM(ORRx, key_reg, value_reg, value_reg);
-						have_payload = true;
-						break;
-					case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
-						ASM(ORRw, type_reg, value_reg, value_reg);
-						have_type_info = true;
-						break;
-					default:
-						return false;
-				}
-			}
-			if (!have_payload || !have_type_info) {
+			if (!load_boxed_parts(key_value, node.operands[0], key_reg,
+					type_reg)) {
 				return false;
 			}
 			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -3152,20 +3096,8 @@ bool ZendCompilerA64::isset_array() {
 			generate_raw_jump(Jump::jmp, key_ready);
 		}
 	} else {
-		load_off(type_reg, frame_reg,
-			layout.key_offset
-				+ static_cast<uint32_t>(
-					offsetof(zval, u1.type_info)),
-			4);
-		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-		ASM(CMPwi, type_reg, IS_LONG);
-		generate_raw_jump(Jump::Jeq, key_long);
-		ASM(CMPwi, type_reg, IS_STRING);
-		generate_raw_jump(Jump::Jne, slow);
-		load_off(key_reg, frame_reg, layout.key_offset, 8);
-		materialize_constant(
-			1, DarwinConfig::GP_BANK, 4, key_kind_reg);
-		generate_raw_jump(Jump::jmp, key_ready);
+		load_frame_string_key(frame_reg, layout.key_offset, type_reg, key_reg,
+			key_kind_reg, key_long, key_ready, slow);
 	}
 	label_place(key_long);
 	if (!register_key) {
@@ -3190,32 +3122,9 @@ bool ZendCompilerA64::isset_array() {
 
 	ASM(CMPwi, key_kind_reg, 0);
 	generate_raw_jump(Jump::Jne, mixed_string);
-	load_off(element_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
-	load_off(limit_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
-	ASM(ORRw, limit_reg, key_reg, limit_reg);
-	ASM(ADDx_sxtw, slot_reg, element_reg, limit_reg, 2);
-	load_off(limit_reg, slot_reg, 0, 4);
-	label_place(mixed_loop);
-	ASM(CMPwi, limit_reg, HT_INVALID_IDX);
-	generate_raw_jump(
-		Jump::Jeq, layout.is_empty ? answer_true : answer_false);
-	ASM(ADDx_lsl, slot_reg, element_reg, limit_reg, 5);
-	load_off(type_reg, slot_reg,
-		static_cast<uint32_t>(offsetof(Bucket, h)), 8);
-	ASM(CMPx, type_reg, key_reg);
-	generate_raw_jump(Jump::Jne, mixed_next);
-	load_off(type_reg, slot_reg,
-		static_cast<uint32_t>(offsetof(Bucket, key)), 8);
-	ASM(CMPxi, type_reg, 0);
-	generate_raw_jump(Jump::Jeq, found);
-	label_place(mixed_next);
-	load_off(limit_reg, slot_reg,
-		static_cast<uint32_t>(
-			offsetof(Bucket, val) + offsetof(zval, u2.next)),
-		4);
-	generate_raw_jump(Jump::jmp, mixed_loop);
+	emit_hash_long_lookup(array_reg, key_reg, element_reg, limit_reg,
+		slot_reg, type_reg, mixed_loop, mixed_next, found,
+		layout.is_empty ? answer_true : answer_false);
 
 	/* A key that may be numeric (first byte a digit or '-'; the empty
 	 * string's first byte is its terminator) or has no hash yet is left
@@ -3285,14 +3194,8 @@ bool ZendCompilerA64::isset_array() {
 	label_place(packed);
 	ASM(CMPwi, key_kind_reg, 0);
 	generate_raw_jump(Jump::Jne, slow);
-	load_off(limit_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
-	ASM(CMPx, key_reg, limit_reg);
-	generate_raw_jump(
-		Jump::Jhs, layout.is_empty ? answer_true : answer_false);
-	load_off(element_reg, array_reg,
-		static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
-	ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
+	emit_packed_element(array_reg, key_reg, limit_reg, element_reg,
+		layout.is_empty ? answer_true : answer_false);
 	generate_raw_jump(Jump::jmp, inspect_element);
 	label_place(found);
 	ASM(ORRx, element_reg, slot_reg, slot_reg);
@@ -3492,14 +3395,8 @@ bool ZendCompilerA64::append_packed_array() {
 	auto high_word_reg = high_word.alloc_gp();
 	auto decision_reg = decision.alloc_gp();
 
-	load_off(type_reg, frame_reg,
-		layout.container_offset
-			+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
-		4);
-	ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-	ASM(CMPwi, type_reg, IS_ARRAY);
-	generate_raw_jump(Jump::Jne, slow);
-	load_off(array_reg, frame_reg, layout.container_offset, 8);
+	load_frame_array(frame_reg, layout.container_offset, type_reg,
+		array_reg, slow);
 	load_off(count_reg, array_reg,
 		static_cast<uint32_t>(
 			offsetof(zend_refcounted_h, refcount)), 4);
@@ -9658,15 +9555,8 @@ bool ZendCompilerA64::compile_value_cond_branch() {
 			auto key_reg = key.alloc_gp();
 			auto key_value_reg = key_value.alloc_gp();
 
-			load_off(type_reg, frame_reg,
-				layout.holder_offset
-					+ static_cast<uint32_t>(
-						offsetof(zval, u1.type_info)),
-				4);
-			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-			ASM(CMPwi, type_reg, IS_ARRAY);
-			generate_raw_jump(Jump::Jne, slow);
-			load_off(array_reg, frame_reg, layout.holder_offset, 8);
+			load_frame_array(frame_reg, layout.holder_offset, type_reg,
+				array_reg, slow);
 			load_off(limit_reg, array_reg,
 				static_cast<uint32_t>(
 					offsetof(HashTable, nNumUsed)),
