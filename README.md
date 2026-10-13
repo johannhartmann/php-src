@@ -7,6 +7,62 @@
     </a>
 </div>
 
+# PHP on TPDE
+
+This branch is a port of php-src to a native execution engine built on
+[TPDE](https://github.com/tpde2/tpde), a fast compiler back-end framework. The
+Zend VM does not execute PHP code here: every function is translated into
+native machine code through a PHP-specific intermediate representation (ZNMIR)
+and TPDE. There is no fallback to the VM.
+
+It is an independent, experimental fork and not an official PHP release. The
+goal is maximum warm-request performance for real PHP applications such as
+WordPress, Symfony and Laravel, with PHP-observable behavior identical to stock
+PHP.
+
+- **Targets:** Linux/ELF x86-64 (primary) and Darwin arm64. Configure rejects
+  every other host.
+- **Execution model:** native registers and stack are canonical; Zend frames
+  are reconstructed on demand wherever PHP state is observable (exceptions,
+  warnings, observers, backtraces, generators, fibers). Compiled functions call
+  each other through a native convention, and failed speculation deoptimizes
+  into the generic native version of a function, never into the VM.
+- **OPcache:** native code images are persisted in OPcache without process
+  addresses and are relocated when another process maps them.
+- **TPDE revision:** pinned in
+  [`Zend/Native/TPDE/ThirdParty/tpde/REVISION`](Zend/Native/TPDE/ThirdParty/tpde/REVISION).
+
+### Layout
+
+- [`Zend/Native/`](Zend/Native): ZNMIR, lowering, the TPDE back-ends
+  (`TPDE/LinuxX64`, `TPDE/DarwinA64`) and the native runtime.
+- [`docs/native-engine/`](docs/native-engine/README.md): architecture decisions
+  and semantic contracts, starting with
+  [ADR 0025](docs/native-engine/adr/0025-native-canonical-execution.md).
+- [`scripts/native/`](scripts/native/README.md): build profiles, build and test
+  commands.
+
+### Building and testing the native engine
+
+The Linux profiles build with clang; GCC cannot compile the TPDE x64
+templates.
+
+```shell
+scripts/native/configure-dev.sh
+scripts/native/build.sh --profile linux-amd64-native-debug-nts --print-binary
+scripts/native/test-phpt.sh --tier quick    # native PHPTs, seconds
+scripts/native/test-phpt.sh --tier commit   # full debug suites
+scripts/native/test-phpt.sh --tier full     # plus deopt stress, ASan and UBSan
+```
+
+The native CLI cannot yet run `run-tests.php` itself, so the test scripts
+need a separate plain PHP CLI as the runner in `NATIVE_PHPT_RUNNER`; the
+native binary is the binary under test. Behavior is checked differentially
+against stock PHP; see
+[`docs/native-engine/test-command-contract.md`](docs/native-engine/test-command-contract.md).
+
+The rest of this file is the upstream php-src README.
+
 # The PHP Interpreter
 
 PHP is a popular general-purpose scripting language that is especially suited to
