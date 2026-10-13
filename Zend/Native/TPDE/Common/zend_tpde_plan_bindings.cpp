@@ -895,9 +895,9 @@ bool freeze_machine_references(
 	if (references.empty()) {
 		return true;
 	}
-	plan->machine_references = static_cast<zend_tpde_machine_reference *>(
+	plan->machine_references.reset(static_cast<zend_tpde_machine_reference *>(
 		std::malloc(references.size()
-			* sizeof(*plan->machine_references)));
+			* sizeof(*plan->machine_references))));
 	if (plan->machine_references == nullptr) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -977,22 +977,22 @@ bool freeze_generator_resume_liveness(
 			"generator resume liveness exceeds the executable bound");
 		return false;
 	}
-	plan->generator_resume_targets = static_cast<uint32_t *>(
+	plan->generator_resume_targets.reset(static_cast<uint32_t *>(
 		std::malloc(targets.size()
-			* sizeof(*plan->generator_resume_targets)));
-	plan->generator_resume_landings = static_cast<uint32_t *>(
+			* sizeof(*plan->generator_resume_targets))));
+	plan->generator_resume_landings.reset(static_cast<uint32_t *>(
 		std::malloc(targets.size()
-			* sizeof(*plan->generator_resume_landings)));
-	plan->generator_resume_exception_blocks =
+			* sizeof(*plan->generator_resume_landings))));
+	plan->generator_resume_exception_blocks.reset(
 		static_cast<zend_mir_block_id *>(std::malloc(
 			targets.size()
-				* sizeof(*plan->generator_resume_exception_blocks)));
+				* sizeof(*plan->generator_resume_exception_blocks))));
 	const size_t live_word_count =
 		static_cast<size_t>(live_word_count_u64);
-	plan->generator_resume_live_values =
+	plan->generator_resume_live_values.reset(
 		live_word_count == 0 ? nullptr : static_cast<uint64_t *>(
 			std::calloc(live_word_count,
-				sizeof(*plan->generator_resume_live_values)));
+				sizeof(*plan->generator_resume_live_values))));
 	if (plan->generator_resume_targets == nullptr
 			|| plan->generator_resume_landings == nullptr
 			|| plan->generator_resume_exception_blocks == nullptr
@@ -1009,8 +1009,8 @@ bool freeze_generator_resume_liveness(
 	std::vector<uint32_t> source_positions;
 	source_positions.reserve(plan->instruction_count);
 	std::copy(targets.begin(), targets.end(),
-		plan->generator_resume_targets);
-	std::fill_n(plan->generator_resume_exception_blocks,
+		plan->generator_resume_targets.get());
+	std::fill_n(plan->generator_resume_exception_blocks.get(),
 		plan->generator_resume_count, ZEND_MIR_ID_INVALID);
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		const zend_tpde_instruction &instruction = plan->instructions[i];
@@ -1244,11 +1244,11 @@ bool freeze_entry_undef_temporaries(
 	if (indices.empty()) {
 		return true;
 	}
-	plan->entry_undef_temporary_indices = static_cast<uint32_t *>(
+	plan->entry_undef_temporary_indices.reset(static_cast<uint32_t *>(
 		std::malloc(indices.size()
-			* sizeof(*plan->entry_undef_temporary_indices)));
-	plan->entry_undef_temporary_fused_only = static_cast<uint8_t *>(
-		std::malloc(fused_only.size()));
+			* sizeof(*plan->entry_undef_temporary_indices))));
+	plan->entry_undef_temporary_fused_only.reset(static_cast<uint8_t *>(
+		std::malloc(fused_only.size())));
 	if (plan->entry_undef_temporary_indices == nullptr
 			|| plan->entry_undef_temporary_fused_only == nullptr) {
 		zend_tpde_set_diagnostic(diag,

@@ -350,9 +350,9 @@ void destroy_deopt_landing_adaptor(zend_tpde_plan *plan);
  * diagnostic of the given message, when that fails.
  */
 template <typename T>
-[[nodiscard]] bool plan_alloc(T *&out, size_t count,
+[[nodiscard]] bool plan_alloc(zend_tpde_owned<T> &out, size_t count,
 	zend_native_diagnostic *diag, const char *message) {
-	out = static_cast<T *>(std::calloc(count, sizeof(T)));
+	out.reset(static_cast<T *>(std::calloc(count, sizeof(T))));
 	if (out == nullptr) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED, message);

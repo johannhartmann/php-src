@@ -971,10 +971,10 @@ static bool freeze_typed_component_calls(
 	if (plan->instruction_count == 0) {
 		return true;
 	}
-	plan->typed_component_call_eligible = static_cast<uint8_t *>(
-		std::calloc(plan->instruction_count, sizeof(uint8_t)));
-	plan->effect_closed_inline_eligible = static_cast<uint8_t *>(
-		std::calloc(plan->instruction_count, sizeof(uint8_t)));
+	plan->typed_component_call_eligible.reset(static_cast<uint8_t *>(
+		std::calloc(plan->instruction_count, sizeof(uint8_t))));
+	plan->effect_closed_inline_eligible.reset(static_cast<uint8_t *>(
+		std::calloc(plan->instruction_count, sizeof(uint8_t))));
 	if (plan->typed_component_call_eligible == nullptr
 			|| plan->effect_closed_inline_eligible == nullptr) {
 		return false;
@@ -1568,8 +1568,7 @@ static bool retain_typed_call_materializations(
 		std::memcpy(replacement, retained.data(),
 			retained.size() * sizeof(*replacement));
 	}
-	std::free(plan->materializations);
-	plan->materializations = replacement;
+	plan->materializations.reset(replacement);
 	plan->materialization_count =
 		static_cast<uint32_t>(retained.size());
 	return true;
@@ -2388,10 +2387,10 @@ static bool freeze_machine_required_values(
 	if (plan->value_count == 0) {
 		return true;
 	}
-	plan->entry_value_required = static_cast<uint8_t *>(
-		std::calloc(plan->value_count, sizeof(uint8_t)));
-	plan->typed_body_value_required = static_cast<uint8_t *>(
-		std::calloc(plan->value_count, sizeof(uint8_t)));
+	plan->entry_value_required.reset(static_cast<uint8_t *>(
+		std::calloc(plan->value_count, sizeof(uint8_t))));
+	plan->typed_body_value_required.reset(static_cast<uint8_t *>(
+		std::calloc(plan->value_count, sizeof(uint8_t))));
 	if (plan->entry_value_required == nullptr
 			|| plan->typed_body_value_required == nullptr) {
 		zend_tpde_set_diagnostic(diag,
@@ -3239,10 +3238,8 @@ bool freeze_component_machine_plan(
 		if (!freeze.frozen) {
 			return;
 		}
-		std::free(plan.typed_component_call_eligible);
-		std::free(plan.effect_closed_inline_eligible);
-		plan.typed_component_call_eligible = nullptr;
-		plan.effect_closed_inline_eligible = nullptr;
+		plan.typed_component_call_eligible.reset();
+		plan.effect_closed_inline_eligible.reset();
 		plan.has_register_component_results = false;
 		for (uint32_t i = 0; i < plan.instruction_count; ++i) {
 			plan.instructions[i].machine_control_flow_flags = freeze.flags[i];

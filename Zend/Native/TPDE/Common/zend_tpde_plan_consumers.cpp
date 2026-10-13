@@ -72,17 +72,17 @@ bool freeze_machine_plan_consumers(
 	const uint32_t value_count = plan->value_count;
 	std::vector<uint32_t> counts(value_count, 0);
 
-	plan->value_definition_instructions = value_count == 0
+	plan->value_definition_instructions.reset(value_count == 0
 		? nullptr : static_cast<int32_t *>(std::malloc(
 			static_cast<size_t>(value_count)
-				* sizeof(*plan->value_definition_instructions)));
-	plan->source_value_definition_instructions = value_count == 0
+				* sizeof(*plan->value_definition_instructions))));
+	plan->source_value_definition_instructions.reset(value_count == 0
 		? nullptr : static_cast<int32_t *>(std::malloc(
 			static_cast<size_t>(value_count)
-				* sizeof(*plan->source_value_definition_instructions)));
-	plan->value_consumer_offsets = static_cast<uint32_t *>(std::calloc(
+				* sizeof(*plan->source_value_definition_instructions))));
+	plan->value_consumer_offsets.reset(static_cast<uint32_t *>(std::calloc(
 		static_cast<size_t>(value_count) + 1,
-		sizeof(*plan->value_consumer_offsets)));
+		sizeof(*plan->value_consumer_offsets))));
 	if ((value_count != 0
 				&& (plan->value_definition_instructions == nullptr
 					|| plan->source_value_definition_instructions == nullptr))
@@ -93,9 +93,9 @@ bool freeze_machine_plan_consumers(
 		return false;
 	}
 	if (value_count != 0) {
-		std::fill_n(plan->value_definition_instructions,
+		std::fill_n(plan->value_definition_instructions.get(),
 			value_count, int32_t{-1});
-		std::fill_n(plan->source_value_definition_instructions,
+		std::fill_n(plan->source_value_definition_instructions.get(),
 			value_count, int32_t{-1});
 	}
 
@@ -318,10 +318,10 @@ bool freeze_machine_plan_consumers(
 	}
 	plan->value_consumer_offsets[value_count] =
 		static_cast<uint32_t>(consumer_count);
-	plan->value_consumers = consumer_count == 0
+	plan->value_consumers.reset(consumer_count == 0
 		? nullptr : static_cast<zend_tpde_machine_use *>(std::malloc(
 			static_cast<size_t>(consumer_count)
-				* sizeof(*plan->value_consumers)));
+				* sizeof(*plan->value_consumers))));
 	if (consumer_count != 0 && plan->value_consumers == nullptr) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -329,8 +329,8 @@ bool freeze_machine_plan_consumers(
 		return false;
 	}
 	std::vector<uint32_t> cursors(
-		plan->value_consumer_offsets,
-		plan->value_consumer_offsets + value_count);
+		plan->value_consumer_offsets.get(),
+		plan->value_consumer_offsets.get() + value_count);
 	for (uint32_t instruction_index = 0;
 			instruction_index < plan->instruction_count;
 			++instruction_index) {

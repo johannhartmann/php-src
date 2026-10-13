@@ -153,10 +153,10 @@ bool freeze_deopt_resume_targets(
 		return false;
 	}
 	plan->deopt_resume_count = static_cast<uint32_t>(targets.size());
-	plan->deopt_resume_targets = static_cast<uint32_t *>(
-		std::malloc(targets.size() * sizeof(uint32_t)));
-	plan->deopt_resume_instructions = static_cast<uint32_t *>(
-		std::malloc(targets.size() * sizeof(uint32_t)));
+	plan->deopt_resume_targets.reset(static_cast<uint32_t *>(
+		std::malloc(targets.size() * sizeof(uint32_t))));
+	plan->deopt_resume_instructions.reset(static_cast<uint32_t *>(
+		std::malloc(targets.size() * sizeof(uint32_t))));
 	if (plan->deopt_resume_targets == nullptr
 			|| plan->deopt_resume_instructions == nullptr) {
 		zend_tpde_set_diagnostic(diag,
@@ -168,9 +168,10 @@ bool freeze_deopt_resume_targets(
 	if (stress) {
 		require_runtime_helper(plan, ZEND_NATIVE_HELPER_DEOPT_STRESS_REENTER);
 	}
-	std::copy(targets.begin(), targets.end(), plan->deopt_resume_targets);
+	std::copy(targets.begin(), targets.end(),
+		plan->deopt_resume_targets.get());
 	std::copy(instructions.begin(), instructions.end(),
-		plan->deopt_resume_instructions);
+		plan->deopt_resume_instructions.get());
 	return true;
 }
 
@@ -1395,9 +1396,9 @@ bool statepoint_materializer::publish() {
 	if (materializations.empty()) {
 		return true;
 	}
-	plan->materializations = static_cast<zend_tpde_materialization *>(
+	plan->materializations.reset(static_cast<zend_tpde_materialization *>(
 		std::malloc(materializations.size()
-			* sizeof(*plan->materializations)));
+			* sizeof(*plan->materializations))));
 	if (plan->materializations == nullptr) {
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,

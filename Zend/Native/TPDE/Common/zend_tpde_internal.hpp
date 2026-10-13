@@ -15,7 +15,9 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <utility>
 #include <vector>
 
 struct _zend_native_direct_call_descriptor;
@@ -1031,23 +1033,56 @@ namespace zend::native::tpde {
 class ZendIRAdaptor;
 }
 
+/*
+ * An array a plan owns, allocated with malloc(), calloc() or realloc() and
+ * released with free() when the plan is destroyed. Reads see the plain
+ * pointer; storing a new array goes through reset().
+ */
+template <typename T>
+class zend_tpde_owned {
+public:
+	zend_tpde_owned() = default;
+	zend_tpde_owned(const zend_tpde_owned &) = delete;
+	zend_tpde_owned &operator=(const zend_tpde_owned &) = delete;
+	zend_tpde_owned(zend_tpde_owned &&other) noexcept
+		: pointer_{std::exchange(other.pointer_, nullptr)} {}
+	zend_tpde_owned &operator=(zend_tpde_owned &&other) noexcept {
+		reset(std::exchange(other.pointer_, nullptr));
+		return *this;
+	}
+	~zend_tpde_owned() { std::free(pointer_); }
+
+	operator T *() const { return pointer_; }
+	T *get() const { return pointer_; }
+	/* Frees the array held so far and takes pointer. */
+	void reset(T *pointer = nullptr) {
+		std::free(pointer_);
+		pointer_ = pointer;
+	}
+	/* Takes pointer, which realloc() returned for the array held so far. */
+	void reallocated(T *pointer) { pointer_ = pointer; }
+
+private:
+	T *pointer_ = nullptr;
+};
+
 struct zend_tpde_plan {
 	uint32_t source_ssa_variable_count;
 	uint32_t source_opcode_count;
-	zend_tpde_source_opcode *source_opcodes;
-	zend_tpde_source_multi_branch *source_multi_branches;
-	zend_tpde_multi_branch_case *source_multi_branch_cases;
+	zend_tpde_owned<zend_tpde_source_opcode> source_opcodes;
+	zend_tpde_owned<zend_tpde_source_multi_branch> source_multi_branches;
+	zend_tpde_owned<zend_tpde_multi_branch_case> source_multi_branch_cases;
 	uint32_t source_multi_branch_case_count;
 	uint32_t source_frame_variable_count;
 	uint32_t source_temporary_count;
 	uint32_t source_block_count;
-	uint32_t *source_opcode_block_indices;
-	uint8_t *source_opcode_is_data;
-	uint32_t *source_block_starts;
-	uint32_t *source_block_ends;
-	zend_tpde_source_call_phase_entry *source_call_phases;
+	zend_tpde_owned<uint32_t> source_opcode_block_indices;
+	zend_tpde_owned<uint8_t> source_opcode_is_data;
+	zend_tpde_owned<uint32_t> source_block_starts;
+	zend_tpde_owned<uint32_t> source_block_ends;
+	zend_tpde_owned<zend_tpde_source_call_phase_entry> source_call_phases;
 	uint32_t source_call_phase_count;
-	uint8_t *compiled_variables_used;
+	zend_tpde_owned<uint8_t> compiled_variables_used;
 	uint32_t compiled_variable_count;
 	uint32_t symbol_namespace;
 	uint32_t wrapper_function_index;
@@ -1122,60 +1157,60 @@ struct zend_tpde_plan {
 	 * Zend's type inference); the entry releases only those. */
 	uint64_t fast_call_counted_cvs;
 	zend_mir_function_record function;
-	zend_mir_block_id *block_ids;
+	zend_tpde_owned<zend_mir_block_id> block_ids;
 	uint32_t block_count;
-	zend_tpde_id_index_entry *block_index;
+	zend_tpde_owned<zend_tpde_id_index_entry> block_index;
 	uint32_t block_index_capacity;
-	uint32_t *block_successor_offsets;
-	uint32_t *block_successors;
+	zend_tpde_owned<uint32_t> block_successor_offsets;
+	zend_tpde_owned<uint32_t> block_successors;
 	uint32_t block_successor_count;
-	uint32_t *block_predecessor_offsets;
-	uint32_t *block_predecessors;
+	zend_tpde_owned<uint32_t> block_predecessor_offsets;
+	zend_tpde_owned<uint32_t> block_predecessors;
 	uint32_t block_predecessor_count;
-	zend_tpde_value *values;
+	zend_tpde_owned<zend_tpde_value> values;
 	uint32_t value_count;
-	int32_t *argument_value_indices;
-	zend_tpde_local_abi_type *argument_abi;
+	zend_tpde_owned<int32_t> argument_value_indices;
+	zend_tpde_owned<zend_tpde_local_abi_type> argument_abi;
 	zend_tpde_local_abi_type return_abi;
 	zend_tpde_local_abi_type typed_body_return_abi;
-	uint8_t *typed_component_call_eligible;
-	uint8_t *effect_closed_inline_eligible;
+	zend_tpde_owned<uint8_t> typed_component_call_eligible;
+	zend_tpde_owned<uint8_t> effect_closed_inline_eligible;
 	/* Per argument: whether an effect-closed inline clone of this member
 	 * needs it, because its body reads it or its receive checks its type.
 	 * The clone neither checks nor transports any other argument. */
-	uint8_t *effect_closed_argument_used;
+	zend_tpde_owned<uint8_t> effect_closed_argument_used;
 	bool typed_body_eligible;
 	bool has_register_component_results;
 	zend_tpde_machine_cfg entry_machine_cfg;
 	zend_tpde_machine_cfg typed_body_machine_cfg;
-	zend_tpde_id_index_entry *value_index;
+	zend_tpde_owned<zend_tpde_id_index_entry> value_index;
 	uint32_t value_index_capacity;
-	zend_tpde_instruction *instructions;
+	zend_tpde_owned<zend_tpde_instruction> instructions;
 	uint32_t instruction_count;
-	zend_mir_value_id *instruction_operands;
-	zend_tpde_operand_transport *instruction_operand_transports;
+	zend_tpde_owned<zend_mir_value_id> instruction_operands;
+	zend_tpde_owned<zend_tpde_operand_transport> instruction_operand_transports;
 	uint32_t instruction_operand_count;
-	zend_tpde_id_index_entry *instruction_index;
+	zend_tpde_owned<zend_tpde_id_index_entry> instruction_index;
 	uint32_t instruction_index_capacity;
-	int32_t *value_definition_instructions;
-	int32_t *source_value_definition_instructions;
-	uint32_t *value_consumer_offsets;
-	zend_tpde_machine_use *value_consumers;
-	uint8_t *entry_value_required;
-	uint8_t *typed_body_value_required;
-	zend_tpde_id_index_entry *call_site_instruction_index;
+	zend_tpde_owned<int32_t> value_definition_instructions;
+	zend_tpde_owned<int32_t> source_value_definition_instructions;
+	zend_tpde_owned<uint32_t> value_consumer_offsets;
+	zend_tpde_owned<zend_tpde_machine_use> value_consumers;
+	zend_tpde_owned<uint8_t> entry_value_required;
+	zend_tpde_owned<uint8_t> typed_body_value_required;
+	zend_tpde_owned<zend_tpde_id_index_entry> call_site_instruction_index;
 	uint32_t call_site_instruction_index_capacity;
 	uint32_t call_site_count;
-	zend_mir_call_site_ref *call_sites;
-	zend_tpde_id_index_entry *call_target_index;
+	zend_tpde_owned<zend_mir_call_site_ref> call_sites;
+	zend_tpde_owned<zend_tpde_id_index_entry> call_target_index;
 	uint32_t call_target_index_capacity;
 	uint32_t call_target_count;
 	uint32_t call_argument_count;
-	zend_mir_call_argument_ref *call_arguments;
-	zend_tpde_source_value_binding *call_argument_bindings;
-	zend_tpde_id_index_entry *user_binding_index;
+	zend_tpde_owned<zend_mir_call_argument_ref> call_arguments;
+	zend_tpde_owned<zend_tpde_source_value_binding> call_argument_bindings;
+	zend_tpde_owned<zend_tpde_id_index_entry> user_binding_index;
 	uint32_t user_binding_index_capacity;
-	zend_tpde_id_index_entry *internal_binding_index;
+	zend_tpde_owned<zend_tpde_id_index_entry> internal_binding_index;
 	uint32_t internal_binding_index_capacity;
 	_zend_native_direct_call_descriptor **direct_calls;
 	uint32_t direct_call_count;
@@ -1185,28 +1220,28 @@ struct zend_tpde_plan {
 	uint32_t user_call_count;
 	uint32_t argument_count;
 	uint64_t required_runtime_helpers[ZEND_NATIVE_RUNTIME_HELPER_WORD_COUNT];
-	zend_mir_executable_value_ref *user_opcode_source_operations;
+	zend_tpde_owned<zend_mir_executable_value_ref> user_opcode_source_operations;
 	uint32_t user_opcode_source_operation_count;
-	uint32_t *user_opcode_source_op1_targets;
-	uint32_t *user_opcode_source_op2_targets;
-	uint32_t *user_opcode_source_extended_targets;
+	zend_tpde_owned<uint32_t> user_opcode_source_op1_targets;
+	zend_tpde_owned<uint32_t> user_opcode_source_op2_targets;
+	zend_tpde_owned<uint32_t> user_opcode_source_extended_targets;
 	zend_tpde_user_opcode_target
 		user_opcode_targets[ZEND_VM_LAST_OPCODE + 1];
 	uint32_t user_opcode_target_count;
 	uint32_t generator_resume_count;
 	uint32_t generator_resume_live_word_count;
-	uint32_t *generator_resume_targets;
-	uint32_t *generator_resume_landings;
-	zend_mir_block_id *generator_resume_exception_blocks;
-	uint64_t *generator_resume_live_values;
+	zend_tpde_owned<uint32_t> generator_resume_targets;
+	zend_tpde_owned<uint32_t> generator_resume_landings;
+	zend_tpde_owned<zend_mir_block_id> generator_resume_exception_blocks;
+	zend_tpde_owned<uint64_t> generator_resume_live_values;
 	/*
 	 * Deoptimization resume IDs (ADR 0025 section 4): the source positions
 	 * a deoptimizing activation continues at, with the MIR instruction that
 	 * starts each.
 	 */
 	uint32_t deopt_resume_count;
-	uint32_t *deopt_resume_targets;
-	uint32_t *deopt_resume_instructions;
+	zend_tpde_owned<uint32_t> deopt_resume_targets;
+	zend_tpde_owned<uint32_t> deopt_resume_instructions;
 	/*
 	 * A generic copy's Zend-entry adaptor, built to decide which resume IDs
 	 * land when its specialized member's exits are frozen. The component
@@ -1218,16 +1253,16 @@ struct zend_tpde_plan {
 	 * operation that names the CV: no symbol table, parameter, catch,
 	 * generator or user-opcode observer can read the slot otherwise.
 	 */
-	uint8_t *operand_observed_storages;
+	zend_tpde_owned<uint8_t> operand_observed_storages;
 	uint32_t operand_observed_storage_count;
-	zend_tpde_materialization *materializations;
+	zend_tpde_owned<zend_tpde_materialization> materializations;
 	uint32_t materialization_count;
-	zend_tpde_machine_reference *machine_references;
+	zend_tpde_owned<zend_tpde_machine_reference> machine_references;
 	uint32_t machine_reference_count;
-	uint32_t *entry_undef_temporary_indices;
+	zend_tpde_owned<uint32_t> entry_undef_temporary_indices;
 	/* Per index: only a branch-fused operation's helper needs it, and the
 	 * branch stores a placeholder there first (Zend entry only). */
-	uint8_t *entry_undef_temporary_fused_only;
+	zend_tpde_owned<uint8_t> entry_undef_temporary_fused_only;
 	uint32_t entry_undef_temporary_count;
 	/* The source op array is a generator: only then can an entry frame be
 	 * a generator frame. */

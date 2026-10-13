@@ -947,12 +947,12 @@ public:
 			deopt_landing_slices_[resume].count);
 	}
 	std::span<const uint32_t> generator_resume_targets() const {
-		return {plan_->generator_resume_targets,
+		return {plan_->generator_resume_targets.get(),
 			plan_->generator_resume_count};
 	}
 	std::span<const zend_mir_block_id>
 	generator_resume_exception_blocks() const {
-		return {plan_->generator_resume_exception_blocks,
+		return {plan_->generator_resume_exception_blocks.get(),
 			plan_->generator_resume_count};
 	}
 	std::span<const IRValueRef> generator_resume_values(IRInstRef inst) const {
@@ -978,7 +978,8 @@ public:
 		const zend_tpde_instruction &instruction =
 			plan_->instructions[current.mir_instruction_index];
 		return std::span<const zend_tpde_materialization>{
-			plan_->materializations, plan_->materialization_count}.subspan(
+			plan_->materializations.get(),
+			plan_->materialization_count}.subspan(
 				instruction.materialization_offset,
 				instruction.materialization_count);
 	}

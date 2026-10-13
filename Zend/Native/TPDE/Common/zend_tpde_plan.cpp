@@ -107,63 +107,10 @@ void destroy_plan(zend_tpde_plan *plan) {
 			index < plan->source_multi_branch_case_count; ++index) {
 		std::free(plan->source_multi_branch_cases[index].string_key);
 	}
-	std::free(plan->block_ids);
-	std::free(plan->block_index);
-	std::free(plan->block_successor_offsets);
-	std::free(plan->block_successors);
-	std::free(plan->block_predecessor_offsets);
-	std::free(plan->block_predecessors);
-	std::free(plan->values);
-	std::free(plan->argument_value_indices);
-	std::free(plan->argument_abi);
-	std::free(plan->typed_component_call_eligible);
-	std::free(plan->effect_closed_inline_eligible);
-	std::free(plan->effect_closed_argument_used);
 	destroy_machine_cfg(&plan->entry_machine_cfg);
 	destroy_machine_cfg(&plan->typed_body_machine_cfg);
-	std::free(plan->value_index);
-	std::free(plan->instructions);
-	std::free(plan->instruction_operands);
-	std::free(plan->instruction_operand_transports);
-	std::free(plan->instruction_index);
-	std::free(plan->value_definition_instructions);
-	std::free(plan->source_value_definition_instructions);
-	std::free(plan->value_consumer_offsets);
-	std::free(plan->value_consumers);
-	std::free(plan->entry_value_required);
-	std::free(plan->typed_body_value_required);
-	std::free(plan->source_opcodes);
-	std::free(plan->source_multi_branches);
-	std::free(plan->source_multi_branch_cases);
-	std::free(plan->source_opcode_block_indices);
-	std::free(plan->source_opcode_is_data);
-	std::free(plan->source_block_starts);
-	std::free(plan->source_block_ends);
-	std::free(plan->source_call_phases);
-	std::free(plan->compiled_variables_used);
-	std::free(plan->call_site_instruction_index);
-	std::free(plan->call_sites);
-	std::free(plan->call_target_index);
-	std::free(plan->call_arguments);
-	std::free(plan->call_argument_bindings);
-	std::free(plan->user_binding_index);
-	std::free(plan->internal_binding_index);
-	std::free(plan->user_opcode_source_operations);
-	std::free(plan->user_opcode_source_op1_targets);
-	std::free(plan->user_opcode_source_op2_targets);
-	std::free(plan->user_opcode_source_extended_targets);
-	std::free(plan->generator_resume_targets);
-	std::free(plan->generator_resume_landings);
-	std::free(plan->generator_resume_exception_blocks);
-	std::free(plan->generator_resume_live_values);
-	std::free(plan->deopt_resume_targets);
-	std::free(plan->deopt_resume_instructions);
-	std::free(plan->operand_observed_storages);
-	std::free(plan->materializations);
-	std::free(plan->machine_references);
-	std::free(plan->entry_undef_temporary_indices);
-	std::free(plan->entry_undef_temporary_fused_only);
-	std::memset(plan, 0, sizeof(*plan));
+	/* The owned arrays free themselves. */
+	*plan = zend_tpde_plan{};
 }
 
 /*
@@ -615,8 +562,8 @@ static bool freeze_compiled_variable_uses(plan_builder &builder) {
 	plan->compiled_variable_count =
 		source_op_array != nullptr ? source_op_array->last_var : 0;
 	if (plan->compiled_variable_count != 0) {
-		plan->compiled_variables_used = static_cast<uint8_t *>(
-			std::malloc(plan->compiled_variable_count));
+		plan->compiled_variables_used.reset(static_cast<uint8_t *>(
+			std::malloc(plan->compiled_variable_count)));
 		if (plan->compiled_variables_used == nullptr) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -672,17 +619,17 @@ static bool freeze_source_cfg(plan_builder &builder) {
 			&& source_ssa->cfg.blocks_count > 0) {
 		plan->source_block_count =
 			static_cast<uint32_t>(source_ssa->cfg.blocks_count);
-		plan->source_opcode_block_indices = static_cast<uint32_t *>(
+		plan->source_opcode_block_indices.reset(static_cast<uint32_t *>(
 			std::malloc(static_cast<size_t>(plan->source_opcode_count)
-				* sizeof(*plan->source_opcode_block_indices)));
-		plan->source_opcode_is_data = static_cast<uint8_t *>(
-			std::malloc(plan->source_opcode_count));
-		plan->source_block_starts = static_cast<uint32_t *>(
+				* sizeof(*plan->source_opcode_block_indices))));
+		plan->source_opcode_is_data.reset(static_cast<uint8_t *>(
+			std::malloc(plan->source_opcode_count)));
+		plan->source_block_starts.reset(static_cast<uint32_t *>(
 			std::malloc(static_cast<size_t>(plan->source_block_count)
-				* sizeof(*plan->source_block_starts)));
-		plan->source_block_ends = static_cast<uint32_t *>(
+				* sizeof(*plan->source_block_starts))));
+		plan->source_block_ends.reset(static_cast<uint32_t *>(
 			std::malloc(static_cast<size_t>(plan->source_block_count)
-				* sizeof(*plan->source_block_ends)));
+				* sizeof(*plan->source_block_ends))));
 		if ((plan->source_opcode_count != 0
 					&& (plan->source_opcode_block_indices == nullptr
 						|| plan->source_opcode_is_data == nullptr))
@@ -762,22 +709,22 @@ static bool freeze_user_opcode_operations(plan_builder &builder) {
 			plan->user_opcode_callbacks = true;
 			plan->user_opcode_source_operation_count =
 				source_op_array->last;
-			plan->user_opcode_source_operations =
+			plan->user_opcode_source_operations.reset(
 				static_cast<zend_mir_executable_value_ref *>(
 					std::calloc(source_op_array->last,
-						sizeof(*plan->user_opcode_source_operations)));
-			plan->user_opcode_source_op1_targets =
+						sizeof(*plan->user_opcode_source_operations))));
+			plan->user_opcode_source_op1_targets.reset(
 				static_cast<uint32_t *>(std::malloc(
 					static_cast<size_t>(source_op_array->last)
-						* sizeof(uint32_t)));
-			plan->user_opcode_source_op2_targets =
+						* sizeof(uint32_t))));
+			plan->user_opcode_source_op2_targets.reset(
 				static_cast<uint32_t *>(std::malloc(
 					static_cast<size_t>(source_op_array->last)
-						* sizeof(uint32_t)));
-			plan->user_opcode_source_extended_targets =
+						* sizeof(uint32_t))));
+			plan->user_opcode_source_extended_targets.reset(
 				static_cast<uint32_t *>(std::malloc(
 					static_cast<size_t>(source_op_array->last)
-						* sizeof(uint32_t)));
+						* sizeof(uint32_t))));
 			if (source_op_array->last != 0
 					&& (plan->user_opcode_source_operations == nullptr
 						|| plan->user_opcode_source_op1_targets == nullptr
@@ -905,51 +852,51 @@ static bool allocate_plan_tables(plan_builder &builder) {
 		builder.internal_binding_count;
 	const uint32_t frame_argument_count = builder.frame_argument_count;
 	zend_native_diagnostic *const diag = builder.diag;
-	plan->block_ids = static_cast<zend_mir_block_id *>(
-		std::calloc(plan->block_count, sizeof(*plan->block_ids)));
-	plan->block_index = allocate_id_index(
-		plan->block_count, &plan->block_index_capacity);
-	plan->values = static_cast<zend_tpde_value *>(
-		std::calloc(plan->value_count, sizeof(*plan->values)));
+	plan->block_ids.reset(static_cast<zend_mir_block_id *>(
+		std::calloc(plan->block_count, sizeof(*plan->block_ids))));
+	plan->block_index.reset(allocate_id_index(
+		plan->block_count, &plan->block_index_capacity));
+	plan->values.reset(static_cast<zend_tpde_value *>(
+		std::calloc(plan->value_count, sizeof(*plan->values))));
 	plan->argument_count = frame_argument_count;
-	plan->argument_value_indices = static_cast<int32_t *>(
+	plan->argument_value_indices.reset(static_cast<int32_t *>(
 		std::malloc(
 			static_cast<size_t>(plan->argument_count)
-				* sizeof(*plan->argument_value_indices)));
-	plan->argument_abi = static_cast<zend_tpde_local_abi_type *>(
-		std::calloc(plan->argument_count, sizeof(*plan->argument_abi)));
-	plan->effect_closed_argument_used = static_cast<uint8_t *>(
-		std::calloc(plan->argument_count, sizeof(uint8_t)));
+				* sizeof(*plan->argument_value_indices))));
+	plan->argument_abi.reset(static_cast<zend_tpde_local_abi_type *>(
+		std::calloc(plan->argument_count, sizeof(*plan->argument_abi))));
+	plan->effect_closed_argument_used.reset(static_cast<uint8_t *>(
+		std::calloc(plan->argument_count, sizeof(uint8_t))));
 	for (uint32_t i = 0;
 			i < plan->argument_count && plan->argument_value_indices != nullptr;
 			++i) {
 		plan->argument_value_indices[i] = -1;
 	}
-	plan->value_index = allocate_id_index(
-		plan->value_count, &plan->value_index_capacity);
-	plan->instructions = static_cast<zend_tpde_instruction *>(
-		std::calloc(plan->instruction_count, sizeof(*plan->instructions)));
-	plan->instruction_index = allocate_id_index(
-		plan->instruction_count, &plan->instruction_index_capacity);
-	plan->call_site_instruction_index = allocate_id_index(
-		plan->call_site_count, &plan->call_site_instruction_index_capacity);
-	plan->call_sites = static_cast<zend_mir_call_site_ref *>(
+	plan->value_index.reset(allocate_id_index(
+		plan->value_count, &plan->value_index_capacity));
+	plan->instructions.reset(static_cast<zend_tpde_instruction *>(
+		std::calloc(plan->instruction_count, sizeof(*plan->instructions))));
+	plan->instruction_index.reset(allocate_id_index(
+		plan->instruction_count, &plan->instruction_index_capacity));
+	plan->call_site_instruction_index.reset(allocate_id_index(
+		plan->call_site_count, &plan->call_site_instruction_index_capacity));
+	plan->call_sites.reset(static_cast<zend_mir_call_site_ref *>(
 		std::malloc(static_cast<size_t>(plan->call_site_count)
-			* sizeof(*plan->call_sites)));
-	plan->call_target_index = allocate_id_index(
-		plan->call_target_count, &plan->call_target_index_capacity);
-	plan->call_argument_bindings =
+			* sizeof(*plan->call_sites))));
+	plan->call_target_index.reset(allocate_id_index(
+		plan->call_target_count, &plan->call_target_index_capacity));
+	plan->call_argument_bindings.reset(
 		static_cast<zend_tpde_source_value_binding *>(std::malloc(
 			static_cast<size_t>(plan->call_argument_count)
-				* sizeof(*plan->call_argument_bindings)));
-	plan->call_arguments =
+				* sizeof(*plan->call_argument_bindings))));
+	plan->call_arguments.reset(
 		static_cast<zend_mir_call_argument_ref *>(std::malloc(
 			static_cast<size_t>(plan->call_argument_count)
-				* sizeof(*plan->call_arguments)));
-	plan->user_binding_index = allocate_id_index(
-		user_binding_count, &plan->user_binding_index_capacity);
-	plan->internal_binding_index = allocate_id_index(
-		internal_binding_count, &plan->internal_binding_index_capacity);
+				* sizeof(*plan->call_arguments))));
+	plan->user_binding_index.reset(allocate_id_index(
+		user_binding_count, &plan->user_binding_index_capacity));
+	plan->internal_binding_index.reset(allocate_id_index(
+		internal_binding_count, &plan->internal_binding_index_capacity));
 	plan->direct_calls = static_cast<zend_native_direct_call_descriptor **>(
 		std::calloc(plan->call_site_count, sizeof(*plan->direct_calls)));
 	plan->direct_internal_calls =
@@ -1041,9 +988,9 @@ static bool freeze_instruction_table(plan_builder &builder) {
 		plan->instructions[i].source_auxiliary_binding = {-1, -1};
 	}
 	plan->instruction_operand_count = static_cast<uint32_t>(operands);
-	plan->instruction_operands = static_cast<zend_mir_value_id *>(
+	plan->instruction_operands.reset(static_cast<zend_mir_value_id *>(
 		std::malloc(static_cast<size_t>(plan->instruction_operand_count)
-			* sizeof(*plan->instruction_operands)));
+			* sizeof(*plan->instruction_operands))));
 	if (plan->instruction_operand_count != 0
 			&& plan->instruction_operands == nullptr) {
 		zend_tpde_set_diagnostic(diag,
@@ -1291,12 +1238,12 @@ static bool freeze_block_graph(plan_builder &builder) {
 		}
 		plan->block_ids[i] = block.id;
 	}
-	plan->block_successor_offsets = static_cast<uint32_t *>(
+	plan->block_successor_offsets.reset(static_cast<uint32_t *>(
 		std::calloc(static_cast<size_t>(plan->block_count) + 1,
-			sizeof(*plan->block_successor_offsets)));
-	plan->block_predecessor_offsets = static_cast<uint32_t *>(
+			sizeof(*plan->block_successor_offsets))));
+	plan->block_predecessor_offsets.reset(static_cast<uint32_t *>(
 		std::calloc(static_cast<size_t>(plan->block_count) + 1,
-			sizeof(*plan->block_predecessor_offsets)));
+			sizeof(*plan->block_predecessor_offsets))));
 	if (plan->block_successor_offsets == nullptr
 			|| plan->block_predecessor_offsets == nullptr) {
 		zend_tpde_set_diagnostic(diag,
@@ -1326,14 +1273,14 @@ static bool freeze_block_graph(plan_builder &builder) {
 			plan->block_predecessor_count;
 	}
 	if (plan->block_successor_count != 0) {
-		plan->block_successors = static_cast<uint32_t *>(
+		plan->block_successors.reset(static_cast<uint32_t *>(
 			std::malloc(static_cast<size_t>(plan->block_successor_count)
-				* sizeof(*plan->block_successors)));
+				* sizeof(*plan->block_successors))));
 	}
 	if (plan->block_predecessor_count != 0) {
-		plan->block_predecessors = static_cast<uint32_t *>(
+		plan->block_predecessors.reset(static_cast<uint32_t *>(
 			std::malloc(static_cast<size_t>(plan->block_predecessor_count)
-				* sizeof(*plan->block_predecessors)));
+				* sizeof(*plan->block_predecessors))));
 	}
 	if ((plan->block_successor_count != 0
 				&& plan->block_successors == nullptr)

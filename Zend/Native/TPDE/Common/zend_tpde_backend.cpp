@@ -2,6 +2,8 @@
 
 #include "Zend/Native/TPDE/Common/zend_tpde_plan_internal.hpp"
 
+#include <new>
+
 namespace zend::native::tpde::plan_detail {
 
 static zend_native_image_metrics collect_plan_metrics(
@@ -109,7 +111,7 @@ static void destroy_component_plans(
 		destroy_plan(&plans[index]);
 	}
 	std::free(plan_refs);
-	std::free(plans);
+	delete[] plans;
 }
 
 /*
@@ -206,12 +208,11 @@ extern "C" zend_result zend_tpde_compile_component(
 		return FAILURE;
 	}
 
-	auto *plans = static_cast<zend_tpde_plan *>(
-		std::calloc(member_count, sizeof(zend_tpde_plan)));
+	auto *plans = new (std::nothrow) zend_tpde_plan[member_count]();
 	auto *plan_refs = static_cast<const zend_tpde_plan **>(
 		std::calloc(member_count, sizeof(zend_tpde_plan *)));
 	if (plans == nullptr || plan_refs == nullptr) {
-		std::free(plans);
+		delete[] plans;
 		std::free(plan_refs);
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
