@@ -8965,6 +8965,9 @@ bool ZendCompilerA64::compile_inst_impl(
 		ASM(ANDwi, index_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, index_reg, IS_UNDEF);
 		generate_raw_jump(Jump::Jeq, slow);
+		/* FETCH_R dereferences: the helper copies a reference's value. */
+		ASM(CMPwi, index_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::Jeq, slow);
 
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
 			if (adaptor->machine_kind(node.result)

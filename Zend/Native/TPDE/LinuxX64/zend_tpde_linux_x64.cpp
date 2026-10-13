@@ -18320,6 +18320,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		auto slow = text_writer.label_create();
 		auto not_indirect = text_writer.label_create();
+		auto not_reference = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
@@ -18344,6 +18345,17 @@ bool ZendCompilerX64::compile_inst_impl(
 			FE_MEM(slot_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
 		label_place(not_indirect);
+		/* FETCH_R copies the referenced value. */
+		ASM(CMP8ri, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::jne, not_reference);
+		ASM(MOV64rm, slot_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(LEA64rm, slot_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_reference, val))));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		label_place(not_reference);
 		ASM(CMP8ri, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::je, slow);
 
