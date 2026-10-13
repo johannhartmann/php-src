@@ -959,6 +959,7 @@ public:
 	bool compile_boxed_cond_cold_branch(IRInstRef instruction);
 	bool reload_generator_values(
 		IRInstRef instruction, std::vector<ValueRef> &locked_values);
+	/* The parts compile_inst_impl() dispatches to, by node kind and opcode. */
 	bool compile_typed_call_guard();
 	bool compile_string_length_value();
 	bool compile_scalar_select();
@@ -1002,6 +1003,7 @@ public:
 	bool compile_return();
 	bool compile_return_source_zval();
 	bool compile_mir_opcode();
+	/* Operand access and value-operation fast paths of those parts. */
 	auto unary();
 	auto binary();
 	bool copy_result();
