@@ -98,6 +98,8 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
     PHP_ADD_BUILD_DIR([Zend/Native/TPDE/LinuxX64])
     PHP_ADD_SOURCES_X([Zend/Native/TPDE/LinuxX64], [zend_tpde_linux_x64.cpp],
       [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
+    PHP_ADD_SOURCES_X([Zend/Native/TPDE/Common], [zend_tpde_layout.cpp],
+      [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
     PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/fadec])
     PHP_ADD_SOURCES([Zend/Native/TPDE/ThirdParty/tpde/fadec], [encode2.c],
       [-Wno-overlength-strings])

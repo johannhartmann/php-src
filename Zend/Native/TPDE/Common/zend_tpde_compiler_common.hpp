@@ -3,12 +3,14 @@
 
 #include "Zend/Native/TPDE/Common/zend_tpde_direct_user_call.hpp"
 #include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
+#include "Zend/zend_observer.h"
 
 #include <tpde/CompilerBase.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace zend::native::tpde {
@@ -16,6 +18,12 @@ namespace zend::native::tpde {
 /* The offset of a CV or temporary frame slot from the frame. */
 constexpr uint64_t frame_slot_offset(uint64_t storage) {
 	return (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+}
+
+/* Whether a source operand names a frame slot (a CV or temporary). */
+inline bool is_frame_slot(const zend_mir_source_operand_ref &operand) {
+	return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+		|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA;
 }
 
 /*
@@ -27,8 +35,8 @@ constexpr uint64_t frame_slot_offset(uint64_t storage) {
  *  - JUMP_ALWAYS, JUMP_EQUAL, JUMP_NOT_EQUAL: its jump conditions;
  *  - emit_decision_test(reg): flags for a test of the 32-bit reg against 0;
  *  - patch_direct_call_stack_guard(offset, destination, frame_size);
- *  - FRAME_OFFSET_LIMIT: the largest frame displacement its loads and
- *    stores encode;
+ *  - DISPLACEMENT_LIMIT: the largest displacement its loads and stores
+ *    encode;
  *  - load_slot_part(reg, base, offset, kind, role): loads a value part from
  *    the zval at base + offset.
  */
@@ -353,7 +361,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 			const uint64_t offset =
 				frame_slot_offset(materialization.storage_id);
 			if (!zend_mir_id_is_valid(materialization.storage_id)
-					|| offset > Derived::FRAME_OFFSET_LIMIT - sizeof(zval)) {
+					|| offset > Derived::DISPLACEMENT_LIMIT - sizeof(zval)) {
 				return false;
 			}
 			const IRValueRef value =
@@ -399,7 +407,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 			const uint64_t offset = frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
 					|| offset + offsetof(zval, u1.type_info)
-						> Derived::FRAME_OFFSET_LIMIT) {
+						> Derived::DISPLACEMENT_LIMIT) {
 				return false;
 			}
 			auto value = define
@@ -676,6 +684,581 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 			.layout = layout,
 			.typed_body_call = typed_body_call,
 		};
+		return true;
+	}
+
+	/*
+	 * Whether the phases after a fast call site's Init are only its own
+	 * Send, Expand, argument-less Check and Do nodes, none emitting code
+	 * before its phase (a materialization, deopt store, landing or
+	 * generator reload). The Init's spill leaves every live value in its
+	 * stack slot until the Do, so the universal path of each phase may
+	 * continue in the next phase's universal path: the fast path then
+	 * never tests the call's mode.
+	 */
+	bool source_call_phases_chain(
+			const typename Adaptor::InstNode &init, typename Base::InstRange remaining) const {
+		for (auto it = remaining.from; it != remaining.to; ++it) {
+			const typename Adaptor::InstNode &phase = this->adaptor->node(*it);
+			if (phase.mir_instruction_index != init.mir_instruction_index
+					|| phase.deopt_landing != UINT32_MAX
+					|| (phase.materialization_operand_index != UINT32_MAX
+						&& phase.materialization_count != 0)
+					|| phase.deopt_store_operand_index != UINT32_MAX
+					|| !this->adaptor->generator_resume_values(*it).empty()) {
+				return false;
+			}
+			switch (phase.kind) {
+				case Adaptor::InstKind::UserCallDo:
+					return true;
+				case Adaptor::InstKind::UserCallSend:
+				case Adaptor::InstKind::UserCallExpand:
+					break;
+				case Adaptor::InstKind::UserCallCheck:
+					if (phase.source_position
+							>= this->adaptor->plan()->source_opcode_count
+						|| this->adaptor->plan()->source_opcodes[
+								phase.source_position].opcode
+							!= ZEND_CHECK_UNDEF_ARGS) {
+						return false;
+					}
+					break;
+				default:
+					return false;
+			}
+		}
+		return false;
+	}
+	/*
+	 * Every phase node of a call asks for its fast form, and both forms
+	 * walk all arguments: the answers are kept per call instruction (a
+	 * plan entry) for the function being compiled.
+	 */
+	mutable std::unordered_map<const zend_tpde_instruction *, uint8_t>
+		fast_call_forms_;
+	static constexpr uint8_t FAST_FORM_STATIC_KNOWN = 1;
+	static constexpr uint8_t FAST_FORM_STATIC = 2;
+	static constexpr uint8_t FAST_FORM_DYNAMIC_KNOWN = 4;
+	static constexpr uint8_t FAST_FORM_DYNAMIC = 8;
+	bool source_call_fast_dynamic(const zend_tpde_instruction &call) const {
+		uint8_t &forms = fast_call_forms_[&call];
+		if ((forms & FAST_FORM_DYNAMIC_KNOWN) == 0) {
+			forms |= FAST_FORM_DYNAMIC_KNOWN
+				| (compute_source_call_fast_dynamic(call)
+					? FAST_FORM_DYNAMIC : 0);
+		}
+		return (forms & FAST_FORM_DYNAMIC) != 0;
+	}
+	bool source_call_fast_static(const zend_tpde_instruction &call) const {
+		uint8_t &forms = fast_call_forms_[&call];
+		if ((forms & FAST_FORM_STATIC_KNOWN) == 0) {
+			forms |= FAST_FORM_STATIC_KNOWN
+				| (compute_source_call_fast_static(call)
+					? FAST_FORM_STATIC : 0);
+		}
+		return (forms & FAST_FORM_STATIC) != 0;
+	}
+	/*
+	 * Whether a call_user_func*() or $f(...) site takes the dynamic fast
+	 * path: zend_native_call_fast_dynamic_init() pushes the frame of a
+	 * recorded native target, every argument is sent to EX(call) by
+	 * zend_native_call_fast_send() and the frame is prepared generically.
+	 * Sends of register values and named or by-reference-checked
+	 * arguments keep the universal protocol.
+	 */
+	bool compute_source_call_fast_dynamic(
+			const zend_tpde_instruction &call) const {
+		const zend_native_user_call_descriptor *descriptor = call.user_call;
+		const zend_tpde_plan *plan = this->adaptor->plan();
+		/* $object->$method(...): a method named by a CV takes the
+		 * dynamic path (zend_native_call_fast_dynamic_init()). */
+		const bool variable_method = descriptor != nullptr
+			&& descriptor->init_opcode == ZEND_INIT_METHOD_CALL
+			&& (descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& descriptor->init_op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				|| ((descriptor->init_op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| descriptor->init_op1.kind
+							== ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& (descriptor->init_op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV
+						|| descriptor->init_op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_TMP
+						|| descriptor->init_op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_VAR)));
+		if (!this->adaptor->generator_resume_targets().empty()
+				|| descriptor == nullptr || descriptor->flags != 0
+				|| (descriptor->init_opcode != ZEND_INIT_USER_CALL
+					&& descriptor->init_opcode != ZEND_INIT_DYNAMIC_CALL
+					&& !variable_method)
+				|| (descriptor->do_opcode != ZEND_DO_UCALL
+					&& descriptor->do_opcode != ZEND_DO_FCALL
+					&& descriptor->do_opcode != ZEND_DO_FCALL_BY_NAME)
+				|| call.call_argument_count != descriptor->argument_count) {
+			return false;
+		}
+		/* The callable is a literal, a CV or a temporary, whose location
+		 * the Init takes (source_call_fast_callable_location()). */
+		if (!variable_method
+				&& descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& ((descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& descriptor->init_op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| (descriptor->init_op2.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_CV
+						&& descriptor->init_op2.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						&& descriptor->init_op2.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR))) {
+			return false;
+		}
+		if (descriptor->do_result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& ((descriptor->do_result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& descriptor->do_result.kind
+							!= ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| (descriptor->do_result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						&& descriptor->do_result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR))) {
+			return false;
+		}
+		for (uint32_t index = 0; index < descriptor->argument_count;
+				++index) {
+			const zend_native_direct_internal_call_argument &argument =
+				descriptor->arguments[index];
+			const zend_tpde_source_call_phase_entry *phase =
+				zend_tpde_source_call_phase_at(
+					plan, argument.source_position);
+			if ((argument.source_opcode != ZEND_SEND_VAL
+						&& argument.source_opcode != ZEND_SEND_VAL_EX
+						&& argument.source_opcode != ZEND_SEND_VAR
+						&& argument.source_opcode != ZEND_SEND_VAR_EX
+						&& argument.source_opcode != ZEND_SEND_USER
+						&& argument.source_opcode != ZEND_SEND_ARRAY
+						&& (argument.source_opcode != ZEND_SEND_UNPACK
+							|| !variable_method))
+					|| (argument.source_opcode != ZEND_SEND_ARRAY
+						&& argument.auxiliary_operand.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
+					|| phase == nullptr
+					|| (phase->operand_flags
+						& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0
+					|| (phase->phases & ZEND_TPDE_SOURCE_CALL_PHASE_CHECK)
+						!= 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/*
+	 * The callable location zend_native_call_fast_dynamic_init() takes for
+	 * a call_user_func*() or $f(...) site (ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_*),
+	 * 0 for a variable method site.
+	 */
+	uint64_t source_call_fast_callable_location(
+			const zend_native_user_call_descriptor *descriptor) const {
+		const zend_mir_source_operand_ref &callable = descriptor->init_op2;
+		if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
+			return 0;
+		}
+		if (callable.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			return callable.index;
+		}
+		const bool temporary = callable.slot_kind != ZEND_MIR_SOURCE_SLOT_CV;
+		return (uint64_t{ZEND_CALL_FRAME_SLOT} + callable.index
+				+ (temporary ? uint64_t{
+					this->adaptor->plan()->source_frame_variable_count} : 0))
+				* sizeof(zval)
+			| ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_SLOT
+			| (temporary ? ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_TEMPORARY : 0);
+	}
+
+	bool source_call_fast_eligible(const zend_tpde_instruction &call) const {
+		return source_call_fast_static(call) || source_call_fast_dynamic(call);
+	}
+
+	/*
+	 * Whether a source call may take the native call-site fast path of ADR
+	 * 0025 (see zend_native_user_call_site_header): a function call, a new,
+	 * a static method call or an instance-method call with a literal method
+	 * name, whose arguments are all positional sends of CVs, temporaries or
+	 * literals kept in their frame slots, and whose result is unused or a
+	 * temporary. The runtime publishes a site's target only when that target
+	 * takes exactly these arguments in the modes they are sent.
+	 */
+	bool compute_source_call_fast_static(
+			const zend_tpde_instruction &call) const {
+		const zend_native_user_call_descriptor *descriptor = call.user_call;
+		const zend_tpde_plan *plan = this->adaptor->plan();
+		const bool scalar_result = descriptor != nullptr
+			&& (descriptor->flags
+				& ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0;
+		/* The fast-path flag lives in a native stack slot, which a
+		 * generator resume does not restore. */
+		if (!this->adaptor->generator_resume_targets().empty()) {
+			return false;
+		}
+		if (descriptor == nullptr
+				|| (descriptor->flags
+					& ~ZEND_NATIVE_USER_CALL_REQUIRE_SCALAR_RESULT) != 0
+				|| (scalar_result
+					&& (descriptor->do_result.kind
+							== ZEND_MIR_SOURCE_OPERAND_UNUSED
+						|| (descriptor->result_type
+								!= ZEND_MIR_SCALAR_TYPE_I1
+							&& descriptor->result_type
+								!= ZEND_MIR_SCALAR_TYPE_I64
+							&& descriptor->result_type
+								!= ZEND_MIR_SCALAR_TYPE_F64)))
+				|| descriptor->argument_count
+					!= descriptor->initial_argument_count
+				|| descriptor->argument_count != call.call_argument_count
+				|| (descriptor->do_opcode != ZEND_DO_UCALL
+					&& descriptor->do_opcode != ZEND_DO_FCALL
+					&& descriptor->do_opcode != ZEND_DO_FCALL_BY_NAME)) {
+			return false;
+		}
+		switch (descriptor->init_opcode) {
+			case ZEND_INIT_FCALL:
+			case ZEND_INIT_FCALL_BY_NAME:
+			case ZEND_INIT_NS_FCALL_BY_NAME:
+				break;
+			case ZEND_NEW: {
+				/* new of a literal class, self, parent or static; the Init
+				 * creates the object in the result slot. */
+				const uint32_t fetch =
+					descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+				if ((descriptor->init_op1.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& (descriptor->init_op1.kind
+								!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+							|| (fetch != ZEND_FETCH_CLASS_SELF
+								&& fetch != ZEND_FETCH_CLASS_PARENT
+								&& fetch != ZEND_FETCH_CLASS_STATIC)))
+						|| !is_frame_slot(descriptor->init_result)
+						|| (descriptor->init_result.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_TMP
+							&& descriptor->init_result.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_VAR)) {
+					return false;
+				}
+				break;
+			}
+			case ZEND_INIT_STATIC_METHOD_CALL: {
+				/* A named class, self::, parent:: or static::; a
+				 * constructor call (parent::__construct()) names no
+				 * method. */
+				const uint32_t fetch =
+					descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+				if ((descriptor->init_op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& descriptor->init_op2.kind
+							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)
+						|| (descriptor->init_op1.kind
+								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+							&& (descriptor->init_op1.kind
+									!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+								|| (fetch != ZEND_FETCH_CLASS_SELF
+									&& fetch != ZEND_FETCH_CLASS_PARENT
+									&& fetch != ZEND_FETCH_CLASS_STATIC)))) {
+					return false;
+				}
+				break;
+			}
+			case ZEND_INIT_METHOD_CALL:
+				if (descriptor->init_op2.kind
+						!= ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+					return false;
+				}
+				if (descriptor->init_op1.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+					break;
+				}
+				if (!is_frame_slot(descriptor->init_op1)
+						|| (descriptor->init_op1.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_CV
+							&& descriptor->init_op1.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_TMP
+							&& descriptor->init_op1.slot_kind
+								!= ZEND_MIR_SOURCE_SLOT_VAR)) {
+					return false;
+				}
+				break;
+			default:
+				return false;
+		}
+		if (descriptor->do_result.kind != ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& (!is_frame_slot(descriptor->do_result)
+					|| (descriptor->do_result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_TMP
+						&& descriptor->do_result.slot_kind
+							!= ZEND_MIR_SOURCE_SLOT_VAR))) {
+			return false;
+		}
+		for (uint32_t index = 0; index < descriptor->argument_count;
+				++index) {
+			const zend_native_direct_internal_call_argument &argument =
+				descriptor->arguments[index];
+			const zend_mir_source_operand_ref &source =
+				argument.source_operand;
+			/* SEND_REF of a CV or a VAR (a fetch for writing): the send
+			 * stores the CV's value or moves the VAR, and the fast Do of
+			 * the published site makes the reference (fast_ref_mask). */
+			if (argument.mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
+					&& argument.source_opcode == ZEND_SEND_REF
+					&& argument.auxiliary_operand.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					&& argument.ordinal == index
+					&& index < 32
+					&& is_frame_slot(source)
+					&& (source.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+						|| source.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
+				if (zend_tpde_source_call_phase_at(
+						plan, argument.source_position) == nullptr) {
+					return false;
+				}
+				continue;
+			}
+			if (argument.mode != ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+					|| argument.auxiliary_operand.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| argument.ordinal != index
+					|| (argument.source_opcode != ZEND_SEND_VAL
+						&& argument.source_opcode != ZEND_SEND_VAL_EX
+						&& argument.source_opcode != ZEND_SEND_VAR
+						&& argument.source_opcode != ZEND_SEND_VAR_EX
+						&& argument.source_opcode != ZEND_SEND_FUNC_ARG
+						&& argument.source_opcode != ZEND_SEND_VAR_NO_REF_EX)
+					|| (source.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& (!is_frame_slot(source)
+							|| (source.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+								&& source.slot_kind
+									!= ZEND_MIR_SOURCE_SLOT_TMP
+								/* A by-value FUNC_ARG fetch reads its
+								 * operand: the VAR holds a plain value
+								 * the send moves. A call result sent with
+								 * NO_REF_EX, and any VAR sent with
+								 * SEND_VAR(_EX), moves, or is
+								 * dereferenced. */
+								&& (source.slot_kind
+										!= ZEND_MIR_SOURCE_SLOT_VAR
+									|| (argument.source_opcode
+											!= ZEND_SEND_FUNC_ARG
+										&& argument.source_opcode
+											!= ZEND_SEND_VAR_NO_REF_EX
+										&& argument.source_opcode
+											!= ZEND_SEND_VAR
+										&& argument.source_opcode
+											!= ZEND_SEND_VAR_EX)))))) {
+				return false;
+			}
+			if (zend_tpde_source_call_phase_at(
+					plan, argument.source_position) == nullptr) {
+				return false;
+			}
+		}
+		return true;
+	}
+	/*
+	 * Lookup reuse: isset($a[$k]) whose true edge leads, through a block
+	 * holding only its branch, to a block that only this branch enters and
+	 * that starts with $a[$k] (FETCH_DIM_R of the same CV container and the
+	 * same CV or literal key). Nothing runs between the two, so the element
+	 * the isset found is the element the read finds. Returns the IRInstRef
+	 * of that read, or an invalid ref.
+	 */
+	std::unordered_map<uint32_t, uint32_t> block_entries_;
+	bool block_entries_counted_ = false;
+	IRInstRef lookup_reuse_consumer(IRInstRef producer_inst) {
+		const typename Adaptor::InstNode &producer = this->adaptor->node(producer_inst);
+		const zend_tpde_instruction &producer_mir =
+			this->adaptor->mir_instruction(producer_inst);
+		const zend_mir_executable_value_ref &isset =
+			producer_mir.value_operation;
+		auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
+			return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+				? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+		};
+		/* isset($a[$k]) names the container first, array_key_exists($k,
+		 * $a) the key. */
+		const bool key_exists = producer_mir.has_value_operation
+			&& isset.source_opcode == ZEND_ARRAY_KEY_EXISTS;
+		const zend_mir_source_operand_ref &container =
+			key_exists ? isset.op2 : isset.op1;
+		const zend_mir_source_operand_ref &key =
+			key_exists ? isset.op1 : isset.op2;
+		if (producer.kind != Adaptor::InstKind::GuardedFast
+				|| producer.continuation_block == UINT32_MAX
+				|| !producer_mir.has_value_operation
+				|| (!key_exists
+					&& (isset.opcode != ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
+						|| (isset.extended_value & ZEND_ISEMPTY) != 0))
+				|| slot_kind(container) != ZEND_MIR_SOURCE_SLOT_CV
+				|| (key.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& slot_kind(key) != ZEND_MIR_SOURCE_SLOT_CV)) {
+			return IRInstRef{UINT32_MAX};
+		}
+		const IRBlockRef branch_block{producer.continuation_block};
+		const auto branch_insts = this->adaptor->block_insts(branch_block);
+		const auto branch_succs = this->adaptor->block_succs(branch_block);
+		/* The branch block holds the loads of the isset's result and the
+		 * branch on it. */
+		if (branch_insts.empty() || branch_succs.size() != 2) {
+			return IRInstRef{UINT32_MAX};
+		}
+		for (size_t index = 0; index < branch_insts.size(); ++index) {
+			const typename Adaptor::InstNode &branch_node =
+				this->adaptor->node(branch_insts[index]);
+			const bool last = index + 1 == branch_insts.size();
+			if (last ? branch_node.kind != Adaptor::InstKind::MIR
+					|| this->adaptor->instruction_record(branch_insts[index]).opcode
+						!= ZEND_MIR_OPCODE_VALUE_COND_BRANCH
+				: branch_node.kind != Adaptor::InstKind::ZvalPayloadLoad
+					|| branch_node.mir_instruction_index
+						!= producer.mir_instruction_index) {
+				return IRInstRef{UINT32_MAX};
+			}
+		}
+		/* Successor 0 is the branch's true edge; only it may enter. */
+		return lookup_reuse_read(isset, key_exists, branch_succs[0],
+			branch_succs[1]);
+	}
+	/*
+	 * The read of an isset's (or array_key_exists()'s) element that starts
+	 * read_block, the true edge of the branch on it, whose false edge is
+	 * other_block (see lookup_reuse_consumer()); an invalid ref if none.
+	 */
+	IRInstRef lookup_reuse_read(const zend_mir_executable_value_ref &isset,
+			bool key_exists, IRBlockRef read_block, IRBlockRef other_block) {
+		auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
+			return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+					|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+				? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+		};
+		const zend_mir_source_operand_ref &container =
+			key_exists ? isset.op2 : isset.op1;
+		const zend_mir_source_operand_ref &key =
+			key_exists ? isset.op1 : isset.op2;
+		const zend_mir_storage_id container_storage =
+			key_exists ? isset.op2_storage_id : isset.op1_storage_id;
+		const zend_mir_storage_id key_storage =
+			key_exists ? isset.op1_storage_id : isset.op2_storage_id;
+		if (slot_kind(container) != ZEND_MIR_SOURCE_SLOT_CV
+				|| (key.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& slot_kind(key) != ZEND_MIR_SOURCE_SLOT_CV)
+				|| read_block == other_block) {
+			return IRInstRef{UINT32_MAX};
+		}
+		/* The edges into each block, counted once per function. */
+		if (!block_entries_counted_) {
+			for (IRBlockRef block : this->adaptor->cur_blocks()) {
+				for (IRBlockRef succ : this->adaptor->block_succs(block)) {
+					++block_entries_[static_cast<uint32_t>(succ)];
+				}
+			}
+			block_entries_counted_ = true;
+		}
+		const auto counted = block_entries_.find(
+			static_cast<uint32_t>(read_block));
+		const uint32_t entries =
+			counted != block_entries_.end() ? counted->second : 0;
+		const auto read_insts = this->adaptor->block_insts(read_block);
+		if (entries != 1 || read_insts.empty()) {
+			return IRInstRef{UINT32_MAX};
+		}
+		const IRInstRef consumer_inst = read_insts[0];
+		const typename Adaptor::InstNode &consumer = this->adaptor->node(consumer_inst);
+		const zend_tpde_instruction &consumer_mir =
+			this->adaptor->mir_instruction(consumer_inst);
+		const zend_mir_executable_value_ref &read =
+			consumer_mir.value_operation;
+		/* Literal keys match by value: the same string or integer. */
+		auto same_literal = [&](uint32_t left, uint32_t right) {
+			const zend_tpde_plan *plan = this->adaptor->plan();
+			if (plan->source_literals == nullptr
+					|| left >= plan->source_literal_count
+					|| right >= plan->source_literal_count) {
+				return false;
+			}
+			const zval *a = &plan->source_literals[left];
+			const zval *b = &plan->source_literals[right];
+			return Z_TYPE_P(a) == Z_TYPE_P(b)
+				&& ((Z_TYPE_P(a) == IS_LONG && Z_LVAL_P(a) == Z_LVAL_P(b))
+					|| (Z_TYPE_P(a) == IS_STRING
+						&& zend_string_equals(Z_STR_P(a), Z_STR_P(b))));
+		};
+		if (consumer.kind != Adaptor::InstKind::GuardedFast
+				|| consumer.synthetic || !consumer_mir.has_value_operation
+				|| (read.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+					&& read.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW
+					&& read.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W)
+				|| slot_kind(read.op1) != ZEND_MIR_SOURCE_SLOT_CV
+				|| read.op1_storage_id != container_storage
+				|| read.op2.kind != key.kind
+				|| (key.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+					? !same_literal(read.op2.index, key.index)
+					: slot_kind(read.op2) != ZEND_MIR_SOURCE_SLOT_CV
+						|| read.op2_storage_id != key_storage)) {
+			return IRInstRef{UINT32_MAX};
+		}
+		return consumer_inst;
+	}
+	/*
+	 * Whether a frameless call runs its handler directly from generated
+	 * code: no observer is registered (part of the system id), every CV
+	 * argument is defined and every temporary one holds no counted value,
+	 * so the call needs neither a warning, an observer nor a release. The
+	 * handler comes from the context's table, as images outlive the
+	 * process (the OPcache file cache).
+	 */
+	bool frameless_inline_allowed(
+			const zend_mir_executable_value_ref &operation,
+			const zend_tpde_frameless_direct &direct) {
+		const zend_tpde_plan *plan = this->adaptor->plan();
+		const uint32_t position = operation.source_position_id;
+		const uint32_t count =
+			operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
+		const uint32_t handler = static_cast<uint32_t>(
+			direct.descriptor & 0xffff);
+		if (ZEND_OBSERVER_ENABLED || plan->source_opcodes == nullptr
+				|| position >= plan->source_opcode_count
+				|| (count == 3 && position + 1 >= plan->source_opcode_count)
+				|| uint64_t{handler} * sizeof(void *)
+					> Derived::DISPLACEMENT_LIMIT
+				|| static_cast<uint32_t>(direct.slots)
+					> Derived::DISPLACEMENT_LIMIT - sizeof(zval)
+				|| uint64_t{position} * sizeof(zend_op)
+					> Derived::DISPLACEMENT_LIMIT
+				|| this->val_assignment(this->adaptor->val_local_idx(IRValueRef{
+					Adaptor::EXECUTION_CONTEXT_ARGUMENT})) == nullptr) {
+			return false;
+		}
+		for (uint32_t index = 0; index < count; ++index) {
+			if (((direct.descriptor
+					>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
+					!= 0) {
+				continue;
+			}
+			const uint32_t may_be = index == 0
+				? plan->source_opcodes[position].op1_may_be
+				: index == 1 ? plan->source_opcodes[position].op2_may_be
+				: plan->source_opcodes[position + 1].op1_may_be;
+			if (may_be == UINT32_MAX || (may_be & MAY_BE_UNDEF) != 0) {
+				return false;
+			}
+			if (((direct.descriptor
+					>> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1)
+					!= 0
+					&& (may_be & (MAY_BE_STRING | MAY_BE_ARRAY
+						| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF))
+						!= 0) {
+				return false;
+			}
+		}
 		return true;
 	}
 

@@ -148,8 +148,8 @@ private:
 	static constexpr auto JUMP_ALWAYS = Jump::jmp;
 	static constexpr auto JUMP_EQUAL = Jump::Jeq;
 	static constexpr auto JUMP_NOT_EQUAL = Jump::Jne;
-	/* Frame displacements are unsigned 32-bit. */
-	static constexpr uint64_t FRAME_OFFSET_LIMIT = UINT32_MAX;
+	/* Memory operand offsets are unsigned 32-bit. */
+	static constexpr uint64_t DISPLACEMENT_LIMIT = UINT32_MAX;
 	void emit_decision_test(AsmReg reg) {
 		ASM(CMPwi, reg, 0);
 	}
