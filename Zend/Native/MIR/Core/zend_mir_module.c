@@ -1494,6 +1494,7 @@ static bool zend_mir_core_stage_call_instructions(zend_mir_module *module)
 	}
 	for (index = 0; index < staging->site_count; index++) {
 		zend_mir_block_id block_id;
+		/* zend_mir_core_commit_call_model() validated every site's block. */
 		(void) zend_mir_core_call_site_block(staging, index, &block_id);
 		ordered[index].block_id = block_id;
 		ordered[index].source_position = staging->sites[index].instruction_id;
@@ -1775,6 +1776,7 @@ bool zend_mir_module_compose_instructions(zend_mir_module *module,
 		if (inserted[index]) {
 			continue;
 		}
+		/* Validated when the call model was committed. */
 		(void) zend_mir_core_call_site_block(
 			&module->call_staging, index, &block_id);
 		while (call_begin[block_id] < call_end[block_id]) {

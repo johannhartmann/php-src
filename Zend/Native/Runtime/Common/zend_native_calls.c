@@ -1319,7 +1319,7 @@ zend_native_status zend_native_call_frameless_internal(
 						result, arguments[0], arguments[1], arguments[2]);
 				break;
 			default:
-				return ZEND_NATIVE_EXCEPTION;
+				ZEND_UNREACHABLE();
 		}
 	}
 
@@ -6412,15 +6412,13 @@ uint32_t zend_native_call_fast_send(
  */
 static void zend_native_call_fast_publish_new_without_constructor(
 	const zend_execute_data *caller,
-	const zend_native_user_call_descriptor *descriptor,
-	const zend_native_user_call_resolution *resolution)
+	const zend_native_user_call_descriptor *descriptor)
 {
 	zend_native_user_call_site_header *header =
 		ZEND_NATIVE_USER_CALL_SITE_HEADER(descriptor);
 	const zend_object *object;
 	const zval *result;
 
-	(void) resolution;
 	if (header->fast_checked_epoch == zend_native_call_resolution_cache_epoch) {
 		return;
 	}
@@ -6846,7 +6844,7 @@ zend_native_call_resolve_user_linked(
 		}
 		if (descriptor->init_opcode == ZEND_NEW) {
 			zend_native_call_fast_publish_new_without_constructor(
-				caller, descriptor, resolution);
+				caller, descriptor);
 		}
 		return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
 	}
@@ -10621,10 +10619,8 @@ zend_native_status zend_native_call_fragment_explicit(
 	zend_native_direct_internal_call_argument argument;
 	zend_native_entry_cell seed =
 		zend_native_call_fragment_seed((zend_function *) &zend_pass_function);
-	zend_native_status status;
 	bool init = false;
 	bool send = false;
-	bool finish = false;
 	bool check_func_arg = false;
 	bool check_undef_args = false;
 
@@ -10671,7 +10667,6 @@ zend_native_status zend_native_call_fragment_explicit(
 		case ZEND_DO_ICALL:
 		case ZEND_CALLABLE_CONVERT:
 		case ZEND_CALLABLE_CONVERT_PARTIAL:
-			finish = true;
 			break;
 		default:
 			return ZEND_NATIVE_EXCEPTION;
@@ -10737,9 +10732,8 @@ zend_native_status zend_native_call_fragment_explicit(
 	descriptor.do_op1 = descriptor.init_op1;
 	descriptor.do_op2 = descriptor.init_op2;
 	descriptor.do_result = descriptor.init_result;
-	status = zend_native_call_invoke_finish_source(
+	return zend_native_call_invoke_finish_source(
 		caller, &seed, &descriptor);
-	return finish ? status : ZEND_NATIVE_EXCEPTION;
 }
 
 static void zend_native_echo_zval(
