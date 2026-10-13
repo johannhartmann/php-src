@@ -2,6 +2,7 @@
 
 #include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
 #include "Zend/Native/TPDE/DarwinA64/zend_tpde_darwin_assembler.hpp"
+#include "Zend/Native/Runtime/Common/zend_native_publish.hpp"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include <tpde/ELF.hpp>
@@ -20,13 +21,6 @@
 # include <pthread.h>
 # include <sys/mman.h>
 # include <unistd.h>
-
-extern "C" void __register_frame(void *);
-extern "C" void __deregister_frame(void *);
-extern "C" void __unw_add_dynamic_eh_frame_section(uintptr_t)
-	__attribute__((weak_import));
-extern "C" void __unw_remove_dynamic_eh_frame_section(uintptr_t)
-	__attribute__((weak_import));
 #endif
 
 namespace {
@@ -72,13 +66,11 @@ struct A64PublishedState {
 
 	~A64PublishedState() {
 		if (unwind_registered) {
-			if (__unw_remove_dynamic_eh_frame_section != nullptr) {
-				__unw_remove_dynamic_eh_frame_section(
-					reinterpret_cast<uintptr_t>(unwind_section));
-			} else {
-				for_each_eh_frame_fde(unwind_section, unwind_section_size,
-					[](void *fde) { __deregister_frame(fde); });
-			}
+			zend_native_deregister_eh_frame(unwind_section,
+				[&](void (*registration)(void *)) {
+					for_each_eh_frame_fde(unwind_section,
+						unwind_section_size, registration);
+				});
 			unwind_registered = false;
 		}
 		for (const MappedSection &section : sections) {
@@ -353,36 +345,6 @@ bool parse_a64_object(
 
 #endif
 
-/*
- * The component a defined entry symbol names: zend_native_entry is
- * component 0, zend_native_component_<index> (canonical decimal, as the
- * adaptor names them) the others; UINT32_MAX for any other name.
- */
-static uint32_t component_entry_index(
-	const char *name, size_t length, uint32_t count)
-{
-	static constexpr char entry[] = "zend_native_entry";
-	static constexpr char prefix[] = "zend_native_component_";
-	constexpr size_t prefix_length = sizeof(prefix) - 1;
-	uint64_t index = 0;
-
-	if (length == sizeof(entry) - 1 && std::memcmp(name, entry, length) == 0) {
-		return count != 0 ? 0 : UINT32_MAX;
-	}
-	if (length <= prefix_length || length > prefix_length + 10
-			|| std::memcmp(name, prefix, prefix_length) != 0
-			|| name[prefix_length] == '0') {
-		return UINT32_MAX;
-	}
-	for (size_t at = prefix_length; at < length; ++at) {
-		if (name[at] < '0' || name[at] > '9') {
-			return UINT32_MAX;
-		}
-		index = index * 10 + static_cast<uint64_t>(name[at] - '0');
-	}
-	return index < count ? static_cast<uint32_t>(index) : UINT32_MAX;
-}
-
 } // namespace
 
 zend_result zend_tpde_map_darwin_arm64(
@@ -554,7 +516,8 @@ zend_result zend_tpde_map_darwin_arm64(
 				|| published->sections[symbol.section].mapping == nullptr) {
 			continue;
 		}
-		const uint32_t index = component_entry_index(symbol.name.data(),
+		const uint32_t index = zend_native_component_entry_index(
+			symbol.name.data(),
 			symbol.name.size(), image->component_entry_count);
 		if (index == UINT32_MAX
 				|| code->component_entries[index] != nullptr) {
@@ -615,14 +578,11 @@ zend_result zend_tpde_map_darwin_arm64(
 	published->unwind_section =
 		published->sections[unwind_section].mapping;
 	published->unwind_section_size = object.sections[unwind_section].size;
-	if (__unw_add_dynamic_eh_frame_section != nullptr) {
-		__unw_add_dynamic_eh_frame_section(
-			reinterpret_cast<uintptr_t>(published->unwind_section));
-	} else {
-		for_each_eh_frame_fde(published->unwind_section,
-			published->unwind_section_size,
-			[](void *fde) { __register_frame(fde); });
-	}
+	zend_native_register_eh_frame(published->unwind_section,
+		[&](void (*registration)(void *)) {
+			for_each_eh_frame_fde(published->unwind_section,
+				published->unwind_section_size, registration);
+		});
 	published->unwind_registered = true;
 
 	const MappedSection &entry_section =

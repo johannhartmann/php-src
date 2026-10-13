@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PHP-3.01
 
 #include "Zend/Native/TPDE/Common/zend_tpde_internal.hpp"
+#include "Zend/Native/Runtime/Common/zend_native_publish.hpp"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
 
 #include <tpde/ELF.hpp>
@@ -20,12 +21,6 @@
 # include <unistd.h>
 
 extern "C" char __executable_start;
-extern "C" void __register_frame(void *);
-extern "C" void __deregister_frame(void *);
-extern "C" void __unw_add_dynamic_eh_frame_section(uintptr_t)
-	__attribute__((weak));
-extern "C" void __unw_remove_dynamic_eh_frame_section(uintptr_t)
-	__attribute__((weak));
 
 namespace {
 
@@ -70,36 +65,6 @@ bool checked_align(size_t value, size_t alignment, size_t *out) {
 	return true;
 }
 
-/*
- * The component a defined entry symbol names: zend_native_entry is
- * component 0, zend_native_component_<index> (canonical decimal, as the
- * adaptor names them) the others; UINT32_MAX for any other name.
- */
-static uint32_t component_entry_index(
-	const char *name, size_t length, uint32_t count)
-{
-	static constexpr char entry[] = "zend_native_entry";
-	static constexpr char prefix[] = "zend_native_component_";
-	constexpr size_t prefix_length = sizeof(prefix) - 1;
-	uint64_t index = 0;
-
-	if (length == sizeof(entry) - 1 && std::memcmp(name, entry, length) == 0) {
-		return count != 0 ? 0 : UINT32_MAX;
-	}
-	if (length <= prefix_length || length > prefix_length + 10
-			|| std::memcmp(name, prefix, prefix_length) != 0
-			|| name[prefix_length] == '0') {
-		return UINT32_MAX;
-	}
-	for (size_t at = prefix_length; at < length; ++at) {
-		if (name[at] < '0' || name[at] > '9') {
-			return UINT32_MAX;
-		}
-		index = index * 10 + static_cast<uint64_t>(name[at] - '0');
-	}
-	return index < count ? static_cast<uint32_t>(index) : UINT32_MAX;
-}
-
 const char *string_at(
 	const unsigned char *data, size_t size, uint32_t offset) {
 	if (offset >= size) {
@@ -109,22 +74,15 @@ const char *string_at(
 	return std::memchr(value, '\0', size - offset) != nullptr ? value : nullptr;
 }
 
+/* libgcc takes the whole .eh_frame section. */
 void register_eh_frame(void *eh_frame) {
-	if (__unw_add_dynamic_eh_frame_section != nullptr) {
-		__unw_add_dynamic_eh_frame_section(
-			reinterpret_cast<uintptr_t>(eh_frame));
-	} else {
-		__register_frame(eh_frame);
-	}
+	zend_native_register_eh_frame(eh_frame,
+		[&](void (*registration)(void *)) { registration(eh_frame); });
 }
 
 void deregister_eh_frame(void *eh_frame) {
-	if (__unw_remove_dynamic_eh_frame_section != nullptr) {
-		__unw_remove_dynamic_eh_frame_section(
-			reinterpret_cast<uintptr_t>(eh_frame));
-	} else {
-		__deregister_frame(eh_frame);
-	}
+	zend_native_deregister_eh_frame(eh_frame,
+		[&](void (*registration)(void *)) { registration(eh_frame); });
 }
 
 void unmap_linux_x64_image(unsigned char *mapping, size_t size);
@@ -692,7 +650,7 @@ zend_result map_linux_x64_object(
 			}
 			continue;
 		}
-		const uint32_t index = component_entry_index(
+		const uint32_t index = zend_native_component_entry_index(
 			name, std::strlen(name), image->component_entry_count);
 		if (index != UINT32_MAX
 				&& code->component_entries[index] == nullptr) {
