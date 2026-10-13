@@ -1585,6 +1585,9 @@ void destroy_machine_cfg(zend_tpde_machine_cfg *cfg) {
 	std::free(cfg->final_blocks);
 	std::free(cfg->boxed_cond_cold_blocks);
 	std::free(cfg->boxed_cond_cold_by_predecessor);
+	std::free(cfg->dominators.preorder);
+	std::free(cfg->dominators.subtree_end);
+	std::free(cfg->dominators.roots);
 	std::memset(cfg, 0, sizeof(*cfg));
 }
 
@@ -2505,6 +2508,151 @@ static bool freeze_machine_required_values(
 	return true;
 }
 
+/*
+ * Numbers the dominator forest of a frozen machine CFG. Dominance is queried
+ * from several nested instruction scans of the adaptor; a reachability
+ * search per pair is quadratic on large, mostly linear op arrays, so queries
+ * use tree intervals of the immediate-dominator tree. A CFG the adaptor
+ * rejects (no entry, malformed edges) keeps an empty forest.
+ */
+[[nodiscard]]
+static bool freeze_machine_cfg_dominators(
+		const zend_tpde_plan *plan, zend_tpde_machine_cfg *cfg) {
+	const uint32_t block_count = cfg->block_count;
+	const int32_t entry_index =
+		zend_tpde_block_index(plan, plan->function.entry_block_id);
+	if (block_count == 0 || cfg->successor_offsets == nullptr
+			|| entry_index < 0
+			|| static_cast<uint32_t>(entry_index) >= block_count) {
+		return true;
+	}
+	for (uint32_t block = 0; block < block_count; ++block) {
+		const uint32_t begin = cfg->successor_offsets[block];
+		const uint32_t end = cfg->successor_offsets[block + 1];
+		if (begin > end || end > cfg->successor_count) {
+			return true;
+		}
+	}
+	for (uint32_t edge = 0; edge < cfg->successor_count; ++edge) {
+		if (cfg->successors == nullptr
+				|| cfg->successors[edge] >= block_count) {
+			return true;
+		}
+	}
+	const uint32_t entry_block = static_cast<uint32_t>(entry_index);
+	/* Reverse postorder of the blocks the entry reaches. */
+	struct DfsFrame {
+		uint32_t block;
+		uint32_t next_edge;
+	};
+	std::vector<uint8_t> visited(block_count, 0);
+	std::vector<uint32_t> postorder;
+	std::vector<DfsFrame> pending{{
+		entry_block, cfg->successor_offsets[entry_block]}};
+	visited[entry_block] = 1;
+	while (!pending.empty()) {
+		DfsFrame &frame = pending.back();
+		const uint32_t end = cfg->successor_offsets[frame.block + 1];
+		if (frame.next_edge < end) {
+			const uint32_t successor = cfg->successors[frame.next_edge++];
+			if (visited[successor] == 0) {
+				visited[successor] = 1;
+				pending.push_back({successor,
+					cfg->successor_offsets[successor]});
+			}
+			continue;
+		}
+		postorder.push_back(frame.block);
+		pending.pop_back();
+	}
+	const std::vector<uint32_t> rpo(postorder.rbegin(), postorder.rend());
+	std::vector<uint32_t> rpo_index(block_count, UINT32_MAX);
+	for (uint32_t index = 0; index < rpo.size(); ++index) {
+		rpo_index[rpo[index]] = index;
+	}
+
+	std::vector<uint32_t> predecessor_offsets(block_count + 1, 0);
+	for (uint32_t block : rpo) {
+		for (uint32_t edge = cfg->successor_offsets[block];
+				edge < cfg->successor_offsets[block + 1]; ++edge) {
+			++predecessor_offsets[cfg->successors[edge] + 1];
+		}
+	}
+	for (uint32_t block = 0; block < block_count; ++block) {
+		predecessor_offsets[block + 1] += predecessor_offsets[block];
+	}
+	std::vector<uint32_t> predecessors(predecessor_offsets[block_count]);
+	std::vector<uint32_t> predecessor_next = predecessor_offsets;
+	for (uint32_t block : rpo) {
+		for (uint32_t edge = cfg->successor_offsets[block];
+				edge < cfg->successor_offsets[block + 1]; ++edge) {
+			const uint32_t successor = cfg->successors[edge];
+			predecessors[predecessor_next[successor]++] = block;
+		}
+	}
+
+	/* Cooper, Harvey and Kennedy's iteration over reverse postorder. */
+	std::vector<uint32_t> idom(block_count, UINT32_MAX);
+	idom[entry_block] = entry_block;
+	auto intersect_idom = [&](uint32_t left, uint32_t right) {
+		while (left != right) {
+			while (rpo_index[left] > rpo_index[right]) {
+				left = idom[left];
+			}
+			while (rpo_index[right] > rpo_index[left]) {
+				right = idom[right];
+			}
+		}
+		return left;
+	};
+	bool changed;
+	do {
+		changed = false;
+		for (uint32_t index = 1; index < rpo.size(); ++index) {
+			const uint32_t block = rpo[index];
+			uint32_t immediate = UINT32_MAX;
+			for (uint32_t predecessor_index = predecessor_offsets[block];
+					predecessor_index < predecessor_offsets[block + 1];
+					++predecessor_index) {
+				const uint32_t predecessor = predecessors[predecessor_index];
+				if (idom[predecessor] == UINT32_MAX) {
+					continue;
+				}
+				immediate = immediate == UINT32_MAX
+					? predecessor
+					: intersect_idom(immediate, predecessor);
+			}
+			if (immediate != UINT32_MAX && idom[block] != immediate) {
+				idom[block] = immediate;
+				changed = true;
+			}
+		}
+	} while (changed);
+
+	zend_mir_dominator_forest &forest = cfg->dominators;
+	forest.preorder = static_cast<uint32_t *>(
+		std::malloc(block_count * sizeof(uint32_t)));
+	forest.subtree_end = static_cast<uint32_t *>(
+		std::malloc(block_count * sizeof(uint32_t)));
+	forest.roots = static_cast<uint32_t *>(
+		std::malloc(block_count * sizeof(uint32_t)));
+	if (forest.preorder == nullptr || forest.subtree_end == nullptr
+			|| forest.roots == nullptr) {
+		return false;
+	}
+	forest.count = block_count;
+	std::vector<uint32_t> child_offsets(block_count + 1);
+	std::vector<uint32_t> children(block_count);
+	std::vector<uint32_t> cursor(block_count);
+	std::vector<uint32_t> stack(block_count);
+	std::vector<uint32_t> stack_cursor(block_count);
+	zend_mir_dominator_forest_number(block_count, idom.data(),
+		child_offsets.data(), children.data(), cursor.data(), stack.data(),
+		stack_cursor.data(), forest.preorder, forest.subtree_end,
+		forest.roots);
+	return true;
+}
+
 [[nodiscard]]
 static bool freeze_machine_cfg(
 		zend_tpde_plan *plan,
@@ -2785,7 +2933,8 @@ static bool freeze_machine_cfg(
 					boxed_cond_cold_blocks)
 				|| !freeze_machine_cfg_array(
 					&cfg->boxed_cond_cold_by_predecessor,
-					boxed_cond_cold_by_predecessor)) {
+					boxed_cond_cold_by_predecessor)
+				|| !freeze_machine_cfg_dominators(plan, cfg)) {
 			destroy_machine_cfg(cfg);
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,

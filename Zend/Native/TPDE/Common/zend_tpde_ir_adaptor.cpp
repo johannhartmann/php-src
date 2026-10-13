@@ -1828,9 +1828,6 @@ private:
 	std::vector<uint32_t> source_block_next;
 	bool source_call_fragments = false;
 	int32_t entry = -1;
-	std::vector<uint8_t> machine_block_reachable;
-	std::vector<uint32_t> machine_block_dom_begin;
-	std::vector<uint32_t> machine_block_dom_end;
 	bool source_landings = false;
 	std::vector<IRValueRef> transient_scalar_results;
 	std::vector<IRValueRef> register_component_results;
@@ -1926,7 +1923,6 @@ private:
 
 	bool init_value_tables();
 	bool build_blocks();
-	void compute_dominators();
 	void map_source_landings();
 	void add_entry_nodes();
 	void load_register_arguments();
@@ -1997,6 +1993,8 @@ private:
 	void resolve_deferred_typed_phi_inputs();
 	void finalize_graph();
 
+	/* Whether the entry reaches block. */
+	bool machine_block_reachable(uint32_t block) const;
 	bool machine_block_dominates(uint32_t dominator, uint32_t block);
 	bool phased_source_call(uint32_t instruction_index);
 	void select_register_assignment(uint32_t i);
@@ -2053,7 +2051,6 @@ void ZendIRAdaptor::Builder::run() {
 	if (!build_blocks()) {
 		return;
 	}
-	compute_dominators();
 	map_source_landings();
 	add_entry_nodes();
 	load_register_arguments();
@@ -2229,167 +2226,9 @@ bool ZendIRAdaptor::Builder::build_blocks() {
 	return true;
 }
 
-void ZendIRAdaptor::Builder::compute_dominators() {
-	/* The blocks the RPO search below reaches from the entry. */
-	machine_block_reachable.assign(tpde_block_count, 0);
-	/*
-	 * Dominance is queried from several nested instruction scans below; a
-	 * reachability search per pair is quadratic on large, mostly linear op
-	 * arrays, so queries use tree intervals of the immediate-dominator
-	 * tree.
-	 */
-	std::vector<uint32_t> machine_block_rpo;
-	std::vector<uint32_t> machine_block_rpo_index(
-		tpde_block_count, UINT32_MAX);
-	std::vector<uint32_t> machine_block_idom(
-		tpde_block_count, UINT32_MAX);
-	machine_block_dom_begin.assign(
-		tpde_block_count, UINT32_MAX);
-	machine_block_dom_end.assign(
-		tpde_block_count, UINT32_MAX);
-	if (tpde_block_count != 0) {
-		struct DfsFrame {
-			uint32_t block;
-			uint32_t next_edge;
-		};
-		std::vector<uint8_t> &visited = machine_block_reachable;
-		std::vector<uint32_t> postorder;
-		std::vector<DfsFrame> pending{{
-			static_cast<uint32_t>(entry),
-			machine_cfg.successor_offsets[
-				static_cast<uint32_t>(entry)]}};
-		visited[static_cast<uint32_t>(entry)] = 1;
-		while (!pending.empty()) {
-			DfsFrame &frame = pending.back();
-			const uint32_t end =
-				machine_cfg.successor_offsets[frame.block + 1];
-			if (frame.next_edge < end) {
-				const uint32_t successor =
-					machine_cfg.successors[frame.next_edge++];
-				if (visited[successor] == 0) {
-					visited[successor] = 1;
-					pending.push_back({successor,
-						machine_cfg.successor_offsets[successor]});
-				}
-				continue;
-			}
-			postorder.push_back(frame.block);
-			pending.pop_back();
-		}
-		machine_block_rpo.assign(
-			postorder.rbegin(), postorder.rend());
-		for (uint32_t index = 0;
-				index < machine_block_rpo.size(); ++index) {
-			machine_block_rpo_index[machine_block_rpo[index]] = index;
-		}
-
-		std::vector<uint32_t> predecessor_offsets(
-			tpde_block_count + 1, 0);
-		for (uint32_t block : machine_block_rpo) {
-			const uint32_t begin =
-				machine_cfg.successor_offsets[block];
-			const uint32_t end =
-				machine_cfg.successor_offsets[block + 1];
-			for (uint32_t edge = begin; edge < end; ++edge) {
-				++predecessor_offsets[machine_cfg.successors[edge] + 1];
-			}
-		}
-		for (uint32_t block = 0; block < tpde_block_count; ++block) {
-			predecessor_offsets[block + 1] += predecessor_offsets[block];
-		}
-		std::vector<uint32_t> predecessors(
-			predecessor_offsets[tpde_block_count]);
-		std::vector<uint32_t> predecessor_next = predecessor_offsets;
-		for (uint32_t block : machine_block_rpo) {
-			const uint32_t begin =
-				machine_cfg.successor_offsets[block];
-			const uint32_t end =
-				machine_cfg.successor_offsets[block + 1];
-			for (uint32_t edge = begin; edge < end; ++edge) {
-				const uint32_t successor = machine_cfg.successors[edge];
-				predecessors[predecessor_next[successor]++] = block;
-			}
-		}
-
-		const uint32_t entry_block = static_cast<uint32_t>(entry);
-		machine_block_idom[entry_block] = entry_block;
-		auto intersect_idom = [&](uint32_t left, uint32_t right) {
-			while (left != right) {
-				while (machine_block_rpo_index[left]
-						> machine_block_rpo_index[right]) {
-					left = machine_block_idom[left];
-				}
-				while (machine_block_rpo_index[right]
-						> machine_block_rpo_index[left]) {
-					right = machine_block_idom[right];
-				}
-			}
-			return left;
-		};
-		bool changed;
-		do {
-			changed = false;
-			for (uint32_t rpo_index = 1;
-					rpo_index < machine_block_rpo.size(); ++rpo_index) {
-				const uint32_t block = machine_block_rpo[rpo_index];
-				uint32_t immediate = UINT32_MAX;
-				for (uint32_t predecessor_index =
-						predecessor_offsets[block];
-						predecessor_index < predecessor_offsets[block + 1];
-						++predecessor_index) {
-					const uint32_t predecessor =
-						predecessors[predecessor_index];
-					if (machine_block_idom[predecessor] == UINT32_MAX) {
-						continue;
-					}
-					immediate = immediate == UINT32_MAX
-						? predecessor
-						: intersect_idom(immediate, predecessor);
-				}
-				if (immediate != UINT32_MAX
-						&& machine_block_idom[block] != immediate) {
-					machine_block_idom[block] = immediate;
-					changed = true;
-				}
-			}
-		} while (changed);
-
-		std::vector<uint32_t> child_offsets(tpde_block_count + 1, 0);
-		for (uint32_t block : machine_block_rpo) {
-			if (block != entry_block
-					&& machine_block_idom[block] != UINT32_MAX) {
-				++child_offsets[machine_block_idom[block] + 1];
-			}
-		}
-		for (uint32_t block = 0; block < tpde_block_count; ++block) {
-			child_offsets[block + 1] += child_offsets[block];
-		}
-		std::vector<uint32_t> children(child_offsets[tpde_block_count]);
-		std::vector<uint32_t> child_next = child_offsets;
-		for (uint32_t block : machine_block_rpo) {
-			if (block != entry_block
-					&& machine_block_idom[block] != UINT32_MAX) {
-				children[child_next[machine_block_idom[block]]++] = block;
-			}
-		}
-		std::vector<DfsFrame> dominator_pending{{
-			entry_block, child_offsets[entry_block]}};
-		uint32_t dominator_order = 0;
-		machine_block_dom_begin[entry_block] = dominator_order++;
-		while (!dominator_pending.empty()) {
-			DfsFrame &frame = dominator_pending.back();
-			const uint32_t end = child_offsets[frame.block + 1];
-			if (frame.next_edge < end) {
-				const uint32_t child = children[frame.next_edge++];
-				machine_block_dom_begin[child] = dominator_order++;
-				dominator_pending.push_back({
-					child, child_offsets[child]});
-				continue;
-			}
-			machine_block_dom_end[frame.block] = dominator_order;
-			dominator_pending.pop_back();
-		}
-	}
+bool ZendIRAdaptor::Builder::machine_block_reachable(uint32_t block) const {
+	return machine_cfg.dominators.roots[block]
+		== static_cast<uint32_t>(entry);
 }
 
 bool ZendIRAdaptor::Builder::machine_block_dominates(
@@ -2400,14 +2239,8 @@ bool ZendIRAdaptor::Builder::machine_block_dominates(
 	if (dominator == block) {
 		return true;
 	}
-	if (machine_block_reachable[block] == 0
-			|| machine_block_dom_begin[dominator] == UINT32_MAX) {
-		return false;
-	}
-	return machine_block_dom_begin[dominator]
-			<= machine_block_dom_begin[block]
-		&& machine_block_dom_end[block]
-			<= machine_block_dom_end[dominator];
+	return zend_mir_dominator_forest_dominates(
+		&machine_cfg.dominators, dominator, block);
 }
 
 bool ZendIRAdaptor::Builder::phased_source_call(uint32_t instruction_index) {
@@ -3584,7 +3417,7 @@ void ZendIRAdaptor::Builder::collect_call_transport_storages() {
 	for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 		const zend_tpde_instruction &instruction =
 			plan_->instructions[i];
-		if (machine_block_reachable[instruction_blocks[i]] == 0) {
+		if (!machine_block_reachable(instruction_blocks[i])) {
 			continue;
 		}
 		const zend_mir_instruction_record record =
@@ -3768,7 +3601,7 @@ void ZendIRAdaptor::Builder::select_register_branch_results() {
 	for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 		const zend_tpde_instruction &instruction =
 			plan_->instructions[i];
-		if (machine_block_reachable[instruction_blocks[i]] == 0) {
+		if (!machine_block_reachable(instruction_blocks[i])) {
 			continue;
 		}
 		const zend_mir_instruction_record record =
@@ -5049,7 +4882,7 @@ void ZendIRAdaptor::Builder::merge_short_circuit_results() {
 	for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 		const zend_tpde_instruction &instruction =
 			plan_->instructions[i];
-		if (machine_block_reachable[instruction_blocks[i]] == 0) {
+		if (!machine_block_reachable(instruction_blocks[i])) {
 			continue;
 		}
 		const zend_mir_instruction_record record =
@@ -5725,7 +5558,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 		valid_ = false;
 		return;
 	}
-	if (machine_block_reachable[block] == 0) {
+	if (!machine_block_reachable(block)) {
 		return;
 	}
 	if (source_landings

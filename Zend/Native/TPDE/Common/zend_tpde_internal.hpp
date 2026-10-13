@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
+#include "Zend/Native/Lowering/zend_mir_dominator_forest.h"
 #include "Zend/Native/MIR/zend_mir_call.h"
 #include "Zend/Native/MIR/zend_mir_values.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
@@ -2478,6 +2479,11 @@ struct zend_tpde_machine_cfg {
 	uint32_t *final_blocks;
 	uint32_t *boxed_cond_cold_blocks;
 	uint32_t *boxed_cond_cold_by_predecessor;
+	/*
+	 * The immediate-dominator forest of the blocks: the entry's tree holds
+	 * the blocks it reaches, every other block is a root of its own.
+	 */
+	zend_mir_dominator_forest dominators;
 };
 
 /*
