@@ -3330,6 +3330,237 @@ static inline bool zend_tpde_typed_body_frame_transport(
 }
 
 /*
+ * The shape of a proof-closed scalar callee body that a direct call may clone
+ * instead of calling through the local component ABI: one block, or a scalar
+ * diamond of PHIs, of effect-free integer and boolean instructions, up to
+ * eight checked additions and subtractions or one string length, and one
+ * return. The machine plan screens bodies with it and freezes the
+ * eligibility; the adaptor follows it while it clones a body.
+ */
+enum zend_tpde_inline_body_step : uint8_t {
+	ZEND_TPDE_INLINE_BODY_REJECT,
+	/* Transport, constant, statepoint or proven return-type check. */
+	ZEND_TPDE_INLINE_BODY_SKIP,
+	ZEND_TPDE_INLINE_BODY_PHI,
+	ZEND_TPDE_INLINE_BODY_COND_BRANCH,
+	ZEND_TPDE_INLINE_BODY_BRANCH,
+	ZEND_TPDE_INLINE_BODY_RETURN_SOURCE_ZVAL,
+	ZEND_TPDE_INLINE_BODY_RETURN,
+	ZEND_TPDE_INLINE_BODY_COPY,
+	ZEND_TPDE_INLINE_BODY_CHECKED_BINARY,
+	ZEND_TPDE_INLINE_BODY_STRING_LENGTH,
+	ZEND_TPDE_INLINE_BODY_SCALAR,
+};
+
+struct zend_tpde_inline_body_shape {
+	/*
+	 * What only the machine plan's screen rejects: bodies of more semantic
+	 * instructions, a string length or scalar instruction after a string
+	 * length, and diamonds without exactly one branch per arm.
+	 */
+	uint32_t semantic_instruction_limit;
+	bool string_length_ends_body;
+	bool counts_arm_branches;
+
+	bool scalar_diamond;
+	zend_tpde_scalar_diamond diamond;
+	/* Set by each return step; the cloner keeps its own answer. */
+	bool saw_return;
+	bool saw_string_length;
+	uint32_t checked_binary_count;
+	uint32_t semantic_instruction_count;
+	uint32_t conditional_branch_count;
+	uint32_t arm_branch_count;
+	uint32_t phi_count;
+};
+
+/*
+ * Whether call's target and result and callee's form admit an inline body;
+ * sets up shape for zend_tpde_inline_body_step_at().
+ */
+static inline bool zend_tpde_inline_body_begin(
+		const zend_tpde_instruction &call,
+		const zend_tpde_plan *callee,
+		zend_tpde_inline_body_shape *shape)
+{
+	if (call.direct_call == nullptr || callee == nullptr
+			|| (call.direct_call->receiver_kind
+					!= ZEND_NATIVE_INTERNAL_RECEIVER_NONE
+				&& (call.direct_call->receiver_kind
+						!= ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT
+					|| (call.direct_call->flags
+							& ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER) != 0))
+			|| (call.direct_call->result_type
+					!= ZEND_MIR_SCALAR_TYPE_I1
+				&& call.direct_call->result_type
+					!= ZEND_MIR_SCALAR_TYPE_I64)
+			|| callee->generator_resume_count != 0
+			|| callee->user_opcode_callbacks) {
+		return false;
+	}
+	shape->scalar_diamond = callee->block_count != 1;
+	return !shape->scalar_diamond
+		|| zend_tpde_scalar_diamond_at(callee, &shape->diamond);
+}
+
+/* Classifies the next callee instruction of an inline body, in order. */
+static inline zend_tpde_inline_body_step zend_tpde_inline_body_step_at(
+		const zend_tpde_instruction &call,
+		const zend_tpde_plan *callee,
+		const zend_tpde_instruction &instruction,
+		const zend_mir_instruction_record &record,
+		zend_tpde_inline_body_shape *shape)
+{
+	const bool scalar_diamond = shape->scalar_diamond;
+	const zend_tpde_scalar_diamond &diamond = shape->diamond;
+	const int32_t block_index =
+		zend_tpde_block_index(callee, record.block_id);
+	if (block_index < 0
+			|| (!scalar_diamond
+				&& record.block_id != callee->block_ids[0])) {
+		return ZEND_TPDE_INLINE_BODY_REJECT;
+	}
+	const uint32_t block = static_cast<uint32_t>(block_index);
+	if (instruction.local_abi_transport
+			|| (scalar_diamond
+				&& zend_tpde_scalar_diamond_frame_transport(
+					callee, instruction))) {
+		return ZEND_TPDE_INLINE_BODY_SKIP;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
+		/*
+		 * Constants are mapped when a cloned instruction consumes them.
+		 * Registerless NULL/UNDEF topology constants are not part of an
+		 * exact scalar return body and must not reject an effect-closed
+		 * candidate.
+		 */
+		return ZEND_TPDE_INLINE_BODY_SKIP;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT) {
+		return record.effects != 0
+			? ZEND_TPDE_INLINE_BODY_REJECT : ZEND_TPDE_INLINE_BODY_SKIP;
+	}
+	if (++shape->semantic_instruction_count
+			> shape->semantic_instruction_limit) {
+		return ZEND_TPDE_INLINE_BODY_REJECT;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_PHI) {
+		if (!scalar_diamond || block != diamond.merge
+				|| !zend_mir_id_is_valid(record.result_id)
+				|| instruction.operand_count != 2) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		++shape->phi_count;
+		return ZEND_TPDE_INLINE_BODY_PHI;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_COND_BRANCH) {
+		if (!scalar_diamond || block != diamond.entry
+				|| instruction.operand_count != 1
+				|| ++shape->conditional_branch_count != 1) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		return ZEND_TPDE_INLINE_BODY_COND_BRANCH;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_BRANCH) {
+		if (!scalar_diamond
+				|| (block != diamond.true_block
+					&& block != diamond.false_block)
+				|| (shape->counts_arm_branches
+					&& ++shape->arm_branch_count > 2)) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		return ZEND_TPDE_INLINE_BODY_BRANCH;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE
+			&& (instruction.runtime_helper == ZEND_NATIVE_HELPER_COUNT
+				|| shape->saw_string_length
+				|| (shape->checked_binary_count != 0
+					&& call.direct_call->result_type
+						== ZEND_MIR_SCALAR_TYPE_I64)
+				|| (callee->typed_body_return_abi.valid
+					&& callee->typed_body_return_abi.exact_type
+						== call.direct_call->result_type))) {
+		/*
+		 * The typed-body signature, derived from every return before
+		 * component calls are classified, proves the cloned body cannot
+		 * take the coercion or TypeError path of the Zend entry.
+		 */
+		return ZEND_TPDE_INLINE_BODY_SKIP;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
+		if (shape->saw_return || !instruction.has_value_operation
+				|| instruction.value_operation.source_opcode
+					!= ZEND_RETURN
+				|| (scalar_diamond && block != diamond.merge)) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		shape->saw_return = true;
+		return ZEND_TPDE_INLINE_BODY_RETURN_SOURCE_ZVAL;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_RETURN) {
+		if (shape->saw_return || instruction.operand_count != 1
+				|| (scalar_diamond && block != diamond.merge)) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		shape->saw_return = true;
+		return ZEND_TPDE_INLINE_BODY_RETURN;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_COPY
+			|| record.opcode == ZEND_MIR_OPCODE_CANONICALIZE) {
+		if (!zend_mir_id_is_valid(record.result_id)
+				|| instruction.operand_count != 1) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		return ZEND_TPDE_INLINE_BODY_COPY;
+	}
+	const bool after_string_length =
+		shape->string_length_ends_body && shape->saw_string_length;
+	if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
+		if (scalar_diamond || shape->checked_binary_count >= 8
+				|| !instruction.has_value_operation
+				|| (instruction.value_operation.source_opcode != ZEND_ADD
+					&& instruction.value_operation.source_opcode
+						!= ZEND_SUB)
+				|| call.direct_call->result_type
+					!= ZEND_MIR_SCALAR_TYPE_I64) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		++shape->checked_binary_count;
+		return ZEND_TPDE_INLINE_BODY_CHECKED_BINARY;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_VALUE_UNARY_OP) {
+		if (scalar_diamond || shape->checked_binary_count != 0
+				|| after_string_length
+				|| !instruction.has_value_operation
+				|| instruction.value_operation.source_opcode != ZEND_STRLEN
+				|| call.direct_call->result_type
+					!= ZEND_MIR_SCALAR_TYPE_I64) {
+			return ZEND_TPDE_INLINE_BODY_REJECT;
+		}
+		shape->saw_string_length = true;
+		return ZEND_TPDE_INLINE_BODY_STRING_LENGTH;
+	}
+	const bool integer_or_boolean_opcode =
+		(record.opcode >= ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+			&& record.opcode <= ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW)
+		|| (record.opcode >= ZEND_MIR_OPCODE_I64_BIT_OR
+			&& record.opcode <= ZEND_MIR_OPCODE_I64_CMP)
+		|| record.opcode == ZEND_MIR_OPCODE_I1_NOT
+		|| record.opcode == ZEND_MIR_OPCODE_I1_XOR
+		|| record.opcode == ZEND_MIR_OPCODE_I1_EQ
+		|| record.opcode == ZEND_MIR_OPCODE_I64_TO_I1
+		|| record.opcode == ZEND_MIR_OPCODE_I1_TO_I64;
+	if (shape->checked_binary_count != 0 || after_string_length
+			|| !integer_or_boolean_opcode
+			|| record.effects != 0
+			|| !zend_mir_id_is_valid(record.result_id)
+			|| instruction.operand_count > 2) {
+		return ZEND_TPDE_INLINE_BODY_REJECT;
+	}
+	return ZEND_TPDE_INLINE_BODY_SCALAR;
+}
+
+/*
  * The setup area a user call's Init reserves below the callee frame: the
  * frame header, the activation, then a placement per argument and its
  * target slots. False for an unsupported result operand or an offset above
