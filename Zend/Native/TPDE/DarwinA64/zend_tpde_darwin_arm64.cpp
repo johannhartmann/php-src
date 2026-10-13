@@ -196,11 +196,13 @@ public:
 
 	ValuePart image_symbol_value(
 		zend_native_image_symbol_kind kind, uint32_t id) {
+		/* Emitters call only runtime helpers planning required. */
 		const zend_native_image_symbol *symbol =
-			zend_tpde_image_symbol_find(
-				image_, kind, id,
-				kind == ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER
-					? 0 : adaptor->current_function_index());
+			kind == ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER
+				? zend_tpde_required_runtime_symbol(image_,
+					static_cast<zend_native_runtime_helper_id>(id))
+				: zend_tpde_image_symbol_find(
+					image_, kind, id, adaptor->current_function_index());
 		if (symbol == nullptr) {
 			return ValuePart{DarwinConfig::GP_BANK, 8};
 		}

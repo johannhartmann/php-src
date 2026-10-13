@@ -653,13 +653,25 @@ public:
 		EncodeBase::reset();
 	}
 
+	/* The symbol of a helper an emitter calls: planning required it. */
 	tpde::SymRef runtime_symbol(zend_native_runtime_helper_id id) {
+		return runtime_symbol_ref(id,
+			zend_tpde_required_runtime_symbol(image_, id));
+	}
+
+	/* The symbol of a helper, invalid when planning did not require it:
+	 * a fast path that needs the helper is then left out. */
+	tpde::SymRef optional_runtime_symbol(zend_native_runtime_helper_id id) {
+		return runtime_symbol_ref(id, zend_tpde_image_symbol_find(
+			image_, ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
+			static_cast<uint32_t>(id), 0));
+	}
+
+	tpde::SymRef runtime_symbol_ref(zend_native_runtime_helper_id id,
+			const zend_native_image_symbol *symbol) {
 		tpde::SymRef &reference =
 			runtime_symbols_[static_cast<uint32_t>(id)];
 		if (!reference.valid()) {
-			const zend_native_image_symbol *symbol = zend_tpde_image_symbol_find(
-				image_, ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
-				static_cast<uint32_t>(id), 0);
 			if (symbol == nullptr) {
 				return {};
 			}
@@ -1486,7 +1498,8 @@ public:
 			emit_counted_check(frame_reg, key_offset, slow);
 		}
 		const bool find_element = form != KeyForm::Index
-			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
+			&& optional_runtime_symbol(
+				ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
 		const bool split_string_key = form == KeyForm::Runtime
 			&& unlocked_gp_registers() >= 10;
 		/*
@@ -6045,8 +6058,9 @@ bool ZendCompilerX64::compile_load_frame(InstContext &ctx) {
 	 * cell; the last one queues the function for recompilation. */
 	if (ir().plan()->call_count_cell != nullptr
 			&& !ir().typed_body()
-			&& runtime_symbol(ZEND_NATIVE_HELPER_TIER2_NOTE).valid()
-			&& runtime_symbol(ZEND_NATIVE_HELPER_TIER2_RECORD).valid()) {
+			&& optional_runtime_symbol(ZEND_NATIVE_HELPER_TIER2_NOTE).valid()
+			&& optional_runtime_symbol(
+				ZEND_NATIVE_HELPER_TIER2_RECORD).valid()) {
 		ValuePart cell = image_symbol_value(
 			ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 			ZEND_NATIVE_TIER2_COUNT_SYMBOL_ID);
@@ -11796,7 +11810,8 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	const bool find_element = !writes && !register_key
 		&& literal_key != LiteralKey::Index
 		&& literal_key != LiteralKey::Register
-		&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
+		&& optional_runtime_symbol(
+			ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
 	auto find_element_filter = [&](tpde::Label undecided) {
 		emit_find_element_filter(container_base,
 			static_cast<int32_t>(container_offset),
@@ -12335,7 +12350,8 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		&& (literal_key == LiteralKey::Index
 			|| literal_key == LiteralKey::Register)
 		/* A register key of a string-key assignment has no helper. */
-		&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX).valid();
+		&& optional_runtime_symbol(
+			ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX).valid();
 	auto insert = text_writer.label_create();
 	auto inserted = text_writer.label_create();
 	generate_raw_jump(Jump::je, insert_index ? insert
@@ -22373,7 +22389,7 @@ bool ZendCompilerX64::compile_call_direct_internal(InstContext &ctx) {
 			&& do_opline_offset <= INT32_MAX
 			&& do_result_offset <= INT32_MAX - sizeof(zval)
 			&& internal_descriptor->argument_count <= 8
-			&& runtime_symbol(
+			&& optional_runtime_symbol(
 				ZEND_NATIVE_HELPER_INTERNAL_CALL_DO_PLAIN_FINISH)
 				.valid();
 		if (inline_do) {
