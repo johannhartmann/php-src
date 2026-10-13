@@ -79,8 +79,8 @@ f:
 0005 CHECK_FUNC_ARG 2
 0006 V1 = FETCH_OBJ_FUNC_ARG (ref) CV0($obj) string("value")
 0007 SEND_FUNC_ARG V1 2
-0008 T1 = CALLABLE_CONVERT_PARTIAL %d string("{closure:pfa:f():15}")
-0009 SEND_VAL T1 1
+0008 T%d = CALLABLE_CONVERT_PARTIAL %d string("{closure:pfa:f():15}")
+0009 SEND_VAL T%d 1
 0010 INIT_FCALL 2 %d string("range")
 0011 SEND_VAL int(1) 1
 0012 SEND_VAL int(2) 2
@@ -96,8 +96,8 @@ f:
 0022 CHECK_FUNC_ARG 2
 0023 V1 = FETCH_OBJ_FUNC_ARG (ref) CV0($obj) string("value")
 0024 SEND_FUNC_ARG V1 2
-0025 T1 = CALLABLE_CONVERT_PARTIAL %d string("{closure:pfa:f():16}")
-0026 SEND_VAL T1 1
+0025 T%d = CALLABLE_CONVERT_PARTIAL %d string("{closure:pfa:f():16}")
+0026 SEND_VAL T%d 1
 0027 INIT_FCALL 2 %d string("range")
 0028 SEND_VAL int(1) 1
 0029 SEND_VAL int(2) 2
