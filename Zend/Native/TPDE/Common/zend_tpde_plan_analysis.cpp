@@ -442,21 +442,7 @@ zend_tpde_local_abi_type zend_tpde_local_abi_from_declared_type(
 		exact_scalar_from_declared_type(*type);
 	if (zend_mir_scalar_type_is_exact(scalar)
 			&& scalar != ZEND_MIR_SCALAR_TYPE_NULL) {
-		return {
-			scalar == ZEND_MIR_SCALAR_TYPE_I1
-				? ZEND_MIR_REPRESENTATION_I1
-			: scalar == ZEND_MIR_SCALAR_TYPE_F64
-				? ZEND_MIR_REPRESENTATION_DOUBLE
-				: ZEND_MIR_REPRESENTATION_I64,
-			scalar,
-			scalar == ZEND_MIR_SCALAR_TYPE_I1
-				? ZEND_TPDE_MACHINE_VALUE_BOOL
-			: scalar == ZEND_MIR_SCALAR_TYPE_F64
-				? ZEND_TPDE_MACHINE_VALUE_F64
-				: ZEND_TPDE_MACHINE_VALUE_I64,
-			ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE,
-			true,
-		};
+		return zend_tpde_scalar_local_abi(scalar);
 	}
 
 	const uint32_t value_types =

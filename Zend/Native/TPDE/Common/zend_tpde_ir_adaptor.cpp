@@ -5,14 +5,6 @@
 
 namespace zend::native::tpde {
 
-bool ZendIRAdaptor::machine_pointer_kind(zend_tpde_machine_value_kind kind) {
-	return kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
-}
-
 IRValueRef ZendIRAdaptor::plan_source_operand_value_ref(
 		const zend_tpde_plan *plan,
 		const zend_mir_source_operand_ref &operand) {
@@ -769,11 +761,8 @@ void ZendIRAdaptor::freeze_deopt_landing_values(
 							canonical_storage(IRValueRef{index}))) {
 					continue;
 				}
-				const zend_tpde_machine_value_kind kind =
-					machine_kind(IRValueRef{index});
-				if (kind == ZEND_TPDE_MACHINE_VALUE_I64
-						|| kind == ZEND_TPDE_MACHINE_VALUE_F64
-						|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+				if (zend_tpde_machine_kind_is_scalar(
+						machine_kind(IRValueRef{index}))) {
 					stores.push_back(IRValueRef{index});
 				}
 			}
@@ -795,10 +784,7 @@ void ZendIRAdaptor::add_deopt_stores(const std::vector<uint32_t> &cold_nodes,
 		std::span<const IRValueRef> landing_values) {
 	std::vector<IRValueRef> stores;
 	for (const IRValueRef value : landing_values) {
-		const zend_tpde_machine_value_kind kind = machine_kind(value);
-		if (kind == ZEND_TPDE_MACHINE_VALUE_I64
-				|| kind == ZEND_TPDE_MACHINE_VALUE_F64
-				|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+		if (zend_tpde_machine_kind_is_scalar(machine_kind(value))) {
 			stores.push_back(value);
 		}
 	}
@@ -1069,10 +1055,8 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 		if (caller_value != INVALID_VALUE_REF
 				&& machine_kind(caller_value)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& (expected_machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_I64
-					|| expected_machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_BOOL)
+				&& zend_tpde_machine_kind_is_long_or_bool(
+					expected_machine_kind)
 				&& (exact_type(caller_value) == expected_exact_type
 					|| exact_type(caller_value)
 						== ZEND_MIR_SCALAR_TYPE_NONE)
@@ -1103,10 +1087,8 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 				&& caller_value != INVALID_VALUE_REF
 				&& machine_kind(caller_value)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& (expected_machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_I64
-					|| expected_machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_BOOL)
+				&& zend_tpde_machine_kind_is_long_or_bool(
+					expected_machine_kind)
 				&& (exact_type(caller_value) == expected_exact_type
 					|| exact_type(caller_value)
 						== ZEND_MIR_SCALAR_TYPE_NONE)
@@ -1172,7 +1154,7 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 		if (caller_value != INVALID_VALUE_REF
 				&& machine_kind(caller_value)
 					== expected_machine_kind
-				&& machine_pointer_kind(expected_machine_kind)
+				&& zend_tpde_machine_kind_is_pointer(expected_machine_kind)
 				&& !machine_value_is_register_authoritative(
 					caller_value)) {
 			const zend_mir_storage_id storage_id =
@@ -1804,10 +1786,8 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 					|| machine_kind(true_value) != callee_result.machine_kind
 					|| machine_kind(false_value)
 						!= callee_result.machine_kind
-					|| (callee_result.machine_kind
-							!= ZEND_TPDE_MACHINE_VALUE_I64
-						&& callee_result.machine_kind
-							!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+					|| !zend_tpde_machine_kind_is_long_or_bool(
+						callee_result.machine_kind)) {
 				return fail_inline();
 			}
 			const IRValueRef result = add_derived_value(
@@ -2850,16 +2830,7 @@ void ZendIRAdaptor::Builder::load_register_arguments() {
 				!= ZEND_MIR_SCALAR_TYPE_NULL;
 		const bool unboxed_pointer =
 			argument_abi.valid
-			&& (argument_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-				|| argument_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-				|| argument_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-				|| argument_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-				|| argument_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
+			&& zend_tpde_machine_kind_is_pointer(argument_abi.machine_kind);
 		const bool boxed_register_value =
 			argument_abi.valid
 			&& argument_abi.machine_kind
@@ -2995,23 +2966,8 @@ void ZendIRAdaptor::Builder::select_component_results() {
 					instruction.direct_call->result_type)
 				&& instruction.direct_call->result_type
 					!= ZEND_MIR_SCALAR_TYPE_NULL) {
-			const zend_mir_scalar_type_mask exact_type =
-				instruction.direct_call->result_type;
-			result_abi = {
-				exact_type == ZEND_MIR_SCALAR_TYPE_I1
-					? ZEND_MIR_REPRESENTATION_I1
-				: exact_type == ZEND_MIR_SCALAR_TYPE_F64
-					? ZEND_MIR_REPRESENTATION_DOUBLE
-					: ZEND_MIR_REPRESENTATION_I64,
-				exact_type,
-				exact_type == ZEND_MIR_SCALAR_TYPE_I1
-					? ZEND_TPDE_MACHINE_VALUE_BOOL
-				: exact_type == ZEND_MIR_SCALAR_TYPE_F64
-					? ZEND_TPDE_MACHINE_VALUE_F64
-					: ZEND_TPDE_MACHINE_VALUE_I64,
-				ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE,
-				true,
-			};
+			result_abi = zend_tpde_scalar_local_abi(
+				instruction.direct_call->result_type);
 		}
 		if (!result_abi.valid) {
 			valid_ = false;
@@ -3089,7 +3045,7 @@ void ZendIRAdaptor::Builder::preselect_pointer_phis() {
 		const IRValueRef assigned = source_binding_value_ref(
 			instruction.source_op2_binding);
 		if (assigned == INVALID_VALUE_REF
-				|| !machine_pointer_kind(machine_kind(assigned))
+				|| !zend_tpde_machine_kind_is_pointer(machine_kind(assigned))
 				|| !machine_value_is_register_authoritative(
 					assigned)
 				|| !machine_value_has_register_definition(
@@ -3129,7 +3085,7 @@ void ZendIRAdaptor::Builder::preselect_pointer_phis() {
 					+ static_cast<uint32_t>(result_index)};
 		const bool pointer_phi =
 			canonical != INVALID_VALUE_REF
-			&& machine_pointer_kind(machine_kind(canonical))
+			&& zend_tpde_machine_kind_is_pointer(machine_kind(canonical))
 			&& machine_value_is_register_authoritative(canonical);
 		if (canonical == INVALID_VALUE_REF || !pointer_phi) {
 			continue;
@@ -3211,7 +3167,7 @@ void ZendIRAdaptor::Builder::select_register_assignment(uint32_t i) {
 		return;
 	}
 	IRValueRef assignment_result = assigned;
-	if (machine_pointer_kind(machine_kind(assigned))) {
+	if (zend_tpde_machine_kind_is_pointer(machine_kind(assigned))) {
 		uint64_t literal_length = 0;
 		bool literal_truthy = false;
 		const bool string_literal = known_string_literal(
@@ -3253,7 +3209,7 @@ void ZendIRAdaptor::Builder::select_register_assignments() {
 		const IRValueRef candidate =
 			register_assignment_results[i];
 		if (candidate == INVALID_VALUE_REF
-				|| !machine_pointer_kind(machine_kind(candidate))
+				|| !zend_tpde_machine_kind_is_pointer(machine_kind(candidate))
 				|| !plan_->instructions[i].has_value_operation) {
 			continue;
 		}
@@ -3870,10 +3826,8 @@ void ZendIRAdaptor::Builder::collect_call_transport_storages() {
 						&& instruction.direct_call
 								->arguments[argument_index].exact_type
 							== transport_abi.exact_type))
-				&& (transport_abi.machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_I64
-					|| transport_abi.machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_BOOL);
+				&& zend_tpde_machine_kind_is_long_or_bool(
+					transport_abi.machine_kind);
 			if (boxed_transport || scalar_transport) {
 				register_boxed_storages.push_back(
 					canonical_storage(value));
@@ -4009,7 +3963,7 @@ void ZendIRAdaptor::Builder::select_register_branch_results() {
 				&& machine_kind(canonical)
 					== ZEND_TPDE_MACHINE_VALUE_BOOL);
 		const bool pointer_result =
-			machine_pointer_kind(machine_kind(canonical));
+			zend_tpde_machine_kind_is_pointer(machine_kind(canonical));
 		if ((!scalar_result && !pointer_result)
 				|| machine_value_has_register_definition(canonical)) {
 			continue;
@@ -4548,7 +4502,7 @@ void ZendIRAdaptor::Builder::select_phi_results() {
 		const bool pointer_phi =
 			assignment_source != INVALID_VALUE_REF
 			&& canonical_result != INVALID_VALUE_REF
-			&& machine_pointer_kind(
+			&& zend_tpde_machine_kind_is_pointer(
 				machine_kind(canonical_result))
 			&& machine_kind(canonical_result)
 				== machine_kind(assignment_source)
@@ -4680,16 +4634,7 @@ bool ZendIRAdaptor::Builder::entry_argument_has_register_definition(
 		&& ((zend_mir_scalar_type_is_exact(argument_abi.exact_type)
 				&& argument_abi.exact_type
 					!= ZEND_MIR_SCALAR_TYPE_NULL)
-			|| argument_abi.machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| argument_abi.machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| argument_abi.machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| argument_abi.machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| argument_abi.machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+			|| zend_tpde_machine_kind_is_pointer(argument_abi.machine_kind)
 			|| argument_abi.machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 }
@@ -4931,10 +4876,10 @@ void ZendIRAdaptor::Builder::resolve_phi_edges() {
 				: machine_kind(canonical_result);
 		const bool pointer_phi =
 			(selected_phi != INVALID_VALUE_REF
-				&& machine_pointer_kind(phi_machine_kind))
+				&& zend_tpde_machine_kind_is_pointer(phi_machine_kind))
 			|| (selected_phi == INVALID_VALUE_REF
 				&& canonical_result != INVALID_VALUE_REF
-				&& machine_pointer_kind(phi_machine_kind)
+				&& zend_tpde_machine_kind_is_pointer(phi_machine_kind)
 				&& machine_value_is_register_authoritative(
 					canonical_result));
 		const bool boxed_phi =
@@ -5159,7 +5104,7 @@ void ZendIRAdaptor::Builder::load_slot_backed_phi_inputs() {
 		if (result == INVALID_VALUE_REF
 				|| representation(result)
 					== ZEND_MIR_REPRESENTATION_ZVAL
-				|| machine_pointer_kind(machine_kind(result))
+				|| zend_tpde_machine_kind_is_pointer(machine_kind(result))
 				|| !zend_mir_scalar_type_is_exact(exact_type(result))
 				|| exact_type(result) == ZEND_MIR_SCALAR_TYPE_NULL
 				|| !machine_value_has_result_representation(result)) {
@@ -6288,16 +6233,12 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 				&& is_mir_value(canonical_index)
 				&& zend_mir_id_is_valid(result_storage)) {
 			result = add_derived_value(
-				result_type == ZEND_MIR_SCALAR_TYPE_I1
-					? ZEND_MIR_REPRESENTATION_I1
-					: ZEND_MIR_REPRESENTATION_I64,
+				zend_tpde_scalar_representation(result_type),
 				result_type, result_storage,
 				constant_string_length,
 				constant_string_length
 					? constant_string_length_bits : 0,
-				result_type == ZEND_MIR_SCALAR_TYPE_I1
-					? ZEND_TPDE_MACHINE_VALUE_BOOL
-					: ZEND_TPDE_MACHINE_VALUE_I64,
+				zend_tpde_scalar_machine_kind(result_type),
 				ZEND_MIR_OWNERSHIP_STATE_BORROWED,
 				ZEND_MIR_REFCOUNT_IMMORTAL);
 			set_instruction_result(i, result);
@@ -6579,17 +6520,9 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 				&& is_mir_value(canonical_index)
 				&& zend_mir_id_is_valid(result_storage)) {
 			result = add_derived_value(
-				result_type == ZEND_MIR_SCALAR_TYPE_I1
-					? ZEND_MIR_REPRESENTATION_I1
-					: result_type == ZEND_MIR_SCALAR_TYPE_F64
-						? ZEND_MIR_REPRESENTATION_DOUBLE
-						: ZEND_MIR_REPRESENTATION_I64,
+				zend_tpde_scalar_representation(result_type),
 				result_type, result_storage, false, 0,
-				result_type == ZEND_MIR_SCALAR_TYPE_I1
-					? ZEND_TPDE_MACHINE_VALUE_BOOL
-					: result_type == ZEND_MIR_SCALAR_TYPE_F64
-						? ZEND_TPDE_MACHINE_VALUE_F64
-						: ZEND_TPDE_MACHINE_VALUE_I64,
+				zend_tpde_scalar_machine_kind(result_type),
 				ZEND_MIR_OWNERSHIP_STATE_BORROWED,
 				ZEND_MIR_REFCOUNT_IMMORTAL);
 			set_instruction_result(i, result);
@@ -6757,7 +6690,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 			if (machine_result
 					&& result != INVALID_VALUE_REF
 					&& input != INVALID_VALUE_REF
-					&& machine_pointer_kind(machine_kind(result))
+					&& zend_tpde_machine_kind_is_pointer(machine_kind(result))
 					&& machine_kind(input)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 					&& representation(input)
@@ -7928,7 +7861,7 @@ void ZendIRAdaptor::Builder::lower_phi(
 			: INVALID_VALUE_REF;
 	};
 	if (representation(result) == ZEND_MIR_REPRESENTATION_ZVAL
-			|| machine_pointer_kind(machine_kind(result))) {
+			|| zend_tpde_machine_kind_is_pointer(machine_kind(result))) {
 		/*
 		 * An exact-null PHI carries neither payload nor type: every
 		 * input is the same PHP value, and a two-part boxed PHI
@@ -7961,7 +7894,7 @@ void ZendIRAdaptor::Builder::lower_phi(
 			result_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 		const bool pointer_result =
-			machine_pointer_kind(result_kind);
+			zend_tpde_machine_kind_is_pointer(result_kind);
 		/* A typed body's phi of numbers: its forwarded or computed
 		 * inputs are defined later in plan order, so resolve them
 		 * once the pass has defined them. */
@@ -8609,7 +8542,7 @@ void ZendIRAdaptor::Builder::add_user_call_operands(
 					!= ZEND_MIR_SCALAR_TYPE_NULL;
 			const bool transport_pointer =
 				transport_abi.valid
-				&& machine_pointer_kind(
+				&& zend_tpde_machine_kind_is_pointer(
 					transport_abi.machine_kind);
 			const bool transport_boxed =
 				transport_abi.valid
@@ -10047,7 +9980,7 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(
 				i < register_assignment_results.size()
 						&& register_assignment_results[i]
 							!= INVALID_VALUE_REF
-						&& machine_pointer_kind(machine_kind(
+						&& zend_tpde_machine_kind_is_pointer(machine_kind(
 							register_assignment_results[i]))
 					? register_assignment_results[i]
 					: add_derived_value(

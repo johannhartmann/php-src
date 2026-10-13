@@ -111,6 +111,81 @@ inline bool zend_tpde_abi_boxes_into(const zend_tpde_local_abi_type &value,
 				&& value.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOOL));
 }
 
+/* A long, a double or a boolean held unboxed. */
+inline bool zend_tpde_machine_kind_is_scalar(zend_tpde_machine_value_kind kind)
+{
+	return kind == ZEND_TPDE_MACHINE_VALUE_I64
+		|| kind == ZEND_TPDE_MACHINE_VALUE_F64
+		|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL;
+}
+
+/* A long or a double held unboxed. */
+inline bool zend_tpde_machine_kind_is_number(zend_tpde_machine_value_kind kind)
+{
+	return kind == ZEND_TPDE_MACHINE_VALUE_I64
+		|| kind == ZEND_TPDE_MACHINE_VALUE_F64;
+}
+
+/* A long or a boolean held unboxed in a general-purpose register. */
+inline bool zend_tpde_machine_kind_is_long_or_bool(
+	zend_tpde_machine_value_kind kind)
+{
+	return kind == ZEND_TPDE_MACHINE_VALUE_I64
+		|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL;
+}
+
+/* A pointer to a string, an array, an object or a resource. */
+inline bool zend_tpde_machine_kind_is_value_pointer(
+	zend_tpde_machine_value_kind kind)
+{
+	return kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+		|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR;
+}
+
+/* A value pointer or a pointer to a zend_reference. */
+inline bool zend_tpde_machine_kind_is_pointer(zend_tpde_machine_value_kind kind)
+{
+	return zend_tpde_machine_kind_is_value_pointer(kind)
+		|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+}
+
+/* The unboxed representation of an exact scalar type other than null. */
+inline zend_mir_representation zend_tpde_scalar_representation(
+	zend_mir_scalar_type_mask exact_type)
+{
+	return exact_type == ZEND_MIR_SCALAR_TYPE_I1
+			? ZEND_MIR_REPRESENTATION_I1
+		: exact_type == ZEND_MIR_SCALAR_TYPE_F64
+			? ZEND_MIR_REPRESENTATION_DOUBLE
+			: ZEND_MIR_REPRESENTATION_I64;
+}
+
+/* The machine kind of an exact scalar type other than null. */
+inline zend_tpde_machine_value_kind zend_tpde_scalar_machine_kind(
+	zend_mir_scalar_type_mask exact_type)
+{
+	return exact_type == ZEND_MIR_SCALAR_TYPE_I1
+			? ZEND_TPDE_MACHINE_VALUE_BOOL
+		: exact_type == ZEND_MIR_SCALAR_TYPE_F64
+			? ZEND_TPDE_MACHINE_VALUE_F64
+			: ZEND_TPDE_MACHINE_VALUE_I64;
+}
+
+/* The local ABI of an exact scalar other than null, passed unboxed. */
+inline zend_tpde_local_abi_type zend_tpde_scalar_local_abi(
+	zend_mir_scalar_type_mask exact_type)
+{
+	return {
+		zend_tpde_scalar_representation(exact_type),
+		exact_type,
+		zend_tpde_scalar_machine_kind(exact_type),
+		ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE,
+		true,
+	};
+}
+
 static inline zend_tpde_machine_representation_desc
 zend_tpde_machine_representation(
 	zend_tpde_machine_value_kind kind, bool register_authoritative)

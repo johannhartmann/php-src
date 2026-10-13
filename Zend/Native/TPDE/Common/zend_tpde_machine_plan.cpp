@@ -123,11 +123,7 @@ static zend_tpde_local_abi_type machine_plan_value_abi(
 		zend_mir_scalar_type_is_exact(value.exact_type)
 		&& value.exact_type != ZEND_MIR_SCALAR_TYPE_NULL;
 	const bool native_pointer =
-		value.machine_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-		|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-		|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-		|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-		|| value.machine_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+		zend_tpde_machine_kind_is_pointer(value.machine_kind);
 	const bool boxed =
 		value.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 	if ((!exact_scalar && !native_pointer && !boxed)
@@ -136,11 +132,7 @@ static zend_tpde_local_abi_type machine_plan_value_abi(
 	}
 	const zend_tpde_machine_value_kind abi_kind =
 		exact_scalar
-			? value.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-				? ZEND_TPDE_MACHINE_VALUE_BOOL
-			: value.exact_type == ZEND_MIR_SCALAR_TYPE_F64
-				? ZEND_TPDE_MACHINE_VALUE_F64
-				: ZEND_TPDE_MACHINE_VALUE_I64
+			? zend_tpde_scalar_machine_kind(value.exact_type)
 			: value.machine_kind;
 	const zend_tpde_machine_representation_desc machine_rep =
 		zend_tpde_machine_representation(abi_kind, true);
@@ -149,11 +141,7 @@ static zend_tpde_local_abi_type machine_plan_value_abi(
 	}
 	return machine_plan_abi(
 		exact_scalar
-			? value.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-				? ZEND_MIR_REPRESENTATION_I1
-			: value.exact_type == ZEND_MIR_SCALAR_TYPE_F64
-				? ZEND_MIR_REPRESENTATION_DOUBLE
-				: ZEND_MIR_REPRESENTATION_I64
+			? zend_tpde_scalar_representation(value.exact_type)
 		: native_pointer
 			? ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
 			: value.representation,
@@ -426,21 +414,8 @@ static bool try_freeze_typed_body_signature(
 						instruction.direct_call->result_type)
 					&& instruction.direct_call->result_type
 						!= ZEND_MIR_SCALAR_TYPE_NULL) {
-				const zend_mir_scalar_type_mask exact_type =
-					instruction.direct_call->result_type;
-				call_result_type = machine_plan_abi(
-					exact_type == ZEND_MIR_SCALAR_TYPE_I1
-						? ZEND_MIR_REPRESENTATION_I1
-					: exact_type == ZEND_MIR_SCALAR_TYPE_F64
-						? ZEND_MIR_REPRESENTATION_DOUBLE
-						: ZEND_MIR_REPRESENTATION_I64,
-					exact_type,
-					exact_type == ZEND_MIR_SCALAR_TYPE_I1
-						? ZEND_TPDE_MACHINE_VALUE_BOOL
-					: exact_type == ZEND_MIR_SCALAR_TYPE_F64
-						? ZEND_TPDE_MACHINE_VALUE_F64
-						: ZEND_TPDE_MACHINE_VALUE_I64,
-					ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE);
+				call_result_type = zend_tpde_scalar_local_abi(
+					instruction.direct_call->result_type);
 			}
 			if (!call_result_type.valid) {
 				return false;
@@ -486,9 +461,7 @@ static bool try_freeze_typed_body_signature(
 					plan, static_cast<uint32_t>(verified));
 			}
 			/* A number returned as int or float is checked at the return. */
-			if ((plan->return_abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
-						|| plan->return_abi.machine_kind
-							== ZEND_TPDE_MACHINE_VALUE_F64)
+			if (zend_tpde_machine_kind_is_number(plan->return_abi.machine_kind)
 					&& zend_tpde_binding_is_number(plan, component_plans,
 						component_count, instruction.source_op1_binding)) {
 				continue;
@@ -748,10 +721,8 @@ static bool try_freeze_typed_body_signature(
 		/* A number returned as int may fail: a double needs Zend's coercion
 		 * or TypeError. As float it converts. */
 		if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
-				&& (plan->return_abi.machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_I64
-					|| plan->return_abi.machine_kind
-						== ZEND_TPDE_MACHINE_VALUE_F64)
+				&& zend_tpde_machine_kind_is_number(
+					plan->return_abi.machine_kind)
 				&& zend_mir_scalar_type_is_exact(plan->return_abi.exact_type)
 				&& current_return.valid
 				&& current_return.machine_kind
@@ -1072,11 +1043,7 @@ static bool machine_plan_effect_closed_argument_is_used(
 
 static bool machine_value_kind_can_be_register_authoritative(
 		zend_tpde_machine_value_kind kind) {
-	return kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-		|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+	return zend_tpde_machine_kind_is_pointer(kind)
 		|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 }
 
@@ -1378,10 +1345,8 @@ static bool freeze_typed_component_calls(
 								&& instruction.direct_call
 										->arguments[argument].exact_type
 									== callee_abi.exact_type))
-						&& (callee_abi.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_I64
-							|| callee_abi.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_BOOL)
+						&& zend_tpde_machine_kind_is_long_or_bool(
+							callee_abi.machine_kind)
 						&& zend_mir_id_is_valid(
 							source.canonical_storage_id)) {
 					caller_abi = callee_abi;
@@ -2402,18 +2367,10 @@ static bool freeze_machine_operand_transports(
 			plan->instructions[static_cast<uint32_t>(definition)];
 		defining.transient_scalar_result = true;
 		defining.transient_result_representation =
-			value.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-				? ZEND_MIR_REPRESENTATION_I1
-			: value.exact_type == ZEND_MIR_SCALAR_TYPE_F64
-				? ZEND_MIR_REPRESENTATION_DOUBLE
-				: ZEND_MIR_REPRESENTATION_I64;
+			zend_tpde_scalar_representation(value.exact_type);
 		defining.transient_result_exact_type = value.exact_type;
 		defining.transient_result_machine_kind =
-			value.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-				? ZEND_TPDE_MACHINE_VALUE_BOOL
-			: value.exact_type == ZEND_MIR_SCALAR_TYPE_F64
-				? ZEND_TPDE_MACHINE_VALUE_F64
-				: ZEND_TPDE_MACHINE_VALUE_I64;
+			zend_tpde_scalar_machine_kind(value.exact_type);
 		defining.transient_result_storage_id = value.canonical_storage_id;
 	}
 
@@ -2505,11 +2462,7 @@ static bool freeze_machine_operand_transports(
 				ZEND_TPDE_OPERAND_TRANSPORT_CANONICAL_SCALAR_LOAD,
 				transport_representation,
 				transport_type,
-				transport_type == ZEND_MIR_SCALAR_TYPE_I1
-					? ZEND_TPDE_MACHINE_VALUE_BOOL
-				: transport_type == ZEND_MIR_SCALAR_TYPE_F64
-					? ZEND_TPDE_MACHINE_VALUE_F64
-					: ZEND_TPDE_MACHINE_VALUE_I64,
+				zend_tpde_scalar_machine_kind(transport_type),
 				value.canonical_storage_id,
 				value.canonical_alias_observable
 					|| value.machine_kind

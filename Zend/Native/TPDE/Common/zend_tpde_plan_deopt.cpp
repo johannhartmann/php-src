@@ -842,9 +842,7 @@ zend_tpde_machine_value_kind statepoint_materializer::defined_machine_kind(
 				< plan->value_count) {
 		const zend_tpde_machine_value_kind kind =
 			plan->values[binding.value_index].machine_kind;
-		if (kind == ZEND_TPDE_MACHINE_VALUE_I64
-				|| kind == ZEND_TPDE_MACHINE_VALUE_F64
-				|| kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+		if (zend_tpde_machine_kind_is_scalar(kind)) {
 			return kind;
 		}
 	}
@@ -1137,14 +1135,8 @@ void statepoint_materializer::materialize_generator_suspend(
 				 * the old pointer.
 				 */
 				if (!value.register_authoritative
-						&& (value.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-							|| value.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-							|| value.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-							|| value.machine_kind
-								== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR)) {
+						&& zend_tpde_machine_kind_is_value_pointer(
+							value.machine_kind)) {
 					return true;
 				}
 				append_materialization(

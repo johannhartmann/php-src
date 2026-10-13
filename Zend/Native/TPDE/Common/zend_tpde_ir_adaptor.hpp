@@ -282,8 +282,6 @@ public:
 			? ZEND_MIR_REFCOUNT_IMMORTAL : fallback;
 	}
 
-	static bool machine_pointer_kind(zend_tpde_machine_value_kind kind);
-
 	struct PhiInput {
 		IRValueRef value;
 		IRBlockRef block;
