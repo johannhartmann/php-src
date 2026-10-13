@@ -2183,7 +2183,7 @@ static uint32_t zend_native_call_invoke_user(
 		activation->status = status;
 		if (EXPECTED(status == ZEND_NATIVE_RETURNED
 				&& EG(exception) == NULL
-				&& !zend_atomic_bool_load_ex(&EG(vm_interrupt))
+				&& !atomic_load(&EG(vm_interrupt))
 				&& (ZEND_CALL_INFO(callee) & (ZEND_CALL_HAS_SYMBOL_TABLE
 					| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0)) {
 			zend_native_call_fast_return_normalize(callee);
@@ -2273,7 +2273,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 	uint32_t call_info = ZEND_CALL_INFO(callee);
 
 	if (EXPECTED(status == ZEND_NATIVE_RETURNED && EG(exception) == NULL
-			&& !zend_atomic_bool_load_ex(&EG(vm_interrupt))
+			&& !atomic_load(&EG(vm_interrupt))
 			&& (call_info & (ZEND_CALL_HAS_SYMBOL_TABLE
 				| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0)) {
 		zend_native_call_fast_return_normalize(callee);
@@ -2376,7 +2376,7 @@ void zend_native_call_fast_undefined_argument(
 	(void) zend_native_undefined_cv(caller, EX_NUM_TO_VAR(variable));
 }
 
-static ZEND_COLD ZEND_NORETURN void zend_native_call_abort(const char *message)
+ZEND_NORETURN static ZEND_COLD void zend_native_call_abort(const char *message)
 {
 	zend_throw_error(NULL, "%s", message);
 	zend_bailout();
@@ -8876,7 +8876,7 @@ static zend_native_status zend_native_call_dynamic_internal_entry(
 	ZEND_OBSERVER_FCALL_END(execute_data,
 		status == ZEND_NATIVE_RETURNED
 			? execute_data->return_value : NULL);
-	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(execute_data);
 		if (EG(exception) != NULL) {
 			status = ZEND_NATIVE_EXCEPTION;
@@ -10009,7 +10009,7 @@ uint32_t zend_native_call_fast_do_internal(
 	if (discard) {
 		zval_ptr_dtor(result);
 	}
-	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(caller);
 	}
 	status = EG(exception) == NULL

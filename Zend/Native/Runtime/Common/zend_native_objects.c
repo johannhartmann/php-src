@@ -517,7 +517,7 @@ static zend_native_status zend_native_bind_lexical(
 		ZVAL_DEREF(variable);
 		Z_TRY_ADDREF_P(variable);
 	}
-	zend_closure_bind_var_ex(closure,
+	zend_closure_bind_var_ex(Z_OBJ_P(closure),
 		operation->extended_value & ~(ZEND_BIND_REF | ZEND_BIND_IMPLICIT),
 		variable);
 	return zend_native_object_status();

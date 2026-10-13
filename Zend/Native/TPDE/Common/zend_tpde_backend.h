@@ -75,7 +75,7 @@ typedef struct _zend_native_execution_context {
 	zend_execute_data **current_execute_data;
 	void **active_direct_call;
 	void **map_ptr_base_address;
-	struct zend_atomic_bool_s *vm_interrupt;
+	atomic_bool *vm_interrupt;
 	zend_object **exception;
 	const struct _zend_op **opline_before_exception;
 	void **stack_limit;

@@ -217,7 +217,7 @@ zend_native_status zend_native_execution_finish_direct_frame(
 			&& !zend_native_execute_verify_return(execute_data)) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
-	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(execute_data);
 		if (EG(exception) != NULL) {
 			status = ZEND_NATIVE_EXCEPTION;
@@ -328,7 +328,7 @@ static zend_always_inline bool zend_native_execute_frame_plain_return(
 	zval *return_value = execute_data->return_value;
 
 	if (status != ZEND_NATIVE_RETURNED || EG(exception) != NULL
-			|| zend_atomic_bool_load_ex(&EG(vm_interrupt))
+			|| atomic_load(&EG(vm_interrupt))
 			|| (ZEND_CALL_INFO(execute_data)
 				& (ZEND_CALL_CODE | ZEND_CALL_HAS_SYMBOL_TABLE
 					| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS
@@ -371,7 +371,7 @@ static void zend_native_execute_frame_settle(
 		zend_native_execute_frame_returned(execute_data, state);
 
 	if (state->status != ZEND_NATIVE_BAILOUT
-			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+			&& UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_try {
 			zend_fcall_interrupt(execute_data);
 			if (EG(exception) != NULL) {
@@ -450,7 +450,7 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 			zend_native_execute_frame_returned(execute_data, state);
 		phase = 2;
 		if (state->status != ZEND_NATIVE_BAILOUT
-				&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+				&& UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 			zend_fcall_interrupt(execute_data);
 			if (EG(exception) != NULL) {
 				state->status = ZEND_NATIVE_EXCEPTION;
@@ -642,7 +642,7 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 		zend_native_call_direct_abandon(execute_data);
 	}
 	if (state->status != ZEND_NATIVE_BAILOUT
-			&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+			&& UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_try {
 			zend_fcall_interrupt(execute_data);
 			if (EG(exception) != NULL) {
@@ -848,7 +848,7 @@ zend_native_status zend_native_execute_frame_entered(
 			zend_native_execute_frame_returned(execute_data, &state);
 		frame.phase = 2;
 		if (state.status != ZEND_NATIVE_BAILOUT
-				&& UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+				&& UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 			zend_fcall_interrupt(execute_data);
 			if (EG(exception) != NULL) {
 				state.status = ZEND_NATIVE_EXCEPTION;

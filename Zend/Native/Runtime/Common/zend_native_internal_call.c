@@ -1386,7 +1386,7 @@ zend_native_internal_call_invoke(
 	zend_native_internal_call_verify(call, return_value, should_throw);
 #endif
 	if (plain) {
-		if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+		if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 			zend_fcall_interrupt(call);
 		}
 		EG(current_execute_data) = caller;
@@ -1405,7 +1405,7 @@ zend_native_internal_call_invoke(
 	}
 	status = EG(exception) == NULL
 		? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
-	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(call);
 		if (EG(exception) != NULL) {
 			status = ZEND_NATIVE_EXCEPTION;
@@ -1505,7 +1505,7 @@ static zend_never_inline zend_native_status zend_native_internal_call_run(
 			ZEND_OBSERVER_FCALL_END(call,
 				status == ZEND_NATIVE_RETURNED ? return_value : NULL);
 			observer_finished = true;
-			if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+			if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 				zend_fcall_interrupt(call);
 				if (EG(exception) != NULL) {
 					status = ZEND_NATIVE_EXCEPTION;
@@ -2218,7 +2218,7 @@ zend_native_status zend_native_internal_call_do_plain_finish(
 {
 	zend_native_status status;
 
-	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(call);
 	}
 	EG(current_execute_data) = caller;
@@ -3005,7 +3005,7 @@ void zend_native_interrupt_poll(
 	}
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_opline_index];
-	if (UNEXPECTED(zend_atomic_bool_load_ex(&EG(vm_interrupt)))) {
+	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(execute_data);
 		/*
 		 * Generated code has no VM exception-dispatch continuation at an
