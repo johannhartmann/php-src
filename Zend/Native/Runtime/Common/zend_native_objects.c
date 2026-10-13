@@ -1808,9 +1808,9 @@ static zend_native_status zend_native_static_assign_explicit(
 
 	property = zend_native_static_property_explicit(
 		execute_data, operation, BP_VAR_W, &property_info, &temporary);
-	/* OP_DATA is fetched with BP_VAR_W by the VM.  An undefined CV therefore
+	/* ASSIGN_STATIC_PROP_REF fetches OP_DATA with BP_VAR_W: an undefined CV
 	 * becomes NULL before reference type validation and binding. */
-	if (value != NULL && operation->auxiliary_type == IS_CV
+	if (by_reference && value != NULL && operation->auxiliary_type == IS_CV
 			&& Z_TYPE_P(value) == IS_UNDEF) {
 		ZVAL_NULL(value);
 	}
@@ -1829,6 +1829,12 @@ static zend_native_status zend_native_static_assign_explicit(
 		zend_native_operand_free(
 			execute_data, operation->op1_type, operation->op1, result);
 		return zend_native_object_status();
+	}
+	/* ASSIGN_STATIC_PROP reads OP_DATA with BP_VAR_R, after the property. */
+	if (!by_reference && operation->auxiliary_type == IS_CV
+			&& Z_TYPE_P(value) == IS_UNDEF) {
+		value = zend_native_undefined_cv(
+			execute_data, operation->auxiliary.var);
 	}
 
 	assigned = property;
