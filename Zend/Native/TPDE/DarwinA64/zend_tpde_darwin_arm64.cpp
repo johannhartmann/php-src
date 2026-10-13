@@ -966,11 +966,7 @@ bool ZendCompilerA64::emit_machine_zval_type_info(
 bool ZendCompilerA64::emit_pointer_addref(
 		zend_tpde_machine_value_kind kind,
 		AsmReg payload_reg) {
-	if (kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+	if (!zend_tpde_machine_kind_is_pointer(kind)) {
 		return false;
 	}
 	if (kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
@@ -5394,10 +5390,8 @@ bool ZendCompilerA64::compile_scalar_select() {
 				!= ir().machine_kind(node.result)
 			|| ir().machine_kind(node.operands[2])
 				!= ir().machine_kind(node.result)
-			|| (ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_I64
-				&& ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			|| !zend_tpde_machine_kind_is_long_or_bool(
+				ir().machine_kind(node.result))) {
 		return false;
 	}
 	auto [condition_ref, condition] = val_ref_single(node.operands[0]);
@@ -5474,10 +5468,8 @@ bool ZendCompilerA64::compile_unbox_scalar() {
 	if (node.operands.size() != 1 || !node.has_result
 			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			|| (ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_I64
-				&& ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			|| !zend_tpde_machine_kind_is_long_or_bool(
+				ir().machine_kind(node.result))) {
 		return false;
 	}
 	auto source = val_ref(node.operands[0]);
@@ -5504,11 +5496,7 @@ bool ZendCompilerA64::compile_unbox_pointer() {
 	if (node.operands.size() != 1 || !node.has_result
 			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			|| (result_kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+			|| !zend_tpde_machine_kind_is_pointer(result_kind)) {
 		return false;
 	}
 	auto source = val_ref(node.operands[0]);
@@ -8103,11 +8091,7 @@ bool ZendCompilerA64::compile_zval_payload_load() {
 	}
 	if (result_kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			&& (node.exact_type == ZEND_MIR_SCALAR_TYPE_I64
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+			|| zend_tpde_machine_kind_is_pointer(result_kind))) {
 		auto result = result_ref(node.result);
 		if (frame_slot) {
 			return EncodeBase::encode_zend_native_load_u64(
@@ -8638,10 +8622,8 @@ bool ZendCompilerA64::compile_guarded_cold() {
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))) {
 			return false;
 		}
-		if (ir().machine_kind(node.result)
-				== ZEND_TPDE_MACHINE_VALUE_I64
-				|| ir().machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+		if (zend_tpde_machine_kind_is_long_or_bool(
+				ir().machine_kind(node.result))) {
 			auto [result_ref, result] =
 				result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
@@ -8916,10 +8898,8 @@ bool ZendCompilerA64::compile_value_cond_branch() {
 		&& node.operands.size() == 1
 		&& node.operands[0]
 			!= IRValueRef{Adaptor::FRAME_VALUE}
-		&& (ir().machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_BOOL
-			|| ir().machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_I64);
+		&& zend_tpde_machine_kind_is_long_or_bool(
+			ir().machine_kind(node.operands[0]));
 	const bool register_boxed_condition =
 		record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 		&& node.operands.size() == 2
@@ -9830,15 +9810,7 @@ bool ZendCompilerA64::compile_value_cond_branch() {
 		const bool pointer_result =
 			ir().representation(node.result)
 					== ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
-			&& (result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
+			&& zend_tpde_machine_kind_is_pointer(result_kind);
 		if (!zend_mir_id_is_valid(storage)
 				|| frame_offset > UINT32_MAX - sizeof(zval)
 				|| (!scalar_result && !pointer_result)) {
@@ -11384,16 +11356,7 @@ bool ZendCompilerA64::compile_call_direct_user() {
 				const bool register_pointer_argument =
 					ir().machine_value_is_register_authoritative(
 						node.operands[index])
-					&& (argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
+					&& zend_tpde_machine_kind_is_pointer(argument_kind);
 					if (zend_mir_scalar_type_is_exact(
 							descriptor_argument.exact_type)) {
 						if (descriptor_argument.source_operand.kind
@@ -13100,16 +13063,7 @@ bool ZendCompilerA64::compile_return_source_zval() {
 			return_builder.add(
 				std::move(type_info), ::tpde::CCAssignment{});
 		} else if (return_addref
-				&& (kind
-						== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+				&& zend_tpde_machine_kind_is_pointer(kind)) {
 			auto [returned_ref, returned] =
 				val_ref_single(node.operands[0]);
 			auto payload_reg = returned.load_to_reg();
@@ -13246,16 +13200,7 @@ bool ZendCompilerA64::compile_return_source_zval() {
 				value_reg = returned_part->load_to_reg();
 			}
 			if (return_addref
-					&& (kind
-							== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+					&& zend_tpde_machine_kind_is_pointer(kind)) {
 				if (!emit_pointer_addref(kind, value_reg)) {
 					return false;
 				}

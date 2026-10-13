@@ -1269,11 +1269,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 		const zend_tpde_machine_value_kind kind =
 			this->ir().machine_kind(value);
 		const bool pointer_value =
-			kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+			zend_tpde_machine_kind_is_pointer(kind);
 		return value == IRValueRef{Adaptor::FRAME_VALUE}
 			|| (!this->ir().typed_body()
 				&& value == IRValueRef{

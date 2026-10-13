@@ -925,9 +925,7 @@ public:
 		const zend_tpde_machine_value_kind kind = ir().machine_kind(value);
 		if (ir().plan()->typed_body_return_abi.machine_kind
 					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				|| (kind != ZEND_TPDE_MACHINE_VALUE_I64
-					&& kind != ZEND_TPDE_MACHINE_VALUE_F64
-					&& kind != ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+				|| !zend_tpde_machine_kind_is_scalar(kind)) {
 			return false;
 		}
 		/* Build the parts in their return registers, so that neither
@@ -5111,11 +5109,7 @@ bool ZendCompilerX64::emit_machine_zval_type_info(
 bool ZendCompilerX64::emit_pointer_addref(
 		zend_tpde_machine_value_kind kind,
 		AsmReg payload_reg) {
-	if (kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			&& kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+	if (!zend_tpde_machine_kind_is_pointer(kind)) {
 		return false;
 	}
 	if (kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
@@ -5763,10 +5757,8 @@ bool ZendCompilerX64::compile_scalar_select(InstContext &ctx) {
 				!= ir().machine_kind(node.result)
 			|| ir().machine_kind(node.operands[2])
 				!= ir().machine_kind(node.result)
-			|| (ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_I64
-				&& ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			|| !zend_tpde_machine_kind_is_long_or_bool(
+				ir().machine_kind(node.result))) {
 		return false;
 	}
 	auto [condition_ref, condition] = val_ref_single(node.operands[0]);
@@ -5792,11 +5784,7 @@ bool ZendCompilerX64::compile_unbox_pointer(InstContext &ctx) {
 	if (node.operands.size() != 1 || !node.has_result
 			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			|| (result_kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-				&& result_kind != ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+			|| !zend_tpde_machine_kind_is_pointer(result_kind)) {
 		return false;
 	}
 	auto source = val_ref(node.operands[0]);
@@ -6007,10 +5995,8 @@ bool ZendCompilerX64::compile_unbox_scalar(InstContext &ctx) {
 	if (node.operands.size() != 1 || !node.has_result
 			|| ir().machine_kind(node.operands[0])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			|| (ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_I64
-				&& ir().machine_kind(node.result)
-					!= ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			|| !zend_tpde_machine_kind_is_long_or_bool(
+				ir().machine_kind(node.result))) {
 		return false;
 	}
 	auto source = val_ref(node.operands[0]);
@@ -9329,11 +9315,7 @@ bool ZendCompilerX64::compile_zval_payload_load(InstContext &ctx) {
 	}
 	if (result_kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			&& (node.exact_type == ZEND_MIR_SCALAR_TYPE_I64
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+			|| zend_tpde_machine_kind_is_pointer(result_kind))) {
 		auto result = result_ref(node.result);
 		if (frame_slot) {
 			return EncodeBase::encode_zend_native_load_u64(
@@ -10846,10 +10828,8 @@ bool ZendCompilerX64::compile_guarded_cold(InstContext &ctx) {
 								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))) {
 			return false;
 		}
-		if (ir().machine_kind(node.result)
-				== ZEND_TPDE_MACHINE_VALUE_I64
-				|| ir().machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+		if (zend_tpde_machine_kind_is_long_or_bool(
+				ir().machine_kind(node.result))) {
 			auto [result_ref, result] =
 				result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
@@ -11036,12 +11016,8 @@ bool ZendCompilerX64::copy_slot(
 	/* A register long, double or boolean is defined, no reference
 	 * and owns nothing: its type tests are decided here. */
 	const bool scalar_source = register_source
-		&& (ir().machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_I64
-			|| ir().machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_F64
-			|| ir().machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_BOOL);
+		&& zend_tpde_machine_kind_is_scalar(
+			ir().machine_kind(node.operands[0]));
 
 	if (register_source) {
 		const zend_tpde_machine_value_kind source_kind =
@@ -16041,11 +16017,7 @@ bool ZendCompilerX64::object_property_read(InstContext &ctx) {
 	const zend_mir_scalar_type_mask exact = frame_result
 		? ZEND_MIR_SCALAR_TYPE_NONE : ir().exact_type(node.result);
 	const bool boxed = result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-	const bool pointer = result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-		|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-		|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-		|| result_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-		|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+	const bool pointer = zend_tpde_machine_kind_is_pointer(result_kind);
 	if (!boxed && exact != ZEND_MIR_SCALAR_TYPE_I1
 			&& exact != ZEND_MIR_SCALAR_TYPE_I64
 			&& exact != ZEND_MIR_SCALAR_TYPE_F64 && !pointer) {
@@ -17727,10 +17699,8 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 		&& node.operands.size() == 1
 		&& node.operands[0]
 			!= IRValueRef{Adaptor::FRAME_VALUE}
-		&& (ir().machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_BOOL
-			|| ir().machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_I64);
+		&& zend_tpde_machine_kind_is_long_or_bool(
+			ir().machine_kind(node.operands[0]));
 	const bool register_boxed_condition =
 		record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 		&& node.operands.size() == 2
@@ -19142,15 +19112,7 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 		const bool pointer_result =
 			ir().representation(node.result)
 					== ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
-			&& (result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-				|| result_kind
-					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
+			&& zend_tpde_machine_kind_is_pointer(result_kind);
 		if (!zend_mir_id_is_valid(storage)
 				|| frame_offset > UINT32_MAX - sizeof(zval)
 				|| (!scalar_result && !pointer_result)) {
@@ -20665,16 +20627,7 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 				const bool register_pointer_argument =
 					ir().machine_value_is_register_authoritative(
 						node.operands[index])
-					&& (argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-						|| argument_kind
-							== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR);
+					&& zend_tpde_machine_kind_is_pointer(argument_kind);
 					if (zend_mir_scalar_type_is_exact(
 							descriptor_argument.exact_type)) {
 						if (descriptor_argument.source_operand.kind
@@ -20875,12 +20828,8 @@ bool ZendCompilerX64::compile_call_direct_user(InstContext &ctx) {
 						}
 					} else if (node.operands[index]
 								!= IRValueRef{Adaptor::FRAME_VALUE}
-							&& (argument_kind
-									== ZEND_TPDE_MACHINE_VALUE_I64
-								|| argument_kind
-									== ZEND_TPDE_MACHINE_VALUE_F64
-								|| argument_kind
-									== ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+							&& zend_tpde_machine_kind_is_scalar(
+								argument_kind)) {
 						/* A scalar in a register although the call
 						 * descriptor records no exact type: store its
 						 * payload and type instead of copying a slot. */
@@ -22989,16 +22938,7 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 			return_builder.add(
 				std::move(type_info), tpde::CCAssignment{});
 		} else if (return_addref
-				&& (kind
-						== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-					|| kind
-						== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+				&& zend_tpde_machine_kind_is_pointer(kind)) {
 			auto [returned_ref, returned] =
 				val_ref_single(node.operands[0]);
 			auto payload_reg = returned.load_to_reg();
@@ -23146,16 +23086,7 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 				value_reg = returned.load_to_reg();
 			}
 			if (return_addref
-					&& (kind
-							== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-						|| kind
-							== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+					&& zend_tpde_machine_kind_is_pointer(kind)) {
 				if (!emit_pointer_addref(kind, value_reg)) {
 					return false;
 				}
