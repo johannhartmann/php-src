@@ -23534,10 +23534,18 @@ bool ZendCompilerX64::compile_inst_impl(
 						}
 						if (call.direct_call->receiver_kind
 								== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
+							/* The callee may have dropped the caller's own
+							 * reference: the last one is released by the
+							 * canonical finisher. */
 							ASM(MOV64rm, probe_reg,
 								FE_MEM(post_callee_reg, 0, FE_NOREG,
 									static_cast<int32_t>(offsetof(
 										zend_execute_data, This))));
+							ASM(CMP32mi,
+								FE_MEM(probe_reg, 0, FE_NOREG,
+									static_cast<int32_t>(offsetof(
+										zend_refcounted_h, refcount))), 1);
+							generate_raw_jump(Jump::je, complete_fast);
 							ASM(SUB32mi,
 								FE_MEM(probe_reg, 0, FE_NOREG,
 									static_cast<int32_t>(offsetof(

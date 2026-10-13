@@ -13204,6 +13204,11 @@ bool ZendCompilerA64::compile_inst_impl(
 						load_off(receiver_refcount_reg, probe_reg,
 							static_cast<uint32_t>(offsetof(
 								zend_refcounted_h, refcount)), 4);
+						/* The callee may have dropped the caller's own
+						 * reference: the last one is released by the
+						 * canonical finisher. */
+						ASM(CMPwi, receiver_refcount_reg, 1);
+						generate_raw_jump(Jump::Jeq, complete_fast);
 						ASM(SUBwi, receiver_refcount_reg,
 							receiver_refcount_reg, 1);
 						store_off(probe_reg,
