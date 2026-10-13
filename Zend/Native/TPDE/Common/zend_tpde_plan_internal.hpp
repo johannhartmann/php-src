@@ -181,6 +181,61 @@ zend_mir_scalar_type_mask source_operand_exact_type(
 	const zend_mir_source_operand_ref &operand);
 zend_native_runtime_helper_id executable_value_helper(zend_mir_opcode opcode);
 
+/*
+ * What initialize_plan()'s phases share while they build one member's plan:
+ * the member's inputs and what an earlier phase derived for a later one.
+ */
+struct plan_builder {
+	const zend_mir_view *view;
+	const zend_native_call_binding *user_bindings;
+	uint32_t user_binding_count;
+	const zend_native_internal_call_binding *internal_bindings;
+	uint32_t internal_binding_count;
+	const zend_native_source_effect *effects;
+	uint32_t effect_count;
+	uint32_t frame_argument_count;
+	const zend_op_array *source_op_array;
+	const zend_ssa *source_ssa;
+	zend_tpde_plan *plan;
+	zend_native_diagnostic *diag;
+
+	exact_scalar_ssa_memo exact_scalar_memo{};
+	const zend_mir_call_view *calls = nullptr;
+	const zend_mir_value_view *value_model = nullptr;
+	uint32_t constant_count = 0;
+	uint32_t frame_slot_count = 0;
+	/* Per block: 1 when it lies on a cycle of the CFG. */
+	std::vector<uint8_t> cyclic_blocks;
+	/* Sorted: the storages a PHI defines, and those ASSIGN_REF binds. */
+	std::vector<zend_mir_storage_id> phi_storages;
+	std::vector<zend_mir_storage_id> reference_assigned_storages;
+	/* Per CV: 1 when its scalar stores stay eager (freeze_storage_alias()). */
+	std::vector<uint8_t> storage_may_alias;
+	bool lazy_capable_function = false;
+	/*
+	 * The call sites as plan->call_sites holds them, read once from the view
+	 * in this order. Unless two sites share an ID, a site's own index is
+	 * the one of its ID, and whether another site nests in it or it in
+	 * another follows from the sites ordered by INIT.
+	 */
+	const zend_mir_call_site_ref *sites = nullptr;
+	uint32_t site_count = 0;
+	/* 1 when the sites' IDs are unique, 0 when not, -1 before the check. */
+	int8_t unique_site_ids = -1;
+	/* Per call site: 1 when it nests in another site or another in it. */
+	std::vector<uint8_t> nested_participants;
+	/*
+	 * Per call site: 1 when its group of overlapping calls may use direct
+	 * calls, 0 when it may not, -1 before the group is examined.
+	 */
+	std::vector<int8_t> nested_direct_groups;
+	/* The frame states by ID, read at the first interrupt statepoint. */
+	bool interrupt_frames_read = false;
+	std::vector<zend_mir_frame_state_ref> interrupt_frames;
+	std::vector<zend_tpde_id_index_entry> interrupt_frame_index;
+	uint32_t interrupt_frame_index_capacity = 0;
+};
+
 /* Call-site planning (zend_tpde_plan_calls.cpp). */
 bool call_site_requires_source_fragments(
 	const zend_tpde_plan *plan, const zend_mir_call_site_ref &site);
@@ -200,6 +255,7 @@ zend_native_user_call_descriptor *build_user_call_descriptor(
 	zend_native_diagnostic *diag);
 bool freeze_source_call_phases(
 	zend_tpde_plan *plan, zend_native_diagnostic *diag);
+bool plan_call_site(plan_builder &builder, uint32_t i);
 
 /* Machine consumers, branch fusion and control-flow flags
  * (zend_tpde_plan_consumers.cpp). */
