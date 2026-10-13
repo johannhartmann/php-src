@@ -377,9 +377,8 @@ zend_native_executor_dispatch_key_make(const zend_op_array *op_array)
 #endif
 	/*
 	 * OPcache main op_arrays own a request-local runtime cache, while their
-	 * immutable opcode storage is stable for the process generation.  The
-	 * process-local registry must therefore key the source codeunit rather
-	 * than the transient cache allocation.
+	 * opcode storage is stable for the process generation: key the registry
+	 * by the opcodes.
 	 */
 	key.source_opcodes = (uintptr_t) op_array->opcodes;
 	return key;
@@ -518,11 +517,10 @@ static void zend_native_executor_dispatch_dtor(zval *value)
 	zend_native_executor_dispatch *dispatch = Z_PTR_P(value);
 
 	/*
-	 * A request-local op_array can be destroyed before its generation is
-	 * reclaimed. Its runtime cache is gone at that point, so the hash-table
-	 * destructor must not dereference the retained op_array pointer. Callers
-	 * that remove a dispatch while its op_array is known to be live detach the
-	 * runtime-cache slot explicitly before deleting the hash entry.
+	 * A request-local op_array, and with it its runtime cache, can be
+	 * destroyed before its generation is reclaimed, so this destructor must
+	 * not dereference the op_array. Callers that remove a dispatch of a live
+	 * op_array detach the runtime-cache slot before deleting the entry.
 	 */
 	efree(dispatch);
 }
@@ -1160,7 +1158,7 @@ failure:
  * deactivation after shutdown_executor(), process shutdown): their
  * compilers go even with calls or suspended frames a bailout left counted.
  */
-static ZEND_TLS bool zend_native_executor_final_teardown;
+ZEND_TLS bool zend_native_executor_final_teardown;
 
 static void zend_native_executor_destroy_generation(
 	zend_native_executor_generation *generation)
@@ -1743,7 +1741,7 @@ zend_native_executor_create_owned_generation(
 		zend_native_executor_frame_probe_context;
 	config.source_probe = zend_native_runtime_source_probe_enabled();
 	/* A request generation borrows the global symbol tables; indexing all of
-	 * them for every root made each include cost O(all declarations). */
+	 * them for every root would make each include O(all declarations). */
 	config.lazy_source_index = !persistent && bundle == NULL;
 	if (persistent) {
 		config.external_reentry_resolver =
@@ -2023,8 +2021,8 @@ zend_native_executor_resolve_external_reentry(
 	if (generation == NULL) {
 		/*
 		 * A request generation that already published this function, or
-		 * that this function roots, serves every later reentry; creating a
-		 * generation per call compiled a hot function thousands of times.
+		 * that this function roots, serves every later reentry, so a hot
+		 * function compiles once per request.
 		 */
 		generation = zend_native_executor_find_owner_generation(function);
 	}
@@ -2700,14 +2698,14 @@ static bool zend_native_executor_compile_captured_script(
 /*
  * Content-addressed bundles. An application may rewrite a script with the
  * same content in every request (a cache file such as Symfony's
- * PhpFilesAdapter writes for Doctrine's query cache); OPcache compiles each
- * new version again, and so did the native compiler. A script that declares
- * no class and no named function is keyed by a hash of its op_arrays (main
- * code and closures: opcodes, literals, variables, parameters, live ranges,
- * try/catch regions); its bundle, which then holds the closures too, is kept
- * per process and attached to a later script with the same key instead of
- * compiling it again. Imports bind by source ordinal and validate every
- * reference, as for a bundle the file cache loads.
+ * PhpFilesAdapter writes for Doctrine's query cache), and OPcache compiles
+ * each new version again. A script that declares no class and no named
+ * function is keyed by a hash of its op_arrays (main code and closures:
+ * opcodes, literals, variables, parameters, live ranges, try/catch regions);
+ * its bundle, which then holds the closures too, is kept per process and
+ * attached to a later script with the same key instead of compiling it again.
+ * Imports bind by source ordinal and validate every reference, as for a
+ * bundle the file cache loads.
  */
 #define ZEND_NATIVE_CONTENT_BUNDLES_MAX 128
 #define ZEND_NATIVE_CONTENT_BUNDLES_BYTES (16u * 1024u * 1024u)
@@ -3588,8 +3586,7 @@ static zend_never_inline void zend_native_executor_execute_ex_general(
 			(zend_generator *) execute_data->return_value;
 
 		/* A suspended generator pins the immutable entry that created its
-		 * heap frame. Resume it directly instead of resolving against the
-		 * currently active caller generation, which may be a different root. */
+		 * heap frame; the active caller generation may be a different root. */
 		if (generator->native_entry_cell != NULL
 				&& generator->native_entry_generation
 					== generator->native_entry_cell->generation

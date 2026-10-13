@@ -106,13 +106,8 @@ static zend_result zend_dfa_analyze_op_array_impl(
 			&& (ssa->cfg.flags & ZEND_FUNC_INDIRECT_VAR_ACCESS)) {
 		int i;
 
-		/*
-		 * Indirect variable access invalidates ordinary SSA type facts: any
-		 * symbol-table write may change every CV alias. Preserve the CFG,
-		 * def/use chains and stable SSA identities, but expose conservative
-		 * zval facts instead of running inference that assumes direct CV
-		 * ownership.
-		 */
+		/* Any symbol table write may change every CV, so keep the CFG and
+		 * def/use chains but give every SSA variable the widest type. */
 		ssa->var_info = zend_arena_calloc(
 			&ctx->arena, ssa->vars_count, sizeof(zend_ssa_var_info));
 		for (i = 0; i < ssa->vars_count; i++) {

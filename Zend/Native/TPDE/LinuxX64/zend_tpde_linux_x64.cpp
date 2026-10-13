@@ -222,7 +222,7 @@ struct LayoutTraining {
 	static constexpr uint64_t phase_training = 0;
 	static constexpr uint64_t phase_writing = 1;
 	static constexpr uint64_t phase_ready = 2;
-	/* This process uses the profile now. */
+	/* This process compiles with the profile. */
 	bool switched = false;
 	/* This process wrote the profile: OPcache recompiles with it. */
 	bool restart_wanted = false;
@@ -871,14 +871,6 @@ class ZendCompilerX64 final
 	}
 
 	/*
-	 * Whether a call_user_func*() or $f(...) site takes the dynamic fast
-	 * path: zend_native_call_fast_dynamic_init() pushes the frame of a
-	 * recorded native target, every argument is sent to EX(call) by
-	 * zend_native_call_fast_send() and the frame is prepared generically.
-	 * Sends of register values and named or by-reference-checked
-	 * arguments keep the universal protocol.
-	 */
-	/*
 	 * Every phase node of a call asks for its fast form, and both forms
 	 * walk all arguments: the answers are kept per call instruction (a
 	 * plan entry) for the function being compiled.
@@ -907,6 +899,14 @@ class ZendCompilerX64 final
 		}
 		return (forms & FAST_FORM_STATIC) != 0;
 	}
+	/*
+	 * Whether a call_user_func*() or $f(...) site takes the dynamic fast
+	 * path: zend_native_call_fast_dynamic_init() pushes the frame of a
+	 * recorded native target, every argument is sent to EX(call) by
+	 * zend_native_call_fast_send() and the frame is prepared generically.
+	 * Sends of register values and named or by-reference-checked
+	 * arguments keep the universal protocol.
+	 */
 	bool compute_source_call_fast_dynamic(
 			const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
@@ -995,15 +995,6 @@ class ZendCompilerX64 final
 	}
 
 	/*
-	 * Whether a source call may take the native call-site fast path of ADR
-	 * 0025 (see zend_native_user_call_site_header): a function call or an
-	 * instance-method call on $this or a CV, with a literal method name, whose
-	 * arguments are all positional by-value sends of CVs, temporaries or
-	 * literals kept in their frame slots, and whose result is unused or a
-	 * temporary. The runtime publishes a site's target only when that target
-	 * takes exactly these arguments by value.
-	 */
-	/*
 	 * The callable location zend_native_call_fast_dynamic_init() takes for
 	 * a call_user_func*() or $f(...) site (ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_*),
 	 * 0 for a variable method site.
@@ -1030,6 +1021,15 @@ class ZendCompilerX64 final
 		return source_call_fast_static(call) || source_call_fast_dynamic(call);
 	}
 
+	/*
+	 * Whether a source call may take the native call-site fast path of ADR
+	 * 0025 (see zend_native_user_call_site_header): a function call, a new,
+	 * a static method call or an instance-method call with a literal method
+	 * name, whose arguments are all positional sends of CVs, temporaries or
+	 * literals kept in their frame slots, and whose result is unused or a
+	 * temporary. The runtime publishes a site's target only when that target
+	 * takes exactly these arguments in the modes they are sent.
+	 */
 	bool compute_source_call_fast_static(
 			const zend_tpde_instruction &call) const {
 		const zend_native_user_call_descriptor *descriptor = call.user_call;
@@ -1834,12 +1834,6 @@ public:
 		return_builder.add(std::move(status_part), tpde::CCAssignment{});
 	}
 	/*
-	 * After a typed call to a body that may fail, test its status: the type
-	 * part of a boxed result, otherwise an extra integer return. Without a
-	 * decision register a zero status leaves through this body's failure
-	 * exit; with one, the register receives the status for the caller.
-	 */
-	/*
 	 * Calls the typed body of component member target with the node's
 	 * first argument_count operands and defines the node's result from the
 	 * returned parts. check_typed_call_status() handles a failed call.
@@ -1891,6 +1885,12 @@ public:
 		return true;
 	}
 
+	/*
+	 * After a typed call to a body that may fail, test its status: the type
+	 * part of a boxed result, otherwise an extra integer return. Without a
+	 * decision register a zero status leaves through this body's failure
+	 * exit; with one, the register receives the status for the caller.
+	 */
 	bool check_typed_call_status(uint32_t target, CallBuilder &builder,
 			std::vector<ValuePart> &results, ScratchReg *decision) {
 		const zend_tpde_plan *body = adaptor->component_plan(target);
@@ -2948,12 +2948,9 @@ public:
 	/*
 	 * A branch helper's decision of ITERATOR_EXCEPTION or above reports a
 	 * pending exception: branch to the exception block, or return
-	 * EXCEPTION. release() frees the decision for that path's return. It
-	 * runs while that path is emitted, so the allocator state after the
-	 * check no longer holds the decision's register although the
-	 * fall-through path still has the decision in it: a caller that
-	 * allocates before it reads the decision must hold the register again
-	 * first (hold_returned_decision()).
+	 * EXCEPTION. release() frees the decision for that path's return; a
+	 * caller that allocates before it reads the decision must hold its
+	 * register again first (hold_returned_decision()).
 	 */
 	template <typename Release>
 	void emit_decision_exception_check(AsmReg decision_reg,
@@ -3070,12 +3067,12 @@ public:
 	/*
 	 * A helper's decision, after emit_decision_exception_check(): held in
 	 * RAX by held for the code that still reads it. The check's exception
-	 * path released the decision's register (its release() runs at compile
-	 * time, so the allocator state after the check has RAX free although
-	 * the fall-through path still has the decision there); without a new
-	 * hold, the next allocation may take RAX and overwrite the decision.
-	 * The helper returns the decision in RAX, and nothing between the check
-	 * and this hold allocates, so RAX is free here.
+	 * path released the decision's register at compile time, so the
+	 * allocator state after the check has RAX free although the
+	 * fall-through path still has the decision there; without this hold,
+	 * the next allocation may take RAX and overwrite the decision. The
+	 * helper returns the decision in RAX, and nothing between the check and
+	 * this hold allocates, so RAX is free here.
 	 */
 	void hold_returned_decision(ValuePart &decision, AsmReg decision_reg,
 			ScratchReg &held) {
@@ -3173,7 +3170,6 @@ public:
 		reloc_text(slot, tpde::elf::R_X86_64_PC32,
 			text_writer.offset() - 4, -4);
 	}
-	/* target = the literal table of the function frame executes. */
 	/*
 	 * EX(This).u1.type_info and u2.num_args of a frame being set up. A frame
 	 * without arguments takes both in one store: num_args follows type_info,
@@ -3198,6 +3194,7 @@ public:
 			static_cast<int32_t>(num_args));
 	}
 
+	/* target = the literal table of the function frame executes. */
 	template <typename Reg, typename Frame>
 	void emit_literal_base(Reg target, Frame frame) {
 		ASM(MOV64rm, target, FE_MEM(frame, 0, FE_NOREG,
@@ -3245,7 +3242,6 @@ public:
 		builder.add_arg(ValuePart{value, size,
 			tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
 	}
-	/* Returns status from the function. */
 	void emit_status_return(zend_native_status status) {
 		RetBuilder return_builder{*this, *cur_cc_assigner()};
 		return_builder.add(ValuePart{static_cast<uint32_t>(status), 4,
@@ -4008,13 +4004,6 @@ public:
 		Base::generate_uncond_branch(target);
 	}
 	/*
-	 * A guarded fast path can leave its node with plain jumps, the success
-	 * path to the continuation and each failed check to the cold block,
-	 * when neither block has PHIs (no edge moves) and no register holds an
-	 * unspilled value (the branch spill emits no code the checks would
-	 * skip). Otherwise it selects the edge through a decision register.
-	 */
-	/*
 	 * General-purpose registers neither locked as scratch nor held by a
 	 * fixed assignment. Inline forms that need many scratch registers take
 	 * their helper instead when a large function leaves too few.
@@ -4029,6 +4018,13 @@ public:
 		}
 		return count;
 	}
+	/*
+	 * A guarded fast path can leave its node with plain jumps, the success
+	 * path to the continuation and each failed check to the cold block,
+	 * when neither block has PHIs (no edge moves) and no register holds an
+	 * unspilled value (the branch spill emits no code the checks would
+	 * skip). Otherwise it selects the edge through a decision register.
+	 */
 	bool guarded_exit_can_jump_directly(IRBlockRef cold, IRBlockRef hot) {
 		if (branch_needs_split(cold) || branch_needs_split(hot)) {
 			return false;
@@ -4338,11 +4334,6 @@ public:
 				&& adaptor->machine_value_is_register_authoritative(value));
 	}
 	/*
-	 * The frame goes to RBX: frame-relative operands, the most frequent
-	 * memory operands, then need no SIB byte (R12 would). The other fixed
-	 * values leave RBX to it.
-	 */
-	/*
 	 * A section of rarely run code behind the function's hot code. A
 	 * section opened inside one (a cold block, a slow path's own stub) stays
 	 * where it is, with a jump over it, as its code is entered by jumps
@@ -4581,6 +4572,11 @@ public:
 		Base::label_place(resume);
 		layout_region_.active = false;
 	}
+	/*
+	 * The frame goes to RBX: frame-relative operands, the most frequent
+	 * memory operands, then need no SIB byte (R12 would). The other fixed
+	 * values leave RBX to it.
+	 */
 	static constexpr int32_t frame_register_bias = 0x80;
 	AsmReg select_fixed_assignment_reg(
 			tpde::AssignmentPartRef part, IRValueRef value) {
@@ -5269,8 +5265,7 @@ public:
 		/* A missing parameter takes its default literal, as RECV_INIT
 		 * does: from the last parameter down to the first one supplied. */
 		if (to_defaults != UINT32_MAX) {
-			/* From the last parameter down to the first one supplied, as
-			 * RECV_INIT does; RAX still holds the frame. */
+			/* RAX still holds the frame. */
 			patch(to_defaults, text_writer.offset());
 			std::vector<uint32_t> defaults_done;
 			ASM(MOV32rm, FE_R10, FE_MEM(FE_AX, 0, FE_NOREG,
@@ -5714,9 +5709,6 @@ public:
 		IRInstRef instruction, std::vector<ValueRef> &locked_values);
 	bool compile_inst_impl(IRInstRef instruction, InstRange);
 	bool compile_inst(IRInstRef instruction, InstRange);
-	/* The Z_TYPE() bits a speculating tier-2 copy assumes for an
-	 * instruction's result (zend_native_compiler_tier2_speculate_results()),
-	 * or 0. */
 	/*
 	 * Whether a frameless call runs its handler directly from generated
 	 * code: no observer is registered (part of the system id), every CV
@@ -7968,8 +7960,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					if (record_mode) {
 						ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
 					}
-					/* Falls through to fast_join: the re-arm stub and the miss
-					 * path between them are emitted into the cold area. */
 				} else if (source_call_fast_dynamic(call)) {
 					/* A recorded native target of the callable: the helper
 					 * pushes and links its frame and returns its entry and
@@ -8005,8 +7995,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					if (record_mode) {
 						ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, fast_slot), 1);
 					}
-					/* Falls through to fast_join: the re-arm stub and the miss
-					 * path between them are emitted into the cold area. */
 				} else {
 				const bool method =
 					descriptor->init_opcode == ZEND_INIT_METHOD_CALL;
@@ -8306,13 +8294,12 @@ bool ZendCompilerX64::compile_inst_impl(
 					 * path between them are emitted into the cold area. */
 				}
 				/*
-				 * The re-arm stub: zend_native_call_fast_rearm() called with
-				 * every caller-saved register preserved by hand, so the
-				 * allocator state of the check above holds again at the
-				 * retry, and of the universal protocol at the miss.
+				 * The re-arm stub, run once per site and request, out of the
+				 * hot code: zend_native_call_fast_rearm() called with every
+				 * caller-saved register preserved by hand, so the allocator
+				 * state of the check above holds again at the retry, and of
+				 * the universal protocol at the miss.
 				 */
-				/* The stub runs once per site and request: out of the hot
-				 * code. */
 				cold_begin();
 				label_place(fast_rearm);
 				emit_preserving_call(rearm_live_registers,
@@ -8364,8 +8351,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			/*
 			 * The universal protocol: zend_native_call_universal_init()
 			 * reserves the setup frame and activation, resolves the target
-			 * and pushes the callee frame out of line, keeping call sites
-			 * small now that resolved targets take the fast path.
+			 * and pushes the callee frame out of line, which keeps call
+			 * sites small; resolved targets take the fast path.
 			 */
 			ValuePart resolution_status{
 				tpde::x64::PlatformConfig::GP_BANK, 4};
@@ -12095,11 +12082,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		continuation_edge_emitted_ = true;
 		return true;
 	};
-	/* Very large source components can contain hundreds of thousands of
-	 * guarded value operations.  Keep their native control flow and canonical
-	 * runtime semantics, but avoid repeating the sizeable speculative fast
-	 * sequence at every site.  The existing cold block remains ordinary TPDE
-	 * code and calls the operation-specific native runtime helper. */
+	/* A guarded operation of a very large component emits no fast
+	 * sequence: it branches to its cold block, which calls the
+	 * operation's runtime helper. */
 	if (adaptor->compact_guarded_value_operation(instruction)) {
 		return branch_to_guarded_cold();
 	}
@@ -12292,10 +12277,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::je, slow);
 		}
 		/*
-		 * Immutable refcounted constants need the VM's duplication rules
-		 * before they become a writable CV.  They also must never receive a
-		 * native refcount write.  Keep that ownership transition on the
-		 * semantic cold path.
+		 * An immutable counted value must not get a refcount write and is
+		 * duplicated as the VM does it: the cold path copies it.
 		 */
 		if (!scalar_source) {
 			ASM(TEST32ri, source_type_reg,
@@ -12632,16 +12615,6 @@ bool ZendCompilerX64::compile_inst_impl(
 			successors);
 		return true;
 	};
-	/*
-	 * FETCH_DIM_R, FETCH_DIM_IS (??), isset() and empty() of an array
-	 * element whose container, key and result live in frame slots or
-	 * literals, composed of EncodeGen snippets: zend_native_array_find_literal() or _find_key() probe the
-	 * element without changing anything, a temporary container is consumed
-	 * only when another owner keeps it alive, and every undecided probe takes
-	 * the guarded cold block, whose helper repeats the whole operation.
-	 * Returns 1 when emitted, 0 when the form does not apply and -1 on an
-	 * encoding failure.
-	 */
 	/* Coalesce is FETCH_DIM_IS: a read whose missing key or scalar
 	 * container yields null without a diagnostic. Write is FETCH_DIM_W, RW
 	 * and UNSET, which return the INDIRECT of an existing element of an
@@ -12651,6 +12624,17 @@ bool ZendCompilerX64::compile_inst_impl(
 	};
 	/* The read of an isset's element (lookup_reuse_consumer()). */
 	IRInstRef reuse_read{UINT32_MAX};
+	/*
+	 * FETCH_DIM_R, FETCH_DIM_IS (??), isset() and empty() of an array
+	 * element whose container, key and result live in frame slots or
+	 * literals, composed of EncodeGen snippets:
+	 * zend_native_array_find_literal() or _find_key() probe the element
+	 * without changing anything, a temporary container is consumed only
+	 * when another owner keeps it alive, and every undecided probe takes
+	 * the guarded cold block, whose helper repeats the whole operation.
+	 * Returns 1 when emitted, 0 when the form does not apply and -1 on an
+	 * encoding failure.
+	 */
 	auto array_element = [&](ElementAccess access) -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
 		if (node.kind != Adaptor::InstKind::GuardedFast
@@ -13045,8 +13029,6 @@ bool ZendCompilerX64::compile_inst_impl(
 			out.set_value(this, std::move(common));
 			return true;
 		};
-		/* isset() of an array element decides in one snippet: set, not
-		 * set, or the helper's. */
 		/* An isset whose element a read reuses finds it in the general
 		 * form, which also leaves its address; a read that reuses one skips
 		 * its own lookup. */
@@ -13058,6 +13040,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& lookup_reuse_armed(instruction) && !register_key
 			&& literal_key != LiteralKey::Register
 			&& unlocked_gp_registers() >= 10;
+		/* isset() of an array element decides in one snippet: set, not
+		 * set, or the helper's. */
 		if (access == ElementAccess::Isset && !container_temporary
 				&& !reuse_store) {
 			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
@@ -13176,13 +13160,6 @@ bool ZendCompilerX64::compile_inst_impl(
 				successors);
 			return 1;
 		}
-		/*
-		 * An assignment under a string key, or a key of unknown type, looks
-		 * its element up, or inserts it, in one call of
-		 * zend_native_array_assign_lookup(): a lookup inline would repeat
-		 * zend_hash_lookup() at every site for little gain. NULL (UNKNOWN)
-		 * takes the helper.
-		 */
 		auto reuse_cached = text_writer.label_create();
 		auto reuse_joined = text_writer.label_create();
 		if (reuse_store) {
@@ -13215,7 +13192,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			generate_raw_jump(Jump::jne, reuse_cached);
 			label_place(shared);
 		}
-		/* A keyed assignment looks up or inserts its key in C. */
+		/*
+		 * An assignment under a string key, or a key of unknown type, looks
+		 * its element up, or inserts it, in one call of
+		 * zend_native_array_assign_lookup() rather than repeating
+		 * zend_hash_lookup() inline at every site. NULL (UNKNOWN) takes the
+		 * helper.
+		 */
 		const bool lookup_call = assigns
 			&& literal_key != LiteralKey::Index
 			&& literal_key != LiteralKey::Register;
@@ -14285,20 +14268,6 @@ bool ZendCompilerX64::compile_inst_impl(
 		return 1;
 	};
 	/*
-	 * count() of an array CV or temporary through
-	 * zend_native_zval_array_count(): the integer lands in the result
-	 * temporary and a register result; a temporary is consumed only when
-	 * another owner keeps it alive. Every other value takes the guarded cold
-	 * block. Returns 1 when emitted, 0 when the form does not apply and -1
-	 * on an encoding failure.
-	 */
-	/*
-	 * QM_ASSIGN of a literal: zend_native_zval_copy() copies it, with its
-	 * reference, into the fresh result temporary and a register result.
-	 * Returns 1 when emitted and 0 when the form does not apply, -1 on an
-	 * encoding failure.
-	 */
-	/*
 	 * === and !== of a CV or temporary and a literal through
 	 * zend_native_zval_identical(): the bool lands in the result temporary
 	 * and a register result; a temporary is consumed only when another
@@ -14776,6 +14745,12 @@ bool ZendCompilerX64::compile_inst_impl(
 			successors);
 		return 1;
 	};
+	/*
+	 * QM_ASSIGN of a literal: zend_native_zval_copy() copies it, with its
+	 * reference, into the fresh result temporary and a register result.
+	 * Returns 1 when emitted and 0 when the form does not apply, -1 on an
+	 * encoding failure.
+	 */
 	auto copy_literal = [&]() -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
 		if (node.kind != Adaptor::InstKind::GuardedFast
@@ -14856,6 +14831,14 @@ bool ZendCompilerX64::compile_inst_impl(
 		generate_uncond_branch(successors[0]);
 		return 1;
 	};
+	/*
+	 * count() of an array CV or temporary through
+	 * zend_native_zval_array_count(): the integer lands in the result
+	 * temporary and a register result; a temporary is consumed only when
+	 * another owner keeps it alive. Every other value takes the guarded cold
+	 * block. Returns 1 when emitted, 0 when the form does not apply and -1
+	 * on an encoding failure.
+	 */
 	auto count_inline = [&]() -> int {
 		const zend_mir_executable_value_ref &operation = mir.value_operation;
 		auto frame_slot = [](const zend_mir_source_operand_ref &operand) {
@@ -15461,10 +15444,9 @@ bool ZendCompilerX64::compile_inst_impl(
 						static_cast<int32_t>(offsetof(zend_string, len))));
 			}
 			/*
-			 * Source call arguments may remain canonical zvals even when the
-			 * producer is register-authoritative.  Publish strlen's complete
-			 * result before such a call can observe the temporary; later machine
-			 * consumers still use result_reg directly.
+			 * A source call may read the temporary's zval although the
+			 * producer is register-authoritative: publish the result there;
+			 * machine consumers use result_reg.
 			 */
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
@@ -15673,12 +15655,6 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
 				return -1;
 			}
-			/*
-			 * Register operands, such as the boxed result of a preceding
-			 * numeric node, take this form only where the long-only register
-			 * form cannot: MUL and DIV, or any result that can hold a double
-			 * or a boolean.
-			 */
 			/* The plan keeps the result of two longs an exact long only where
 			 * Zend's range inference excludes overflow. */
 			if (adaptor->typed_body() && !guarded && arithmetic
@@ -15734,7 +15710,13 @@ bool ZendCompilerX64::compile_inst_impl(
 				result.set_modified();
 				return 1;
 			}
-			/* A typed body passes both operands without a frame operand. */
+			/*
+			 * Register operands, such as the boxed result of a preceding
+			 * numeric node, take this form only where the long-only register
+			 * form cannot: MUL and DIV, or any result that can hold a double
+			 * or a boolean. A typed body passes both operands without a frame
+			 * operand.
+			 */
 			const bool register_operands = register_layout
 				|| (adaptor->typed_body() && !guarded
 					&& node.has_result && node.operands.size() == 2
@@ -19043,17 +19025,14 @@ bool ZendCompilerX64::compile_inst_impl(
 			return long_incdec();
 		case ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE:
 			/*
-			 * The frozen source operand is an allocator-visible SSA use even
-			 * when Zend's canonical-frame helper performs the semantic check.
-			 * Consume it here before either eliding the proven typed-body check
-			 * or emitting the ordinary helper call.
+			 * The source operand is an allocator-visible use even when the
+			 * helper performs the check: it is consumed here whether a
+			 * typed body elides the check or the helper runs. Like the VM, a
+			 * register-held boxed result whose type is in the declared
+			 * return mask passes without the helper, which handles coercion,
+			 * references and errors.
 			 */
 		{
-			/*
-			 * Like the VM, accept a register-held boxed result whose type is
-			 * in the declared return mask without calling the helper, which
-			 * handles coercion, references and errors.
-			 */
 			const bool needs_helper = !adaptor->typed_body()
 				&& mir.runtime_helper != ZEND_NATIVE_HELPER_COUNT;
 			const bool inline_check = needs_helper
@@ -19271,11 +19250,10 @@ bool ZendCompilerX64::compile_inst_impl(
 					return false;
 				}
 				/*
-				 * The interrupt poll contains a target-local fast/slow branch which
-				 * is invisible to TPDE's IR CFG. The slow-path call invalidates
-				 * caller-saved assignments in the shared compile-time state. Spill
-				 * live values before the branch so the fast path reaches the join
-				 * with the same canonical copies available for later reloads.
+				 * The poll's fast/slow branch is invisible to TPDE's CFG, and
+				 * the slow path's call clobbers caller-saved assignments: live
+				 * values are spilled before the branch, so both paths reach
+				 * the join with the same stack copies.
 				 */
 				const auto spilled = spill_before_branch(true);
 				auto done = text_writer.label_create();
@@ -20075,9 +20053,9 @@ bool ZendCompilerX64::compile_inst_impl(
 						generate_raw_jump(Jump::jne, slow);
 					} else {
 						/* FE_FETCH_R copies like ZVAL_COPY_OR_DUP; a
-						 * reference, an indirect slot or a persistent
-						 * counted value keeps the helper. */
-						/* IS_REFERENCE, IS_INDIRECT and every type above. */
+						 * reference, an indirect slot (IS_REFERENCE and
+						 * every type above) or a persistent counted value
+						 * keeps the helper. */
 						ASM(CMP8ri, type_reg, IS_REFERENCE);
 						generate_raw_jump(Jump::jae, slow);
 						ASM(TEST32ri, type_reg,
@@ -20543,11 +20521,6 @@ bool ZendCompilerX64::compile_inst_impl(
 						}
 					};
 
-					/*
-					 * Result-producing short-circuit branches must consume their
-					 * source TMP.  Leave those to the native helper below instead
-					 * of overwriting the source slot in the truthiness fast path.
-					 */
 					if (layout.has_result) {
 						/* ?? moves a defined non-null temporary into the
 						 * result or copies a CV; &&/|| publish the truth
@@ -21444,11 +21417,10 @@ bool ZendCompilerX64::compile_inst_impl(
 						(void) discarded;
 					}
 					/*
-					 * A split guard already routed observer-visible execution
-					 * into the materialized cold block.  Older machine CFGs
-					 * keep that guard in this block and therefore retain the
-					 * context operand; handle both layouts without creating a
-					 * private Zend frame on the register-only edge.
+					 * A split guard routes observer-visible execution into the
+					 * materialized cold block; a CFG that keeps the guard in
+					 * this block retains the context operand. Neither layout
+					 * creates a private Zend frame on the register-only edge.
 					 */
 					if (has_inline_context) {
 						auto [context_ref, context] =
@@ -21676,12 +21648,11 @@ bool ZendCompilerX64::compile_inst_impl(
 				if (generated_fast_path
 						&& node.kind != Adaptor::InstKind::GuardedCold) {
 					/*
-					 * Materialize the callee directly in the first native-entry
-					 * argument register. This gives the large-frame path one
-					 * stable callee register without reserving both ABI argument
-					 * registers throughout frame construction. The indirect
-					 * entry target is materialized in R11 immediately before the
-					 * call, so argument placement cannot overwrite it.
+					 * The callee is built in RDI, the entry's first argument
+					 * register, which gives frame construction one stable
+					 * callee register. The entry target goes into R11 just
+					 * before the call, where argument placement cannot
+					 * overwrite it.
 					 */
 					ScratchReg fast_callee_argument_register{this};
 					fast_callee_argument_register.alloc_specific(
@@ -21721,11 +21692,9 @@ bool ZendCompilerX64::compile_inst_impl(
 						auto second_reg = second.alloc_gp();
 
 						/*
-						 * A leaf binding names an exact, already-published
-						 * immutable callee. The compiler declines this
-						 * representation when a frame probe is installed, so
-						 * those compile-time invariants do not need to be
-						 * reloaded at every loop iteration.
+						 * A leaf binding names an exact, published immutable
+						 * callee, and the compiler declines it while a frame
+						 * probe is installed: neither is checked here.
 						 */
 #ifdef ZEND_CHECK_STACK_LIMIT
 						ASM(MOV64rm, first_reg,
@@ -22456,9 +22425,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 
 					/*
-					 * Keep recursive Native calls on Zend's C-stack safety
-					 * contract.  The slow path owns the canonical overflow
-					 * error and bailout; successful calls stay helper-free.
+					 * Zend's C stack limit: an overflow takes the slow path,
+					 * which raises the error.
 					 */
 #ifdef ZEND_CHECK_STACK_LIMIT
 					ASM(MOV64rm, first_reg,
@@ -22676,12 +22644,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					/*
 					 * The result slot is cleared after the arguments are copied:
 					 * the optimizer may assign a temporary argument and the DO
-					 * result the same slot.
-					 *
-					 * Argument copying may need four temporary registers for a
-					 * boxed zval. The two preflight temporaries are dead here;
-					 * release them and reacquire dedicated metadata temporaries
-					 * after all arguments and CVs have been initialized.
+					 * result the same slot. The scratch registers of the checks
+					 * above are released, as copying a boxed argument may need
+					 * four.
 					 */
 					first.reset();
 					second.reset();
@@ -23130,7 +23095,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							FE_MEM(callee_reg, 0, FE_NOREG, offset), IS_UNDEF);
 					}
 
-					/* Complete and link the stable trailing activation. */
+					/* Complete and link the activation. */
 					ScratchReg metadata_first{this};
 					ScratchReg metadata_second{this};
 					auto metadata_first_reg = metadata_first.alloc_gp();
@@ -23272,8 +23237,6 @@ bool ZendCompilerX64::compile_inst_impl(
 							1);
 					}
 
-					/* Bind component-local edges directly to TPDE's local
-					 * function symbol. */
 					metadata_first.reset();
 					metadata_second.reset();
 					ValuePart callee_value{
@@ -23345,6 +23308,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					ValuePart fast_status{
 						tpde::x64::PlatformConfig::GP_BANK, 4};
 					if (local_component_call) {
+						/* A component-local call goes straight to TPDE's
+						 * local function symbol. */
 						frame_scratch.reset();
 						context_scratch.reset();
 						cell_scratch.reset();
@@ -23512,7 +23477,7 @@ bool ZendCompilerX64::compile_inst_impl(
 										call.direct_call->result_type)));
 								generate_raw_jump(Jump::jne, complete_fast);
 							}
-							/*
+						/*
 						 * Mirror Zend's sequential frame cleanup. A decremented slot
 						 * is made UNDEF before advancing, so the canonical rare path
 						 * can resume safely if a later alias owns the final reference.
@@ -25741,7 +25706,7 @@ extern "C" void zend_tpde_layout_training_flush(void)
 }
 
 /* At request start: a process whose run's profile is ready stops
- * training and compiles with the profile from now on. */
+ * training and compiles with the profile. */
 extern "C" bool zend_tpde_layout_switch(void)
 {
 	LayoutTraining &training = layout_training;

@@ -80,9 +80,9 @@ typedef struct _zend_native_compiled_function {
 	bool leaf_scalar_frame_known;
 	bool leaf_scalar_frame;
 	/*
-	 * Entry specialization (ADR 0024): a
-	 * function with untyped integer parameters also compiles a variant from
-	 * a private op array copy whose arg_info declares those parameters int.
+	 * Entry specialization (ADR 0024): a function with untyped integer
+	 * parameters also compiles a variant from a private op array copy whose
+	 * arg_info declares those parameters int.
 	 * The general entry checks the arguments once and jumps to the variant,
 	 * which runs on the same frame. variant_plus_one names the variant,
 	 * variant_of_plus_one its general function; variant_long_mask the
@@ -1136,12 +1136,7 @@ static bool zend_native_compiler_add_variant(
 	return true;
 }
 
-/*
- * Speculation (ADR 0025 section 4; ZEND_NATIVE_SPECULATE=1 while the
- * feedback that selects functions is pending): the generic copy a
- * function's specialized version deoptimizes into. A shallow op array copy
- * like a variant's, with the original arg_info.
- */
+/* Speculation (ADR 0025 section 4) is opt-in: ZEND_NATIVE_SPECULATE=1. */
 static bool zend_native_compiler_speculation_enabled(void)
 {
 	static int enabled = -1;
@@ -1170,6 +1165,10 @@ static bool zend_native_compiler_speculates(
 		&& (op_array->fn_flags & ZEND_ACC_GENERATOR) == 0;
 }
 
+/*
+ * The generic copy a function's specialized version deoptimizes into: a
+ * shallow op array copy like a variant's, with the original arg_info.
+ */
 static bool zend_native_compiler_add_deopt_generic(
 	zend_native_compiler *compiler,
 	zend_native_compiled_function *function)
@@ -2005,9 +2004,9 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 		? caller_function->op_array : NULL;
 
 	if (target != NULL && target->kind == ZEND_MIR_CALL_TARGET_DYNAMIC) {
-		/* Dynamic call sites carry no persistent function identity.  The
-		 * caller cell is only a codegen placeholder; zend_native_call_begin()
-		 * resolves and compiles the concrete request-local target. */
+		/* Dynamic call sites carry no persistent function identity: the
+		 * caller is a placeholder, and zend_native_call_begin() resolves and
+		 * compiles the request-local target. */
 		return caller;
 	}
 	if (target == NULL
@@ -2025,9 +2024,6 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 			return NULL;
 		}
 		caller_ssa = &caller_function->ssa;
-		if (caller_ssa == NULL) {
-			return NULL;
-		}
 		for (index = caller_function->first_call_site_by_target[target->id];
 				index != UINT32_MAX;
 				index = caller_function->next_call_site_by_site[index]) {
@@ -2044,9 +2040,8 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 			if (caller->opcodes[site.source_init_opline_index].opcode
 					== ZEND_NEW && target->num_args == 0
 					&& target->required_num_args == 0) {
-				/* A constructorless NEW is represented by Zend as NEW followed
-				 * by an empty DO_FCALL.  The runtime creates the object and
-				 * consumes that empty call without invoking user code. */
+				/* A constructorless NEW is NEW followed by an empty DO_FCALL,
+				 * which the runtime consumes without invoking user code. */
 				return caller;
 			}
 			function = zend_mir_zend_source_resolve_user_method_call(
@@ -2059,22 +2054,19 @@ static zend_op_array *zend_native_compiler_resolve_native_target(
 							== ZEND_INIT_STATIC_METHOD_CALL
 						|| caller->opcodes[site.source_init_opline_index].opcode
 							== ZEND_INIT_PARENT_PROPERTY_HOOK_CALL)) {
-				/* The receiver class is intentionally request-local for a
-				 * polymorphic instance or static method call.  Bind the generated
-				 * site to the caller cell as a placeholder; zend_native_call_begin()
-				 * resolves the concrete method and the reentry resolver compiles it
-				 * atomically. */
+				/* A polymorphic receiver class is request-local: the caller is a
+				 * placeholder, zend_native_call_begin() resolves the method and
+				 * the reentry resolver compiles it. */
 				return caller;
 			}
 			if (function == NULL || function->type != ZEND_USER_FUNCTION) {
 				return NULL;
 			}
 			/*
-			 * A monomorphic method may belong to another OPcache owner
-			 * (notably a preloaded class).  Its process address is not a
-			 * persistent identity in this script's image.  Keep the call
-			 * indirect so runtime owner resolution selects that owner's
-			 * entry cell without serializing a foreign function pointer.
+			 * A monomorphic method may belong to another OPcache owner, such
+			 * as a preloaded class, whose address is no persistent identity in
+			 * this image. Keep the call indirect so runtime owner resolution
+			 * selects that owner's entry cell.
 			 */
 			if (function->op_array.opcodes == NULL
 					|| zend_native_compiler_find_source(
@@ -2114,13 +2106,10 @@ static bool zend_native_compiler_target_is_direct_native(
 	uint32_t index;
 	bool found = false;
 
-	/* Deferred OPcache bundles are built against owner class entries before
-	 * request-local classes are necessarily linked.  A direct method descriptor
-	 * would retain that owner's function and scope, while an overridable receiver
-	 * may belong to a request-local derived class.  Keep those calls on the
-	 * resolving user-call path.  A method declared by a final same-owner class
-	 * cannot acquire a derived override, and its source op_array is already
-	 * represented by the bundle's symbolic user-function reference. */
+	/* Deferred OPcache bundles are built before request-local classes are
+	 * linked, so an overridable method's receiver may belong to a
+	 * request-local derived class: keep it on the resolving user-call path.
+	 * A method of a final class cannot be overridden. */
 	if (compiler != NULL
 			&& (compiler->defer_publication || compiler->persistent)
 			&& target->kind == ZEND_MIR_CALL_TARGET_METHOD_USER
@@ -2271,11 +2260,11 @@ zend_native_compiler_source_operand_exact_type(
 }
 
 /*
- * A leaf-scalar frame is deliberately stricter than "currently emits no
- * helper". It is a complete MIR proof that the generated entry cannot call,
+ * A leaf-scalar frame is a MIR proof that the generated entry cannot call,
  * allocate, throw, observe, interrupt, own a refcounted value, or otherwise
- * require a published Zend activation. Such an entry still receives the
- * canonical frame ABI, but the caller may keep that frame private.
+ * require a published Zend activation; emitting no helper is not enough.
+ * Such an entry still receives the canonical frame ABI, but the caller may
+ * keep that frame private.
  */
 static bool zend_native_compiler_calculate_leaf_scalar_frame(
 	zend_native_compiler *compiler,
@@ -2953,13 +2942,12 @@ static zend_op_array *zend_native_compiler_retain_runtime_source(
 	if (source != NULL) {
 		return source->last == resolved->last ? source : NULL;
 	}
-	/* Immutable script op_arrays already have stable owner storage.  Runtime
-	 * closures instead embed a shallow op_array copy in the closure object;
-	 * retaining that object would incorrectly extend the lifetime of bound
-	 * values.  Keep an independent metadata copy and one shared-code refcount
-	 * lease so native code never points through the ephemeral closure object. */
-	/* A closure of a cached script shares immutable code without a
-	 * refcount, but its op_array is still the copy inside the closure. */
+	/* Immutable script op_arrays have stable owner storage. A runtime closure
+	 * embeds a shallow op_array copy in the closure object, and retaining that
+	 * object would extend the lifetime of bound values: keep a metadata copy
+	 * and one shared-code refcount lease instead. A closure of a cached script
+	 * shares immutable code without a refcount, but its op_array is still the
+	 * copy inside the closure. */
 	if (resolved->refcount == NULL
 			&& (resolved->fn_flags & ZEND_ACC_CLOSURE) == 0) {
 		return zend_hash_index_add_ptr(
@@ -3103,15 +3091,13 @@ static bool zend_native_compiler_discover_native_callees(
 					continue;
 				}
 				if (callback == NULL) {
-					/* Callback APIs resolve callable values at runtime.  The
-					 * request-local execute hook compiles an already loaded user
-					 * target on first reentry; invalid callables remain the internal
-					 * API's semantic error, not a native compile-time rejection. */
+					/* Resolved at runtime: the execute hook compiles a user
+					 * target on first reentry, and an invalid callable stays the
+					 * internal function's error. */
 					continue;
 				}
-				if (callback == NULL
-						|| zend_native_compiler_add_function(
-							compiler, callback, NULL) == NULL) {
+				if (zend_native_compiler_add_function(
+						compiler, callback, NULL) == NULL) {
 					zend_native_compiler_set_diagnostic(
 						compiler, NULL, ZEND_NATIVE_COMPILE_PHASE_CODEGEN,
 						ZEND_NATIVE_DIAGNOSTIC_INVALID_ARGUMENT,
@@ -3128,12 +3114,6 @@ static bool zend_native_compiler_discover_native_callees(
 				&& callee == function->op_array) {
 			continue;
 		}
-		/*
-		 * A baseline entry is a property of the function body and its static
-		 * scope, never of the first observed call-site types.  User arguments
-		 * remain canonical zvals unless the callee's own declared type and SSA
-		 * prove an exact scalar after zend_native_frame_prepare().
-		 */
 	}
 	return true;
 }
@@ -3166,14 +3146,10 @@ static bool zend_native_compiler_assign_static_component(
 			continue;
 		}
 		/*
-		 * compile_locked() begins with one selected root and discovers every
-		 * transitively reachable static user target before reaching this
-		 * point.  Those still-COMPILING functions are therefore one native
-		 * callgraph component, including acyclic leaf edges as well as SCCs.
-		 * Keeping them in one TPDE image is what makes local calls, generic
-		 * body inlining and component-atomic publication available to the
-		 * common case; splitting every acyclic edge into singleton SCCs only
-		 * recreated Entry-Cell transport between statically known functions.
+		 * The still-COMPILING functions are the root and every static user
+		 * target reachable from it. They form one component, acyclic edges
+		 * included, so one TPDE image gets local calls, body inlining and
+		 * atomic publication.
 		 */
 		function->component_id = 1;
 		function->next_component_member = compiler->component_heads[1];
@@ -4049,11 +4025,9 @@ binding_rejected:
 		}
 	}
 	/*
-	 * Keep every member publish_pending until the complete entry-cell batch has
-	 * been published. zend_native_compiler_fail_pending_component() can then
-	 * roll an already-published READY cell back to FAILED if any later member
-	 * rejects publication. No entry from this component becomes committed
-	 * independently of its siblings.
+	 * Every member stays publish_pending until the whole batch is published,
+	 * so zend_native_compiler_fail_pending_component() can roll a READY cell
+	 * back to FAILED if a later member rejects publication.
 	 */
 	function = compiler->component_heads[component_id];
 	while (function != NULL) {
@@ -6699,10 +6673,8 @@ bool zend_native_compiler_end_request(zend_native_compiler *compiler)
 		return false;
 	}
 	zend_native_compiler_mutation_lock(compiler);
-	/*
-	 * Publication retirement owns this precondition.  Never unmap code that
-	 * is still executing or backs a suspended generator frame.
-	 */
+	/* Never unmap code that is still executing or backs a suspended
+	 * generator frame. */
 	if (compiler->transients_released
 			|| zend_native_compiler_active_call_count(compiler) != 0
 			|| zend_native_compiler_suspended_frame_count(compiler) != 0) {

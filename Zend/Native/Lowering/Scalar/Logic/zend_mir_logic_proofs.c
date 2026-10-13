@@ -123,7 +123,6 @@ bool zend_mir_logic_input_at(
 	}
 	if (context == NULL || source == NULL || out == NULL
 			|| diagnostic_out == NULL
-			|| source->kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
 			|| source->kind < ZEND_MIR_SOURCE_OPERAND_LITERAL
 			|| source->kind > ZEND_MIR_SOURCE_OPERAND_SSA) {
 		return false;

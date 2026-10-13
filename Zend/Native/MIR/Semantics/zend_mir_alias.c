@@ -43,8 +43,9 @@ zend_mir_alias_kind zend_mir_alias_relation(
 
 bool zend_mir_domains_may_alias(zend_mir_memory_domain left, zend_mir_memory_domain right)
 {
-	/* UNKNOWN is deliberately conservative too. */
-	(void) zend_mir_alias_relation(left, right);
+	/* No alias kind proves two domains disjoint; UNKNOWN is conservative. */
+	(void) left;
+	(void) right;
 	return true;
 }
 

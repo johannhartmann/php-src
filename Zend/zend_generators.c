@@ -163,12 +163,9 @@ ZEND_API void zend_generator_close(zend_generator *generator, bool finished_exec
 	if (EXPECTED(generator->execute_data)) {
 		zend_execute_data *execute_data = generator->execute_data;
 #ifdef HAVE_NATIVE_ENGINE
-		/* Rethrowing an exception from a yield-from delegate can return through
-		 * the VM exception dispatcher without reentering the native continuation.
-		 * The dispatcher leaves EX(opline) at the function entry sentinel, while
-		 * EG(opline_before_exception) still identifies the suspended source
-		 * operation. Recover that location before native call planning and live
-		 * range cleanup inspect the frame. */
+		/* An exception rethrown from a yield from delegate leaves EX(opline)
+		 * at the function entry; EG(opline_before_exception) still names the
+		 * suspended operation that live range cleanup needs. */
 		if (!finished_execution && generator->native_entry_cell != NULL
 				&& execute_data->opline
 					== execute_data->func->op_array.opcodes) {
@@ -292,8 +289,7 @@ static inline bool check_node_running_in_fiber(zend_generator *generator) {
 static void zend_generator_cleanup_native_suspended_arguments(
 	zend_generator *generator)
 {
-	/* parent follows the active yield-from path from the exposed root to the
-	 * currently executing delegate. */
+	/* node.parent leads from the root along the active yield from chain. */
 	for (; generator != NULL; generator = generator->node.parent) {
 		if (generator->execute_data != NULL) {
 			zend_native_generator_cleanup_suspended_arguments(
@@ -321,10 +317,8 @@ static void zend_generator_dtor_storage(zend_object *object) /* {{{ */
 	 */
 	if (current_generator->flags & ZEND_GENERATOR_IN_FIBER) {
 		if (check_node_running_in_fiber(generator)) {
-			/* Native call planning may still own already-sent argument
-			 * temporaries in the suspended source frame. A VM frame moved these
-			 * values into its pending call stack before entering the Fiber. */
 #ifdef HAVE_NATIVE_ENGINE
+			/* The suspended frames may still own already sent arguments. */
 			zend_generator_cleanup_native_suspended_arguments(generator);
 #endif
 			/* Prevent finally blocks from yielding */

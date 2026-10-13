@@ -59,7 +59,6 @@ static inline uint32_t zend_mir_mir_successor_for_source(
 		case ZEND_MIR_BRANCH_ITERATOR:
 			return source_successor_index == 0 ? 1 : 0;
 		case ZEND_MIR_BRANCH_FINALLY_CALL:
-			return source_successor_index;
 		case ZEND_MIR_BRANCH_IF_TRUE:
 		case ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT:
 		case ZEND_MIR_BRANCH_COALESCE:
@@ -68,7 +67,6 @@ static inline uint32_t zend_mir_mir_successor_for_source(
 		case ZEND_MIR_BRANCH_ASSERT_CHECK:
 		case ZEND_MIR_BRANCH_BIND_STATIC:
 		case ZEND_MIR_BRANCH_FRAMELESS:
-			return source_successor_index;
 		case ZEND_MIR_BRANCH_MULTIWAY:
 			return source_successor_index;
 		default:

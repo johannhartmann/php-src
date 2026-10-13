@@ -5451,8 +5451,7 @@ static void zend_include_or_eval_release(zend_include_or_eval_state *state)
 }
 
 #ifdef HAVE_NATIVE_ENGINE
-/* A bailout out of the compilation releases the include state before its
- * jump (zend_native_bailout_unwind()). */
+/* Releases the include state when the compilation bails out. */
 static void zend_include_or_eval_unwind(zend_native_bailout_record *record)
 {
 	zend_include_or_eval_release((zend_include_or_eval_state *) record);

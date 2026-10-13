@@ -133,9 +133,8 @@ extern "C" {
 #endif
 
 /*
- * These process-local accessors are supplied by the lowering core.  Keeping
- * them out of the public lowering header lets provider-private context
- * layouts change without persisting a pointer in ZNMIR.
+ * Process-local accessors supplied by the lowering core, kept out of the
+ * public lowering header so that provider context layouts stay private.
  */
 const void *zend_mir_lowering_context_provider_context(
 	const zend_mir_lowering_context *context);

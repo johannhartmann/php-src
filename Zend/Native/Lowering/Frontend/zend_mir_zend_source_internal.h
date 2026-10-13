@@ -182,9 +182,8 @@ bool zend_mir_zend_source_direct_static_call_scope(
 	bool *inherit_called_scope);
 
 /*
- * Initialize the source adapter directly from optimizer-owned storage.
- * Prerequisite filtering is supplied by a thin source-view overlay; this
- * constructor deliberately does not materialize or mutate an OpArray/SSA copy.
+ * Initialize the source adapter directly from optimizer-owned storage, which
+ * it neither copies nor mutates. A source-view overlay filters prerequisites.
  */
 zend_mir_lowering_status zend_mir_zend_source_init_direct(
 	zend_mir_zend_source *source,

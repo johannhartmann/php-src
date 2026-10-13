@@ -659,9 +659,9 @@ static bool zend_mir_frontend_original_result_slot(
 				== (int) ssa_variable_id) {
 			return true;
 		}
-		/* Zend's optimizer may leave a dead, definitionsless SSA version for
-		 * a temporary that is physically owned by the call result. It maps to
-		 * that same source slot but publishes no independent value fact. */
+		/* The optimizer may leave a dead SSA version without definition for
+		 * a temporary physically owned by the call result. It maps to the
+		 * same source slot but publishes no value fact of its own. */
 		if (original_ssa->vars[ssa_variable_id].definition == -1
 				&& original_ssa->vars[ssa_variable_id].definition_phi == NULL
 				&& original_ssa->vars[ssa_variable_id].use_chain == -1
@@ -1526,7 +1526,6 @@ bool zend_mir_zend_source_view(
 	out->phi_at = zend_mir_frontend_view_phi_at;
 	out->phi_input_count = zend_mir_frontend_view_phi_input_count;
 	out->phi_input_at = zend_mir_frontend_view_phi_input_at;
-	out->contract_version = ZEND_MIR_CONTRACT_VERSION;
 	return true;
 }
 
@@ -1946,9 +1945,8 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 			&& function->type == ZEND_USER_FUNCTION
 			&& (function->common.fn_flags & ZEND_ACC_ABSTRACT) == 0) {
 		/*
-		 * zend_optimizer_get_called_func() only returns a non-prototype when
-		 * the call target itself is fixed. This is the strongest and cheapest
-		 * monomorphic proof available to the native frontend.
+		 * zend_optimizer_get_called_func() returns a non-prototype only when
+		 * the call target itself is fixed.
 		 */
 		if (require_monomorphic
 				&& !zend_check_method_accessible(function, op_array->scope)) {
@@ -2014,10 +2012,9 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 		}
 		receiver_class = zend_mir_zend_source_receiver_class_from_ssa(
 			script, op_array, ssa, receiver_ssa, &exact_receiver);
-		/* Enum cases are represented as class constants.  The optimizer keeps
-		 * their result type deliberately broad, so recover the exact final enum
-		 * class from the source definition instead of persisting a class pointer
-		 * in MIR or treating the method call as unresolved. */
+		/* Enum cases are class constants whose result type the optimizer
+		 * keeps broad; recover the exact (final) enum class from the defining
+		 * FETCH_CLASS_CONSTANT. */
 		definition = ssa->vars[receiver_ssa].definition;
 		if (receiver_class == NULL && definition >= 0
 				&& (uint32_t) definition < op_array->last
@@ -2823,14 +2820,13 @@ static void zend_mir_frontend_attach_call_inventory(
 }
 
 /*
- * Zend keeps THROW opcodes used as expressions in the same SSA block as the
- * synthetic value/JMP tail that follows them. The tail is useful to Zend's
- * live-range analysis, but THROW always ends the native block: the tail
- * oplines never execute and its outgoing edge is not executable. Marks the
- * oplines after the first expression THROW of every block, reachable or
- * not, in one per-opline table that the call inventory, the source-view
- * overlay and the value lowering share. *tails_out stays NULL when no block
- * has a tail.
+ * Zend keeps a THROW used as an expression in the same SSA block as the
+ * value/JMP tail that follows it, for its live-range analysis. THROW ends
+ * the native block, so the tail oplines never execute and its outgoing edge
+ * is not executable. Marks the oplines after the first expression THROW of
+ * every block, reachable or not, in one per-opline table shared by the call
+ * inventory, the source-view overlay and the value lowering. *tails_out
+ * stays NULL when no block has a tail.
  */
 static bool zend_mir_frontend_mark_expression_throw_tails(
 	const zend_op_array *op_array, const zend_ssa *ssa, uint8_t **tails_out)
@@ -3095,11 +3091,9 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			site->do_opline_index = index;
 			site->source_block_id = block_id;
 			/*
-			 * The call's throwing point is the DO opcode.  ASSERT_CHECK and
-			 * similar control-flow splits may place INIT in a block whose CFG
-			 * protection flag does not describe the eventual call instruction.
-			 * Resolve protection from the completed source sequence instead of
-			 * relying only on the INIT block classification.
+			 * The call throws at DO. Control-flow splits such as ASSERT_CHECK
+			 * can put INIT in a block with different protection, so the DO
+			 * opline decides.
 			 */
 			{
 				zend_mir_source_block_id handler_block;

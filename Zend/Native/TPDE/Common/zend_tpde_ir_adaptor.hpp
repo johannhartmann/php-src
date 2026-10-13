@@ -627,10 +627,9 @@ private:
 				|| opline.result_type == IS_TMP_VAR
 				|| opline.result_type == IS_VAR;
 			/*
-			 * Treat every later mention as unstable, including a read. This is
-			 * deliberately stronger than a write-only test: it also prevents an
-			 * earlier delayed TMP/VAR argument from being consumed after a later
-			 * SEND has observed or reused the same physical slot.
+			 * Every later mention counts, a read included: an earlier delayed
+			 * TMP/VAR argument must not be consumed after a later SEND observed
+			 * or reused the same slot.
 			 */
 			if ((op1_slot && opline.op1_var == encoded_storage)
 					|| (op2_slot && opline.op2_var == encoded_storage)
@@ -702,11 +701,10 @@ private:
 			return false;
 		}
 		/*
-		 * Full DFA may coalesce the source SSA identity of a fetch result
-		 * back into its canonical zval slot.  The frozen source binding still
-		 * names the exact defining instruction and therefore preserves its
-		 * register-authoritative boxed result.  Prefer that def-use edge and
-		 * retain the source-operand lookup for ordinary scalar plans.
+		 * Full DFA may coalesce a fetch result's source SSA identity back into
+		 * its zval slot; the source binding still names the defining
+		 * instruction and so its register boxed result. The source-operand
+		 * lookup serves ordinary scalar plans.
 		 */
 		left = source_binding_value_ref(instruction.source_op1_binding);
 		if (left == INVALID_VALUE_REF) {
@@ -721,12 +719,10 @@ private:
 		auto register_or_constant = [&](IRValueRef value) {
 			if (machine_value_is_register_authoritative(value)) {
 				/*
-				 * A frozen machine kind alone does not prove that this adaptor
-				 * emits a TPDE definition.  In particular, an unselected direct
-				 * user call publishes its scalar result through the canonical
-				 * Zend slot even though its value plan remains register-
-				 * authoritative.  Require the actual definition for every
-				 * non-constant operand before selecting the register fast path.
+				 * A machine kind does not prove a TPDE definition: an
+				 * unselected direct user call publishes its scalar result
+				 * through the Zend slot although its plan value stays
+				 * register-authoritative.
 				 */
 				return machine_value_has_register_definition(value);
 			}
@@ -1471,9 +1467,9 @@ private:
 	}
 
 	/*
-	 * Loads loaded from the frame slot at address before the operation
-	 * whose operands start at operand_offset: the load takes the next
-	 * operand, and the operation's operands so far move behind it.
+	 * Adds a load from the frame slot at address before the operation whose
+	 * operands start at operand_offset: the load takes the next operand, and
+	 * the operation's operands so far move behind it.
 	 */
 	void add_payload_load_before(
 			std::vector<BlockItem<IRInstRef>> &block_instructions,
@@ -1528,15 +1524,13 @@ private:
 	}
 
 	/*
-	 * Clone a proof-closed scalar callee body into the caller graph from the
-	 * frozen ZNMIR plans.  This deliberately operates after every component
-	 * member has been lowered: source opcodes are not consulted and the target
-	 * backends see ordinary TPDE instructions and values.
-	 *
-	 * The observer-enabled path still executes the complete Zend-frame call.
-	 * Pure scalar instructions may therefore execute speculatively before the
-	 * observer guard, but no effectful, trapping, branching, or frame-observing
-	 * instruction is admitted here.
+	 * Clones a proof-closed scalar callee body into the caller graph after
+	 * every component member was lowered: source opcodes are not consulted, and
+	 * the target backends see ordinary TPDE instructions and values. The
+	 * observer-enabled path still runs the complete Zend-frame call, so pure
+	 * scalar instructions may run speculatively before the observer guard; no
+	 * effectful, trapping, branching or frame-observing instruction is
+	 * admitted.
 	 */
 	InlinedBody inline_component_scalar_body(
 			const zend_tpde_instruction &call,
@@ -1811,9 +1805,9 @@ private:
 					|| exact_type(caller_value)
 						== ZEND_MIR_SCALAR_TYPE_F64) {
 				/*
-				 * An effect-closed body need not transport arguments it never
-				 * consumes.  Leave an ABI-incompatible unused parameter
-				 * unmapped; any real use below still fails the clone through
+				 * An effect-closed body does not transport arguments it never
+				 * consumes: an ABI-incompatible unused parameter stays
+				 * unmapped, and a real use below still fails the clone through
 				 * mapped_value().
 				 */
 				continue;
@@ -1961,11 +1955,10 @@ private:
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_CONSTANT) {
 				/*
-				 * Constants are mapped lazily when a cloned machine
-				 * instruction consumes them.  Lowering also retains
-				 * registerless NULL/UNDEF topology constants, which are not
-				 * part of an exact scalar return body and must not reject an
-				 * otherwise effect-closed inline candidate.
+				 * Constants are mapped when a cloned instruction consumes them.
+				 * Registerless NULL/UNDEF topology constants are not part of an
+				 * exact scalar return body and must not reject an effect-closed
+				 * candidate.
 				 */
 				continue;
 			}
@@ -2441,19 +2434,18 @@ private:
 		}
 		if (cloned_string_length) {
 			/*
-			 * The cloned unary operation already owns a fresh SSA result.
-			 * Feeding it directly to CALL_DIRECT_USER gives that assignment
-			 * exactly one consumer.  The extra path-separating copy below is
-			 * only needed when the fast result aliases an existing caller
-			 * value also observed by the materialized call path.
+			 * The cloned unary operation owns a fresh SSA result, which
+			 * CALL_DIRECT_USER consumes once. The path-separating copy below is
+			 * needed only when the fast result aliases a caller value the
+			 * materialized call path also observes.
 			 */
 			return {true, returned};
 		}
 		/*
-		 * Keep the inlined fast result distinct from the same caller value
-		 * consumed by the materialized observer path.  TPDE then owns one
-		 * ordinary SSA use on each side instead of two path-sensitive uses of
-		 * a single ValueAssignment hidden inside CALL_DIRECT_USER.
+		 * The inlined fast result stays distinct from the caller value the
+		 * materialized observer path consumes: TPDE sees one SSA use on each
+		 * side instead of two path-sensitive uses of one ValueAssignment inside
+		 * CALL_DIRECT_USER.
 		 */
 		const uint32_t result_operand_offset =
 			static_cast<uint32_t>(operands_.size());
@@ -2670,10 +2662,12 @@ public:
 		}
 		/* The blocks the RPO search below reaches from the entry. */
 		std::vector<uint8_t> machine_block_reachable(tpde_block_count, 0);
-		/* Dominance is queried from several nested instruction scans below.
-		 * Re-running a complete reachability search for each pair makes large,
-		 * mostly linear generated op arrays quadratic. Build the immediate-
-		 * dominator tree once and answer subsequent queries by tree intervals. */
+		/*
+		 * Dominance is queried from several nested instruction scans below; a
+		 * reachability search per pair is quadratic on large, mostly linear op
+		 * arrays, so queries use tree intervals of the immediate-dominator
+		 * tree.
+		 */
 		std::vector<uint32_t> machine_block_rpo;
 		std::vector<uint32_t> machine_block_rpo_index(
 			tpde_block_count, UINT32_MAX);
@@ -3166,16 +3160,12 @@ public:
 				argument_abi.exact_type});
 		}
 
-		/*
-		 * A call always publishes its canonical result zval, but it only needs
-		 * a second, register-resident scalar result when a later TPDE
-		 * instruction or PHI consumes that scalar identity.  Compute those
-		 * uses once for the complete function.  This keeps the construction
-		 * linear and avoids manufacturing zero-reference ValueAssignments for
-		 * calls whose result is observed exclusively through Zend storage.
-		 */
-			/* The frozen uses of this function's mode
-			 * (machine_value_has_frozen_use). */
+			/*
+			 * The frozen uses of this function's mode
+			 * (machine_value_has_frozen_use). A call publishes its canonical
+			 * result zval and needs a register result besides only when a TPDE
+			 * instruction or PHI consumes it.
+			 */
 			struct FrozenUses {
 				const uint8_t *required;
 				uint8_t operator[](uint32_t value) const {
@@ -3205,11 +3195,10 @@ public:
 			}
 			/*
 			 * Component-call results may feed PHIs that precede the call in MIR
-			 * instruction order (most notably loop-carried direct-call
-			 * results). Select their local-ABI machine identities before
-			 * visiting any PHI. Otherwise the PHI captures the canonical plan
-			 * value while the call later defines a derived override, leaving
-			 * the captured value without a TPDE definition on the backedge.
+			 * order (loop-carried direct-call results), so their local-ABI
+			 * identities are selected before any PHI. Otherwise the PHI
+			 * captures the canonical value and the call's later override leaves
+			 * the backedge without a TPDE definition.
 			 */
 			std::vector<IRValueRef> register_component_results(
 				plan_->instruction_count, INVALID_VALUE_REF);
@@ -3227,10 +3216,12 @@ public:
 					continue;
 				}
 
-				/* A full-DFA result may reuse the destination CV's canonical
-				 * binding even though the source operand still carries the exact
-				 * defining SSA version.  Prefer that definition so a loop PHI's
-				 * result is not globally replaced by its backedge call result. */
+				/*
+				 * A full-DFA result may reuse the destination CV's canonical
+				 * binding while the source operand still names the defining SSA
+				 * version. That definition wins, so a loop PHI's result is not
+				 * replaced globally by its backedge call result.
+				 */
 				IRValueRef canonical_result =
 					plan_source_operand_value_ref(
 						plan_, instruction.direct_call->result_operand);
@@ -3286,10 +3277,8 @@ public:
 					continue;
 				}
 				/*
-				 * An exact null return has a valid local ABI, but no payload to
-				 * carry in a register. Keep the canonical null value instead of
-				 * manufacturing a register result that liveness deliberately
-				 * ignores.
+				 * An exact null return has a valid local ABI but no payload to
+				 * carry in a register: the canonical null value stays.
 				 */
 				if (result_abi.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 					continue;
@@ -3333,18 +3322,14 @@ public:
 			}
 			/*
 			 * A source assignment can rename a private component-call result
-			 * into a loop-carried CV.  The corresponding PHI precedes both the
-			 * call and the assignment in MIR order, so select that rename now,
-			 * while the call's local-ABI identity is already known.  Waiting
-			 * until VALUE_ASSIGN is visited would leave the PHI backedge bound
-			 * to the old canonical-slot value and every iteration would call
-			 * the callee with the loop's initial argument.
-			 *
-			 * The assignment itself remains a real guarded value operation:
-			 * both targets publish the register value to the canonical CV on
-			 * the hot edge and materialize the source temporary before the
-			 * generic cold helper.  This preselection only makes the new source
-			 * SSA identity authoritative soon enough for PHI construction.
+			 * into a loop-carried CV. Its PHI precedes both the call and the
+			 * assignment in MIR order, so the rename is selected here, where
+			 * the call's local-ABI identity is known; otherwise the PHI
+			 * backedge binds the canonical slot value and every iteration calls
+			 * with the loop's initial argument. The assignment itself stays a
+			 * guarded value operation: the hot edge publishes the register
+			 * value to the CV, and the source temporary is materialized before
+			 * the cold helper.
 			 */
 			std::vector<IRValueRef> preselected_phi_results(
 				plan_->instruction_count, INVALID_VALUE_REF);
@@ -3641,10 +3626,9 @@ public:
 					static_cast<int32_t>(consumer_index);
 			}
 				/*
-				 * FE_FETCH defines its destination through op2 rather than the
-				 * ordinary result operand.  Record that source SSA producer so an
-				 * optimized binary consumer can retain the fetched zval in the
-		 * machine def-use graph.
+				 * FE_FETCH defines its destination through op2, not the result
+				 * operand: recording that producer lets an optimized binary
+				 * consumer keep the fetched zval in the machine def-use graph.
 				 */
 				if (consumer.record.opcode
 						== ZEND_MIR_OPCODE_ITERATOR_BRANCH
@@ -3681,11 +3665,9 @@ public:
 					case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
 						/*
 						 * Full OPcache DFA rewrites "$cv += fetch()" into a
-						 * binary operation whose result directly defines the
-						 * CV.  Both operands are then real consumers, rather
-						 * than an intervening VALUE_ASSIGN_OP.  Preserve a
-						 * source result in TPDE registers so the binary
-						 * selector can consume it on the fast CFG.
+						 * binary operation whose result defines the CV, so both
+						 * operands are real consumers; the source result stays
+						 * in registers for the binary selector's fast path.
 						 */
 						mark_source_producer(
 							consumer.source_op1_binding);
@@ -3695,9 +3677,8 @@ public:
 					case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
 					case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 						/*
-						 * Guarded reads and isset/empty consume both the array
-						 * payload and the dimension key directly. Keep both
-						 * producers in the machine def-use graph.
+						 * Guarded reads and isset/empty consume the array
+						 * payload and the key directly.
 						 */
 						mark_source_producer(
 							consumer.source_op1_binding);
@@ -3779,8 +3760,8 @@ public:
 						guarded_continuation_blocks[producer_index];
 					/*
 					 * A guarded producer joins its fast and cold results in a
-					 * generated continuation.  The next source instruction lives
-					 * there even though no source operation intervenes.
+					 * generated continuation, where the next source instruction
+					 * lives.
 					 */
 					uint32_t active_block = producer_continuation != UINT32_MAX
 						? producer_continuation
@@ -3811,13 +3792,11 @@ public:
 					return consumer_block == active_block;
 				};
 		/*
-		 * A full-DFA ADD/SUB may define a canonical ZVAL whose inferred type is
-		 * long|double.  Keeping that definition frame-authoritative prevents a
-		 * loop PHI from becoming a TPDE value, even though the long fast path
-		 * and the overflow cold path can both produce the complete
-		 * payload/type-info pair.  Select those results before PHIs so the
-		 * backedge is already a boxed machine value when the loop join is
-		 * formed.
+		 * A full-DFA ADD/SUB may define a ZVAL inferred long|double. The long
+		 * fast path and the overflow cold path both produce the complete
+		 * payload/type-info pair, so such results are selected before PHIs: the
+		 * backedge is then a boxed machine value when the loop join forms, and
+		 * the PHI can become a TPDE value.
 		 */
 		std::vector<IRValueRef> register_binary_results(
 			plan_->instruction_count, INVALID_VALUE_REF);
@@ -3827,11 +3806,11 @@ public:
 			plan_->instruction_count, INVALID_VALUE_REF);
 		std::vector<zend_mir_storage_id> register_boxed_storages;
 		/*
-		 * Short-circuit PHIs precede their source operations in the frozen
-		 * instruction order.  Preselect exact boolean results before visiting
-		 * those PHIs, including the edge result of JMPZ_EX/JMPNZ_EX.  The latter
-		 * is the condition itself on the only edge where the source opcode
-		 * defines its result, so it needs no separate machine instruction.
+		 * Short-circuit PHIs precede their source operations in instruction
+		 * order, so exact boolean results are selected first, including the
+		 * edge result of JMPZ_EX/JMPNZ_EX: that is the condition itself on the
+		 * only edge where the opcode defines its result, and needs no machine
+		 * instruction.
 		 */
 		if (function_mode_ == FunctionMode::ZendEntry) {
 			for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
@@ -3958,11 +3937,10 @@ public:
 				}
 			}
 			/*
-			 * Select only the canonical two-edge short-circuit join: one input
-			 * must be the register edge result of JMPZ_EX/JMPNZ_EX, every input
-			 * must already be an exact machine boolean, and the joined value may
-			 * only feed a following condition.  This intentionally excludes
-			 * loop-carried and general-purpose boolean PHIs.
+			 * Only the two-edge short-circuit join: one input is the register
+			 * edge result of JMPZ_EX/JMPNZ_EX, every input is an exact machine
+			 * boolean, and the joined value only feeds a following condition.
+			 * Loop-carried and general boolean PHIs are excluded.
 			 */
 			for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 				const zend_tpde_instruction &instruction =
@@ -4246,14 +4224,13 @@ public:
 			}
 		}
 		/*
-		 * Result-producing source branches define their result only on
-		 * the taken edge.  When that result is an exact scalar or semantic
-		 * pointer feeding a PHI, make the branch instruction its TPDE
-		 * definition and let the target capture the helper-produced canonical
-		 * payload before branching.  This avoids an eager predecessor load
-		 * before the source operation has written the result slot. Exact boolean
-		 * short-circuit results were selected by the earlier boolean prepass;
-		 * this loop handles the remaining JMP_SET/COALESCE result shapes.
+		 * Result-producing source branches define their result only on the
+		 * taken edge. When that result is an exact scalar or pointer feeding a
+		 * PHI, the branch instruction becomes its TPDE definition and the
+		 * target captures the helper-produced payload before branching, instead
+		 * of a predecessor loading it before the operation wrote the slot.
+		 * Exact boolean short-circuit results were selected above; this handles
+		 * the remaining JMP_SET/COALESCE shapes.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
@@ -4320,12 +4297,12 @@ public:
 			active_source_ssa_overrides()[result_ssa] = selected;
 		}
 		/*
-		 * A source FE_FETCH writes its destination on the taken edge.  Full
-		 * OPcache DFA can feed that definition directly into a binary operation,
-		 * bypassing the assignment opcode which would otherwise preserve the
-		 * register-authoritative value.  Publish a boxed branch result for the
-		 * packed-fetch shape; both target backends reload the canonical zval after
-		 * either the guarded fast path or the semantic helper has completed.
+		 * FE_FETCH writes its destination on the taken edge, and full OPcache
+		 * DFA can feed that definition straight into a binary operation,
+		 * bypassing the assignment that would keep the value
+		 * register-authoritative. The packed-fetch shape therefore publishes a
+		 * boxed branch result; both targets reload the canonical zval after the
+		 * fast path or the helper.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
@@ -4437,22 +4414,21 @@ public:
 			}
 		}
 		/*
-		 * Binary and branch results are selected after the first assignment pass.
-		 * Revisit assignments whose source only became register-authoritative in
-		 * those passes so later PHI-edge copies retain that machine definition.
+		 * Binary and branch results are selected after the first assignment
+		 * pass: assignments whose source became register-authoritative there
+		 * are revisited, so later PHI-edge copies keep that definition.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			select_register_assignment(i);
 		}
 
 		/*
-		 * Guarded in-place mutations are discovered after their loop PHIs in
-		 * MIR instruction order.  Select their boxed machine results first so
-		 * a loop-carried zval identity can be represented as a real TPDE PHI
-		 * instead of remaining a canonical-frame reload cycle.  An earlier
+		 * Guarded in-place mutations come after their loop PHIs in MIR order.
+		 * Their boxed machine results are selected first, so a loop-carried
+		 * zval becomes a TPDE PHI instead of a frame reload cycle. An earlier
 		 * result-less mutation of the same non-reference-bound storage must use
-		 * that identity too, otherwise the PHI observes the guarded result on
-		 * only one edge.
+		 * that identity too, or the PHI sees the guarded result on only one
+		 * edge.
 		 */
 		std::vector<IRValueRef> mutation_results(
 			plan_->instruction_count, INVALID_VALUE_REF);
@@ -4479,13 +4455,13 @@ public:
 				return storage_assigned_by_reference(storage_id);
 			});
 		/*
-		 * A result-bearing post-inc/dec exposes the pre-mutation value as its
-		 * instruction result.  When that result participates in a conditional
-		 * assignment chain, the assignment source has no machine definition for the
-		 * updated, loop-carried value.  Keep every PHI and mutation in that chain
-		 * frame-authoritative; selecting only part of it would make later operations
-		 * consume a register value while an outgoing edge must reload the canonical
-		 * frame slot.  Standalone post-inc/dec loops remain register-authoritative.
+		 * A result-bearing post-inc/dec exposes the value before the mutation
+		 * as its result. When that result is part of a conditional assignment
+		 * chain, the assignment source has no machine definition for the
+		 * updated loop-carried value, so every PHI and mutation of the chain
+		 * stays frame-authoritative: selecting part of it would let later
+		 * operations consume a register while an outgoing edge reloads the
+		 * slot. Standalone post-inc/dec loops stay register-authoritative.
 		 */
 		std::vector<zend_mir_storage_id> frame_authoritative_phi_storages;
 		std::vector<zend_mir_storage_id> consumed_post_incdec_phi_storages;
@@ -4791,12 +4767,11 @@ public:
 			return has_runtime_short_circuit_input;
 		};
 		/*
-		 * Register-authoritative assignments and lazy scalar mutations may close
-		 * an outer loop through one or more nested ZVAL PHIs.  Those PHIs are not
-		 * emitted in def-use order, so give every PHI for that CV its final
-		 * machine identity before resolving any incoming edge.  Otherwise an
-		 * inner PHI encountered before its outer input PHI reloads the stale
-		 * canonical slot instead of consuming the loop-carried register value.
+		 * Register assignments and lazy scalar mutations may close an outer
+		 * loop through nested ZVAL PHIs, which are not emitted in def-use
+		 * order. Every PHI of such a CV gets its final machine identity before
+		 * any incoming edge is resolved; otherwise an inner PHI met before its
+		 * outer input PHI reloads the stale slot.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_mir_instruction_record record =
@@ -5059,10 +5034,10 @@ public:
 				static_cast<uint32_t>(definition);
 			/*
 			 * Boxed PHIs are selected before the instruction stream is built so
-			 * their incoming-edge conversions can be frozen. A statepoint may use
-			 * that PHI before active_instruction_results records its later linear
-			 * instruction. The selected value is nevertheless defined at block
-			 * entry and is the authoritative materialization source.
+			 * their incoming-edge conversions are known, and a statepoint may
+			 * use such a PHI before active_instruction_results records its
+			 * instruction. The selected value is defined at block entry and is
+			 * the materialization source.
 			 */
 			if (definition_index < selected_phi_results.size()) {
 				const IRValueRef selected =
@@ -5110,11 +5085,10 @@ public:
 				return INVALID_VALUE_REF;
 			}
 			/*
-			 * A COPY may move an exact scalar from a literal or register into a
-			 * different canonical slot. Scalar-definition freezing can also
-			 * promote a formerly boxed COPY before adaptor construction. Trace
-			 * either form so forward statepoint materializations reach the actual
-			 * PHI, argument, or constant definition.
+			 * A COPY may move an exact scalar from a literal or register into
+			 * another canonical slot, and scalar-definition freezing may
+			 * promote a boxed COPY: both are traced, so forward statepoint
+			 * materializations reach the PHI, argument or constant definition.
 			 */
 			const IRValueRef resolved = self(
 				static_cast<uint32_t>(input_index), use_block,
@@ -5426,10 +5400,10 @@ public:
 				conversions.begin(), conversions.end());
 		}
 		/*
-		 * An exact scalar can remain canonical-slot-backed when its defining
-		 * source opcode did not produce a register value.  TPDE PHIs require a
-		 * real machine definition on every incoming edge, so load such payloads
-		 * in their predecessor blocks before constructing the scalar PHI.
+		 * An exact scalar stays slot-backed when its defining opcode produced
+		 * no register value. TPDE PHIs need a machine definition on every
+		 * incoming edge, so such payloads are loaded in their predecessor
+		 * blocks.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
@@ -5543,10 +5517,10 @@ public:
 			}
 		}
 		/*
-		 * Source short-circuit temporaries have no MIR PHI record.  A frozen
-		 * register merge identifies the two exact boolean definitions reaching
-		 * the terminal source branch; publish their merge as an ordinary TPDE
-		 * PHI so the branch never consults the unmaterialized zval slot.
+		 * Source short-circuit temporaries have no MIR PHI record. A frozen
+		 * register merge names the two exact boolean definitions reaching the
+		 * terminal source branch; their merge becomes a TPDE PHI, so the branch
+		 * never reads the unmaterialized slot.
 		 */
 		for (uint32_t i = 0; i < plan_->instruction_count; ++i) {
 			const zend_tpde_instruction &instruction =
@@ -6064,14 +6038,13 @@ public:
 		std::vector<uint8_t> elided_silence_instructions(
 			plan_->instruction_count, 0);
 		/*
-		 * Constant-folded source expressions can leave an immediately adjacent
-		 * BEGIN_SILENCE/END_SILENCE pair with no operation between them.  Saving
-		 * and restoring error_reporting is then an identity operation, but two
-		 * generic runtime calls per pair make large generated functions exceed
-		 * the target section limit.  Remove only closed pairs whose saved value
-		 * has no other consumer and whose source positions cannot be observed by
-		 * an opcode callback, source-call fragment, debug probe, or generator
-		 * continuation.
+		 * Constant-folded source expressions can leave an adjacent
+		 * BEGIN_SILENCE/END_SILENCE pair with nothing between them. Saving and
+		 * restoring error_reporting is then an identity, and two runtime calls
+		 * per pair push large generated functions past the target section
+		 * limit. Only closed pairs are removed whose saved value has no other
+		 * consumer and whose source positions no opcode callback, source-call
+		 * fragment, debug probe or generator continuation observes.
 		 */
 		if (!source_landings
 				&& plan_->generator_resume_count == 0
@@ -6691,10 +6664,9 @@ public:
 				if (representation(result) == ZEND_MIR_REPRESENTATION_ZVAL
 						|| machine_pointer_kind(machine_kind(result))) {
 					/*
-					 * An exact-null PHI carries neither payload nor type
-					 * entropy.  All incoming values denote the same immediate
-					 * PHP value, so allocating a two-part boxed PHI would
-					 * manufacture a definition that has no machine use.
+					 * An exact-null PHI carries neither payload nor type: every
+					 * input is the same PHP value, and a two-part boxed PHI
+					 * would have no machine use.
 					 */
 					if (exact_type(result)
 							== ZEND_MIR_SCALAR_TYPE_NULL) {
@@ -6865,8 +6837,8 @@ public:
 						continue;
 					}
 					/*
-					 * Preserve the old registerless form only when every
-					 * identity is already the same clean physical Zend slot.
+					 * A registerless PHI is valid only when every identity is
+					 * the same clean Zend slot.
 					 */
 				if (!shared_storage) {
 					valid_ = false;
@@ -7257,17 +7229,15 @@ public:
 					continue;
 				}
 				/*
-				 * Source value operations retain a void ZNMIR record because
-				 * their full PHP semantics live in the executable descriptor.
-				 * The successful fast path, or its existing cold continuation,
-				 * nevertheless produces a real zval. Keep its payload and
-				 * type-info as a two-part TPDE value and join it with the cold
-				 * helper result at the continuation PHI.
-				 *
-				 * An unknown source result may otherwise inherit the value model's
-				 * one-part reference-pointer carrier. That carrier
-				 * cannot snapshot the complete value when an optimized op array
-				 * reuses the result TMP before a direct internal call executes.
+				 * Source value operations keep a void ZNMIR record, as their
+				 * PHP semantics live in the executable descriptor, but the fast
+				 * path or its cold continuation produces a real zval: its
+				 * payload and type info form a two-part TPDE value, joined with
+				 * the cold helper's result at the continuation PHI. An unknown
+				 * source result would otherwise inherit the one-part
+				 * reference-pointer carrier, which cannot snapshot the value
+				 * when an optimized op array reuses the result TMP before a
+				 * direct internal call runs.
 				 */
 				result = source_dynamic_direct_long
 						&& !unknown_reference_result
@@ -7358,10 +7328,9 @@ public:
 			bool machine_result =
 				machine_value_needs_result_assignment(result);
 			/*
-			 * A register BOOL/BOOL_NOT operand is only useful when this source
-			 * operation also publishes a machine result.  The same applies to a
-			 * known string length: canonical-only consumers still need the source
-			 * operation to write the result zval in the frame.
+			 * A register BOOL/BOOL_NOT operand or known string length helps
+			 * only when the operation also publishes a machine result;
+			 * canonical-only consumers need the result zval in the frame.
 			 */
 			if (!machine_result) {
 				register_bool_unary_operand = INVALID_VALUE_REF;
@@ -7420,9 +7389,8 @@ public:
 					: InlinedBody{};
 			/*
 			 * Scalar identity operations without an exact machine result are
-			 * registerless source-SSA topology.  They have no observable
-			 * target-side effect, and exposing their (possibly constant)
-			 * operand to TPDE would create a use without a corresponding
+			 * registerless source-SSA topology without a target-side effect;
+			 * exposing their operand to TPDE would create a use without a
 			 * result definition.
 			 */
 			if (!machine_result
@@ -7432,9 +7400,9 @@ public:
 				continue;
 			}
 			/*
-			 * Constant-folded scalar results have no TPDE assignment. Their
-			 * consumers use the frozen constant directly, so retaining the pure
-			 * defining instruction would ask the allocator for an ignored value.
+			 * Constant-folded scalar results have no TPDE assignment: their
+			 * consumers use the constant, and the pure defining instruction
+			 * would only ask the allocator for an ignored value.
 			 */
 			if (!machine_result && !register_cond_branch
 					&& record.opcode
@@ -7558,11 +7526,10 @@ public:
 						&& machine_value_has_register_definition(
 							assigned)) {
 					/*
-					 * A register-produced temporary stays authoritative
-					 * through assignment.  The target writes the destination
-					 * directly from its scalar, pointer, or boxed parts;
-					 * subsequent source SSA users consume the same value
-					 * instead of reloading the CV.
+					 * A register-produced temporary stays authoritative through
+					 * assignment: the target writes the destination from its
+					 * scalar, pointer or boxed parts, and later source SSA
+					 * users consume the same value instead of reloading the CV.
 					 */
 					operands_.push_back(assigned);
 					const uint32_t definition_plus_one =
@@ -7625,10 +7592,9 @@ public:
 									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
 						&& machine_value_has_register_definition(key)) {
 					/*
-					 * Keep a proven integer or string dimension key in TPDE
-					 * SSA: the target selects a compact packed lookup or a
-					 * pointer-identity mixed lookup without reloading and
-					 * retagging the canonical key zval.
+					 * A proven integer or string key stays in TPDE SSA: the
+					 * target selects a packed lookup or a pointer-identity
+					 * mixed lookup without reloading the key zval.
 					 */
 					operands_.push_back(key);
 					const IRValueRef receiver = source_binding_value_ref(
@@ -7642,10 +7608,10 @@ public:
 										== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
 							&& machine_value_has_register_definition(receiver)) {
 						/*
-						 * Array-producing source operations publish their
-						 * canonical zval for PHP observability and retain the
-						 * payload pointer as the authoritative TPDE value.
-						 * It follows the key so key-only guarded layouts stay.
+						 * Array-producing operations publish their zval for PHP
+						 * observability and keep the payload pointer as the
+						 * TPDE value. It follows the key, so layouts that only
+						 * read the key are unchanged.
 						 */
 						operands_.push_back(receiver);
 					}
@@ -7665,10 +7631,9 @@ public:
 						&& machine_value_is_register_authoritative(name)
 						&& machine_value_has_register_definition(name)) {
 					/*
-					 * A dynamic CV lookup consumes the variable-name string on
-					 * every execution. Preserve an authoritative zend_string
-					 * pointer for the guarded fast node; the cold helper observes
-					 * the already materialized canonical frame instead.
+					 * A dynamic CV lookup consumes the variable name on every
+					 * execution: the guarded fast node takes the zend_string
+					 * pointer; the cold helper reads the materialized frame.
 					 */
 					operands_.push_back(name);
 				}
@@ -7711,9 +7676,9 @@ public:
 						&& machine_value_has_register_definition(left);
 					if (register_right) {
 						/*
-						 * Preserve a preceding register result across compound
-						 * assignment.  The target can consume the payload/type
-						 * pair directly; only the cold helper materializes it.
+						 * A preceding register result survives a compound
+						 * assignment: the target consumes the payload/type pair
+						 * directly, and only the cold helper materializes it.
 						 */
 						assign_op_right_operand_index =
 							static_cast<uint32_t>(operands_.size())
@@ -7766,11 +7731,11 @@ public:
 						&& machine_value_is_register_authoritative(value)
 						&& machine_value_has_register_definition(value)) {
 					/*
-					 * The append helper already records the auxiliary source as
-					 * a semantic input.  Preserve its exact machine payload for
-					 * the guarded fast node so it need not reload, classify, and
-					 * refcount the canonical zval.  The cold node skips this extra
-					 * SSA use and observes the materialized Zend frame.
+					 * The append helper records the auxiliary source as a
+					 * semantic input. The guarded fast node also takes its
+					 * machine payload, so it need not reload, classify and
+					 * refcount the zval; the cold node skips this use and reads
+					 * the frame.
 					 */
 					packed_append_value_operand_index =
 						static_cast<uint32_t>(operands_.size())
@@ -7829,19 +7794,17 @@ public:
 			}
 			if (register_bool_unary_operand != INVALID_VALUE_REF) {
 				/*
-				 * BOOL and BOOL_NOT over a proven machine boolean do not need
-				 * to round-trip through the canonical temporary.  Retain the
-				 * source value for the fast node; the cold helper still observes
-				 * only the materialized Zend frame.
+				 * BOOL and BOOL_NOT of a proven machine boolean skip the
+				 * temporary: the fast node takes the source value, the cold
+				 * helper reads the frame.
 				 */
 				operands_.push_back(register_bool_unary_operand);
 			}
 			if (register_string_length_operand != INVALID_VALUE_REF) {
 				/*
-				 * Keep the authoritative zend_string pointer ahead of the frame
-				 * operand.  The normal or guarded fast node reads the length
-				 * directly; a generic cold node skips this extra SSA use and
-				 * observes only the canonical source zval.
+				 * The zend_string pointer precedes the frame operand: the fast
+				 * node reads the length directly; a generic cold node skips
+				 * this use and reads the source zval.
 				 */
 				operands_.push_back(register_string_length_operand);
 			}
@@ -8036,14 +7999,6 @@ public:
 				operands_.push_back(literal_address);
 			}
 			/*
-			 * RETURN_SOURCE_ZVAL transfers the canonical zval directly from the
-			 * Zend frame, selected by its source opline.  Its MIR value operand
-			 * carries dependency/type information only; asking TPDE to allocate a
-			 * machine value for it leaves an unconsumed ValueAssignment and, more
-			 * importantly, would tempt target code to treat a scalar payload as a
-			 * complete zval.  The runtime helper needs only the frame pointer.
-			 */
-			/*
 			 * A lazy store leaves its CV slot to the boundaries, which store
 			 * the source's register value.  A source without one here, such
 			 * as a frame-published call result, is stored at once.
@@ -8068,6 +8023,12 @@ public:
 					&& machine_value_has_result_representation(source)
 					&& machine_value_has_register_definition(source);
 			}
+			/*
+			 * RETURN_SOURCE_ZVAL transfers the canonical zval from the frame,
+			 * selected by its source opline: its MIR operand only carries
+			 * dependency and type facts, and a machine value for it would stay
+			 * unconsumed and could be mistaken for a complete zval.
+			 */
 			uint32_t data_operand_count =
 				record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
 					? lazy_store ? 0 : 1
@@ -8139,9 +8100,9 @@ public:
 					uint64_t constant_bits;
 					if (!constant(operand, &constant_bits)) {
 						/*
-						 * Representation selection froze this canonical-slot
-						 * transition before TPDE. Execute it without
-						 * reinterpreting the source opcode here.
+						 * Representation selection decided this canonical-slot
+						 * transition; the source opcode is not reinterpreted
+						 * here.
 						 */
 						const zend_mir_storage_id storage_id =
 							transport->storage_id;
@@ -8239,13 +8200,11 @@ public:
 												&& machine_value_has_register_definition(
 													input)))) {
 									/*
-									 * Registerless COPY/CANONICALIZE nodes can
-									 * still feed the immediately following
-									 * canonical ZVAL_STORE.  Use their machine
-									 * input for that store; reloading the
-									 * destination slot here would read its old
-									 * payload before the assignment publishes
-									 * the new value.
+									 * A registerless COPY/CANONICALIZE can feed
+									 * the following ZVAL_STORE: its machine
+									 * input is stored, as reloading the
+									 * destination slot would read the old
+									 * payload.
 									 */
 									operand = input;
 								}
@@ -8265,11 +8224,11 @@ public:
 					uint64_t constant_bits;
 					if (!constant(operand, &constant_bits)) {
 						/*
-						 * A canonical-slot-authoritative scalar has no TPDE
-						 * definition of its own.  ZVAL_STORE nevertheless needs
-						 * the old payload after its release slow path, so capture
-						 * it before the fast/cold split and make that transport
-						 * the explicit SSA operand of both branches.
+						 * A slot-authoritative scalar has no TPDE definition of
+						 * its own, but ZVAL_STORE needs the old payload after
+						 * its release slow path: it is captured before the
+						 * fast/cold split and becomes an SSA operand of both
+						 * branches.
 						 */
 						const zend_mir_storage_id storage_id =
 							canonical_storage(operand);
@@ -8313,11 +8272,9 @@ public:
 				data_operands.begin(), data_operands.end());
 			if (record.opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE) {
 				/*
-				 * A proven return-type check emits no machine instruction, but
-				 * it remains a real SSA use. Keep that dependency visible to
-				 * TPDE so a loop/merge PHI feeding the proof is released at the
-				 * check instead of being mistaken for a live value at the block
-				 * boundary.
+				 * A proven return-type check emits no instruction but stays an
+				 * SSA use, so a PHI feeding the proof is released at the check
+				 * instead of looking live at the block boundary.
 				 */
 				IRValueRef verified = source_binding_value_ref(
 					instruction.source_op1_binding);
@@ -8391,10 +8348,12 @@ public:
 							static_cast<uint32_t>(return_definition))
 						|| frozen_effect_closed_inline(
 							static_cast<uint32_t>(return_definition)));
-				/* An ordinary Zend-entry call writes its canonical result slot.
-				 * Optimized TMP reuse may otherwise expose the register for that
-				 * slot's prior producer. A frozen local-ABI call instead defines the
-				 * register result directly, both in a typed body and at Zend entry. */
+				/*
+				 * An ordinary Zend-entry call writes its canonical result slot,
+				 * and with optimized TMP reuse the register may still hold that
+				 * slot's previous producer. A local-ABI call defines the
+				 * register result directly, in a typed body and at Zend entry.
+				 */
 				bool stale_canonical_return = false;
 				if (function_mode_ == FunctionMode::ZendEntry
 						&& returned != INVALID_VALUE_REF
@@ -8426,14 +8385,12 @@ public:
 							|| immediate_register_call_result)
 						&& !stale_canonical_return
 						/*
-						 * ARRAY_PTR values in the Zend entry may expose a
-						 * borrowed payload view of the canonical result slot.
-						 * Returning that pointer directly would copy/addref a
-						 * TMP/VAR source instead of transferring and undefining
-						 * its zval. Keep those entry returns on the
-						 * ownership-aware helper path. A private typed body on a
-						 * target with register-authoritative zval extensions has
-						 * no canonical frame and must return its ABI value.
+						 * ARRAY_PTR values in a Zend entry may be borrowed
+						 * views of the canonical result slot: returning the
+						 * pointer would copy a TMP/VAR source instead of
+						 * transferring and undefining its zval, so those
+						 * returns take the ownership-aware helper. A typed body
+						 * has no canonical frame and returns its ABI value.
 						 */
 						&& ((function_mode_ == FunctionMode::TypedBody)
 							|| machine_kind(returned)
@@ -8560,12 +8517,11 @@ public:
 									static_cast<uint32_t>(callee_value))
 								: TypedBodyAbiType{};
 						/*
-						 * A Zend-entry value can remain canonical-slot
-						 * authoritative until a proven local ABI call needs
-						 * its machine representation. Materialize scalar,
-						 * pointer, and two-part boxed values only in the
-						 * observer-free hot block; the cold call continues to
-						 * consume the canonical frame.
+						 * A Zend-entry value may stay slot-authoritative until
+						 * a local-ABI call needs its machine representation:
+						 * scalars, pointers and boxed values are materialized
+						 * only in the observer-free hot block, and the cold
+						 * call reads the frame.
 						 */
 						const bool transport_scalar =
 							transport_abi.valid
@@ -8804,11 +8760,11 @@ public:
 				} else {
 				/*
 				 * A proven inline descriptor materializes exact scalar payloads
-				 * and boxed zvals in the generated Zend frame. Keep repeated
-				 * frame/context uses explicit so TPDE's reference counts match
-				 * both generated paths; a non-inline boxed result uses one
-				 * additional caller-frame reference to load both value parts
-				 * after the call boundary.
+				 * and boxed zvals in the generated Zend frame. Repeated frame
+				 * and context uses stay explicit so TPDE's reference counts
+				 * match both paths; a non-inline boxed result uses one more
+				 * caller-frame reference to load both value parts after the
+				 * call.
 				 */
 				const bool dynamic_direct_call =
 					instruction.direct_call == nullptr
@@ -8845,13 +8801,12 @@ public:
 										|| !machine_value_has_register_definition(
 											value))) {
 								/*
-								 * A canonical-only source is not an SSA
-								 * machine value, and neither is one without
-								 * a machine definition, such as the pi of a
-								 * CV narrowed by a comparison. The generated
-								 * frame path consumes the caller frame plus
-								 * the frozen byte offset and performs the
-								 * zval copy directly.
+								 * A canonical-only source is not a machine
+								 * value, nor is one without a machine
+								 * definition, such as the pi of a CV narrowed
+								 * by a comparison: the generated frame path
+								 * copies the zval from the caller frame at its
+								 * byte offset.
 								 */
 								value = IRValueRef{FRAME_VALUE};
 							}
@@ -8947,12 +8902,12 @@ public:
 						break;
 					}
 					/*
-					 * A source operation may replace the canonical plan value with a
-					 * register-authoritative result after the call binding was frozen.
-					 * Prefer the exact SEND SSA version so an immediately consumed
-					 * scalar (for example strlen($value) passed to var_dump()) is
-					 * placed from that register rather than from its still-undefined
-					 * temporary Zend slot.
+					 * A source operation may replace the plan value with a
+					 * register result after the call binding was fixed. The
+					 * exact SEND SSA version wins, so an immediately consumed
+					 * scalar (strlen($value) passed to var_dump()) is placed
+					 * from that register, not from its still undefined
+					 * temporary slot.
 					 */
 					const zend_tpde_source_value_binding &binding =
 						plan_->call_argument_bindings[argument_index];
@@ -9055,10 +9010,10 @@ public:
 						continue;
 					}
 					/*
-					 * Immutable literals and source slots proven untouched after their
-					 * SEND remain safe to decode after the other arguments have been
-					 * frozen. A reused slot must instead use an exact transported SSA
-					 * scalar above, or keep the whole call on the conservative path.
+					 * Literals and source slots proven untouched after their
+					 * SEND can be decoded after the other arguments. A reused
+					 * slot needs an exact transported SSA scalar above, or the
+					 * whole call takes the conservative path.
 					 */
 					if (instruction.direct_internal_call->arguments[n].mode
 							== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
@@ -9075,9 +9030,9 @@ public:
 					operands_.insert(operands_.end(),
 						argument_operands.begin(), argument_operands.end());
 					/*
-					 * begin, each setter, finish, and an optional result read
-					 * are independent calls. Keep every frame use explicit for
-					 * TPDE liveness across those runtime boundaries.
+					 * begin, each setter, finish and an optional result read
+					 * are separate calls: every frame use stays explicit for
+					 * TPDE liveness across them.
 					 */
 					const uint32_t frame_uses =
 						instruction.call_argument_count + 2
@@ -9565,9 +9520,9 @@ public:
 				if (value_assign_source_operand
 						&& !value_assign_register_source) {
 					/*
-					 * copy_slot() reads canonical sources directly from the
-					 * frame. Do not manufacture an allocator-visible SSA use
-					 * for a value that the target selector never reads.
+					 * copy_slot() reads canonical sources from the frame: no
+					 * allocator-visible use for a value the selector never
+					 * reads.
 					 */
 					++fast_operand_offset;
 					--fast_operand_count;
@@ -9585,8 +9540,8 @@ public:
 						&& machine_result) {
 					/*
 					 * The exact scalar fast path consumes only its register
-					 * operand.  Keep the Zend frame and any materializations on
-					 * the semantic cold node, where the generic helper needs them.
+					 * operand; the frame and the materializations stay on the
+					 * cold node for the helper.
 					 */
 					fast_operand_count =
 						static_slot_isset_needs_value ? 2 : 1;
@@ -9595,9 +9550,9 @@ public:
 				}
 				if (register_bool_unary_operand != INVALID_VALUE_REF) {
 					/*
-					 * The synthetic register BOOL/BOOL_NOT consumes only its I1
-					 * input. Keep the canonical frame and materialization operands
-					 * on the split cold node for the generic Zend helper.
+					 * The register BOOL/BOOL_NOT consumes only its I1 input;
+					 * the frame and the materializations stay on the cold node
+					 * for the helper.
 					 */
 					fast_operand_count = 1;
 					fast_materialization_operand_index = UINT32_MAX;
@@ -9758,18 +9713,14 @@ public:
 					materialization_operand_index;
 				if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 					/*
-					 * The split direct-call cold block enters and leaves through
-					 * the runtime boundary. It observes no fast-path arguments or
-					 * inline-body values: exposing those as cold operands creates
-					 * false SSA uses and can make a chained call use a value before
-					 * its continuation PHI defines it.
-					 */
-					/*
-					 * The frame has a canonical fixed assignment. The execution
-					 * context is a normal SSA value and the cold runtime path
-					 * consumes it independently for ENTER, entry and LEAVE.
-					 * Keep all three context uses explicit so TPDE owns its complete
-					 * liveness instead of relying on a hidden pinned register.
+					 * The split direct-call cold block enters and leaves
+					 * through the runtime boundary and observes no fast-path
+					 * arguments or inline-body values: as cold operands they
+					 * would be false SSA uses and could let a chained call use
+					 * a value before its continuation PHI defines it. The frame
+					 * has a fixed assignment; the execution context is an
+					 * ordinary SSA value that ENTER, the entry and LEAVE each
+					 * use, so all three uses are explicit.
 					 */
 					operands_.push_back(IRValueRef{FRAME_VALUE});
 					for (uint32_t use = 0; use < 3; ++use) {
@@ -9789,11 +9740,10 @@ public:
 					}
 				} else {
 					/*
-					 * VALUE_ASSIGN's register-authoritative boxed source is a
-					 * fast-path operand.  copy_slot() publishes it to the
-					 * canonical temporary before selecting the cold edge, so
-					 * the generic helper observes the frame and must not claim
-					 * a second SSA use of the same value.
+					 * VALUE_ASSIGN's register boxed source is a fast-path
+					 * operand: copy_slot() publishes it to the temporary before
+					 * the cold edge, so the helper reads the frame and takes no
+					 * second SSA use.
 					 */
 					uint32_t cold_operand_skip = 0;
 					if (record.opcode
@@ -10015,14 +9965,13 @@ public:
 							== ZEND_MIR_OPCODE_VALUE_ASSIGN
 						&& instruction.has_value_operation) {
 					/*
-					 * A refcounted assignment must first update the canonical
-					 * Zend slot, including replacement cleanup and ownership.
-					 * After that semantic boundary the assigned payload pointer
-					 * is stable and can become the authoritative TPDE value.
-					 * Publish it at the joined continuation so both the inline
-					 * copy and the cold helper produce the same register SSA
-					 * definition.  This is what keeps literal arrays/strings
-					 * out of repeated frame reloads in following loops.
+					 * A refcounted assignment first updates the canonical slot,
+					 * with replacement cleanup and ownership. The assigned
+					 * payload pointer is stable after that and becomes the TPDE
+					 * value, published at the joined continuation so the inline
+					 * copy and the cold helper define the same register value.
+					 * This keeps literal arrays and strings out of frame
+					 * reloads in following loops.
 					 */
 					const uint32_t result_ssa =
 						instruction.value_operation
@@ -10407,11 +10356,10 @@ public:
 		}
 		/*
 		 * Reloaded generator values are definitions at the continuation entry,
-		 * not uses there.  Reporting them as GeneratorResume operands makes a
-		 * loop-carried PHI input appear dead immediately after the reload,
-		 * because TPDE accounts PHI-edge uses before instructions in the
-		 * predecessor block.  Keep the values known to liveness through the end
-		 * of that block without exposing them as semantic target operands.
+		 * not uses: as GeneratorResume operands, a loop-carried PHI input would
+		 * look dead right after the reload, because TPDE counts PHI-edge uses
+		 * before the instructions of the predecessor. The values stay live to
+		 * the end of that block without being semantic operands.
 		 */
 		/* The last item of each block: its terminal. */
 		std::unordered_map<uint32_t, IRInstRef> block_terminals;
@@ -10532,13 +10480,12 @@ public:
 			}
 		}
 		/*
-		 * A source argument may have an exact inferred type while remaining a
-		 * boxed-only value (notably a by-reference parameter).  Loading and
-		 * guarding such a slot as a scalar would inspect the reference wrapper
-		 * rather than a machine value that the generated body actually uses.
-		 * Keep argument materialization demand-driven by the finalized TPDE
-		 * operand/PHI graph. The guard and payload-load nodes removed below
-		 * use the frame and a slot address, so the answers are taken once.
+		 * A source argument may have an exact inferred type yet stay boxed-only
+		 * (a by-reference parameter): loading and guarding its slot as a scalar
+		 * would inspect the reference wrapper. Argument materialization
+		 * therefore follows the final TPDE operand and PHI graph. The guard and
+		 * payload-load nodes removed below use the frame and a slot address, so
+		 * the answers are taken once.
 		 */
 		std::vector<uint8_t> operand_values_used(
 			MIR_VALUE_BASE + plan_->value_count, 0);
@@ -10598,10 +10545,6 @@ public:
 					}
 				}),
 			block_instructions.end());
-		/* The adaptor remains live for the complete backend compilation.  Release
-		 * geometric growth slack before installing the operand spans and handing
-		 * the graph to TPDE, where large source functions otherwise retain a
-		 * second, mostly empty node allocation throughout code generation. */
 		for (const auto &[input, value_id] : deferred_typed_phi_inputs) {
 			const IRValueRef value = value_ref(value_id);
 			if (value == INVALID_VALUE_REF
@@ -10613,6 +10556,10 @@ public:
 			}
 			phi_inputs_[input].value = value;
 		}
+		/*
+		 * The adaptor lives through the whole backend compilation: release the
+		 * growth slack before handing the graph to TPDE.
+		 */
 		operands_.shrink_to_fit();
 		for (InstNode &node : nodes_) {
 			const auto all_operands =
@@ -11025,10 +10972,9 @@ public:
 		}
 		/*
 		 * A scalar PHI is defined at its block entry even when its instruction
-		 * appears later in the plan's linear order. COPY nodes on an outer-loop
-		 * edge may therefore reference it before construction reaches that PHI.
-		 * The frozen scalar-candidate closure guarantees that every incoming edge
-		 * has a compatible machine definition before a ZVAL PHI is promoted.
+		 * comes later in plan order, so COPY nodes on an outer-loop edge may
+		 * reference it first. The scalar-candidate closure gives every incoming
+		 * edge a compatible machine definition before a ZVAL PHI is promoted.
 		 */
 		const zend_mir_instruction_record definition_record =
 			instruction_record_at(static_cast<uint32_t>(definition));
@@ -11182,12 +11128,11 @@ public:
 			return false;
 		}
 		/*
-		 * The frozen local ABI overrides the initial source-SSA fact for
-		 * invocation-local arguments.  In particular, Zend may retain a
-		 * null/undef fact for the pre-RECV CV identity even though that
-		 * identity is loaded as a string, array, object, or boxed argument.
-		 * Only the effective machine type may therefore collapse a value to
-		 * the payload-free null constant.
+		 * The local ABI overrides the initial source-SSA fact for
+		 * invocation-local arguments: Zend may keep a null/undef fact for the
+		 * pre-RECV CV identity although it is loaded as a string, array, object
+		 * or boxed argument. Only the effective machine type may collapse a
+		 * value to the null constant.
 		 */
 		if (exact_type(value) == ZEND_MIR_SCALAR_TYPE_NULL) {
 			*bits = 0;
@@ -11364,12 +11309,12 @@ public:
 };
 
 /*
- * TPDE's function switch is the natural component boundary: value, block and
- * instruction references are local to the selected function, while the
- * compiler owns one symbol table, one allocator run and one object image for
- * the complete component.  Keep the mature single-function view as the
- * per-function implementation and expose it through this zero-copy
- * multi-function adaptor instead of flattening all ZNMIR into a second IR.
+ * TPDE's function switch is the component boundary: value, block and
+ * instruction references are local to the selected function, while the compiler
+ * owns one symbol table, allocator run and object image for the component. The
+ * single-function adaptor stays the per-function implementation behind this
+ * zero-copy multi-function view, instead of flattening all ZNMIR into a second
+ * IR.
  */
 class ZendComponentIRAdaptor {
 public:

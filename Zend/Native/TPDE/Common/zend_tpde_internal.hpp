@@ -261,9 +261,8 @@ static inline uint64_t zend_tpde_encode_value_operand(
 }
 
 /*
- * Runtime-helper argument shape is target-neutral. Keep this classification
- * beside the shared operand encoder so Darwin and Linux cannot silently emit
- * different C ABIs for the same MIR operation.
+ * Runtime-helper argument shape is target-neutral: Darwin and Linux share
+ * this classification so they emit the same C ABI for a MIR operation.
  */
 static inline bool zend_tpde_helper_has_explicit_operands(
 	zend_native_runtime_helper_id helper)
@@ -371,13 +370,10 @@ static inline uint64_t zend_tpde_auxiliary_cache_bits(
 
 /*
  * Selective frame initialization leaves an unobserved TMP/VAR slot
- * uninitialized until a boundary actually materializes a result there.
- * Explicit runtime helpers that define a new Zend result require a fresh
- * result zval.  Array-construction continuation opcodes are different: their
- * result operand names the array accumulator created by INIT_ARRAY and must
- * survive every ADD_ARRAY_* helper call.  Prepare only a distinct temporary
- * result slot for the defining operations; an aliased source/result storage
- * is an in-place operation and must retain its input.
+ * uninitialized until a boundary materializes a result there, so explicit
+ * helpers that define a new Zend result need a fresh result zval. Not so
+ * ADD_ARRAY_*: their result is the accumulator INIT_ARRAY created. A result
+ * storage aliasing a source is an in-place operation and keeps its input.
  */
 static inline bool zend_tpde_helper_requires_undef_result(
 	zend_native_runtime_helper_id helper,
@@ -408,10 +404,9 @@ struct zend_tpde_value {
 	zend_mir_refcount_state refcount_state;
 	int32_t argument_index;
 	/*
-	 * Source operations such as ZEND_RECV and a proven return-type check can
-	 * create a new Zend SSA identity without changing the machine value.
-	 * Freeze that def-edge so the adaptor does not reconstruct it from Zend
-	 * SSA or reload it through the canonical frame.
+	 * Source operations such as ZEND_RECV and a proven return-type check
+	 * create a new Zend SSA identity without changing the machine value; the
+	 * adaptor follows this alias instead of reloading through the frame.
 	 */
 	int32_t register_alias_value_index;
 	zend_tpde_machine_value_kind machine_kind;
@@ -433,9 +428,8 @@ struct zend_tpde_materialization {
 	zend_tpde_machine_value_kind machine_kind;
 	/*
 	 * A typed component call may produce a private machine value without a
-	 * persistent ZNMIR result identity. Preserve that source definition so
-	 * the adaptor can connect it to its canonical source slot at the first
-	 * observing runtime boundary.
+	 * ZNMIR result identity; its source definition connects it to its
+	 * canonical slot at the first observing runtime boundary.
 	 */
 	int32_t source_value_index;
 	int32_t source_definition_instruction_index;
@@ -450,9 +444,9 @@ enum zend_tpde_machine_reference_kind : uint8_t {
 };
 
 /*
- * Pointer-free address-selection facts consumed directly by the TPDE
- * adaptor. Values name frozen ZNMIR identities; UINT32_MAX denotes a
- * synthetic base such as the canonical frame or execution context.
+ * Pointer-free address-selection facts for the adaptor. Values name ZNMIR
+ * identities; UINT32_MAX denotes a synthetic base such as the canonical
+ * frame or the execution context.
  */
 struct zend_tpde_machine_reference {
 	zend_tpde_machine_reference_kind kind;
@@ -488,8 +482,8 @@ enum zend_tpde_operand_transport_kind : uint8_t {
 
 /*
  * Representation selection owns every canonical-slot to machine-value
- * transition.  The adaptor consumes this frozen record mechanically; it must
- * not infer a scalar representation from an opcode or from source SSA.
+ * transition; the adaptor must not infer a scalar representation from an
+ * opcode or from source SSA.
  */
 struct zend_tpde_operand_transport {
 	zend_tpde_operand_transport_kind kind;
@@ -568,11 +562,10 @@ struct zend_tpde_instruction {
 	_zend_native_user_call_descriptor *user_call;
 	_zend_native_direct_call_descriptor *direct_call;
 	/*
-	 * Compile-time-only type guards for inline-frame arguments. By-reference
-	 * entries describe the referent; by-value entries prove a canonical boxed
-	 * source before it is transported as an exact scalar. These facts are
-	 * consumed while lowering an inline frame and are never copied into the
-	 * serialized direct-call descriptor.
+	 * Compile-time type guards for inline-frame arguments, never serialized
+	 * into the direct-call descriptor. By-reference entries describe the
+	 * referent; by-value entries prove a canonical boxed source before it is
+	 * transported as an exact scalar.
 	 */
 	zend_mir_scalar_type_mask *direct_call_argument_guard_types;
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
@@ -584,12 +577,6 @@ struct zend_tpde_instruction {
 	/* The store needs no release of the destination's previous value: an
 	 * unguarded payload and type store. */
 	bool zval_store_plain;
-	/*
-	 * A slot-authoritative exact scalar may still need a short-lived machine
-	 * definition for the ZVAL_STORE that publishes it.  This transport is
-	 * frozen separately from long-term register authority so alias-observable
-	 * CVs are never treated as register-resident after publication.
-	 */
 	/* Both operands of this binary operation are numbers: known from type
 	 * inference or results of component members that return numbers. */
 	bool numeric_operands_proven;
@@ -614,6 +601,12 @@ struct zend_tpde_instruction {
 	/* ZEND_TPDE_MACHINE_MODE_* bits of the modes whose conditional branch
 	 * tests the register condition instead of the boxed value. */
 	uint8_t register_cond_branch_modes;
+	/*
+	 * A slot-authoritative exact scalar may still need a short-lived machine
+	 * definition for the ZVAL_STORE that publishes it. This is kept apart
+	 * from register authority so alias-observable CVs are never treated as
+	 * register-resident after publication.
+	 */
 	bool transient_scalar_result;
 	zend_mir_representation transient_result_representation;
 	zend_mir_scalar_type_mask transient_result_exact_type;
@@ -913,9 +906,8 @@ static inline uint32_t zend_tpde_relative_source_target(
 }
 
 /*
- * Keep the semantic fast-path selection target-neutral.  Target backends only
- * encode the guards and loads; they do not independently decide which MIR
- * shape is safe to execute without the generic dimension primitive.
+ * Which MIR shapes may skip the generic dimension primitive is decided here,
+ * target-neutrally; target backends only encode the guards and loads.
  */
 static inline bool zend_tpde_array_read_at(
 	const zend_tpde_instruction &instruction,
@@ -1835,9 +1827,9 @@ static inline bool zend_tpde_long_binary_at(
 			|| !zend_tpde_long_operand_at(
 				operation.op2, operation.op2_storage_id, &out->right)
 			/* DFA may rewrite an in-place ASSIGN_OP into a binary opcode whose
-			 * CV result aliases one input. The guarded fast path loads both inputs
-			 * and verifies the aliased destination before writing its canonical
-			 * slot. Other CV destinations retain the complete runtime primitive. */
+			 * CV result aliases one input; the fast path loads both inputs and
+			 * checks the destination before writing it. Other CV destinations
+			 * keep the runtime primitive. */
 			|| (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 				&& (out->left.literal
 					|| operation.op1_storage_id
@@ -2062,9 +2054,9 @@ static inline bool zend_tpde_packed_iterator_fetch_at(
 		!= ZEND_MIR_SOURCE_OPERAND_UNUSED;
 
 	/*
-	 * The default layout deliberately covers only the value-only, by-value
-	 * Zend foreach shape.  Targets may opt into the key temporary after they
-	 * implement the ownership rules for string keys.
+	 * Only the value-only, by-value foreach shape, unless the target takes
+	 * the key temporary too (allow_key), which needs the ownership rules for
+	 * string keys.
 	 */
 	if (!instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_ITERATOR_BRANCH
@@ -2134,12 +2126,11 @@ static inline bool zend_tpde_array_iterator_reset_at(
 	uint64_t holder_offset;
 
 	/*
-	 * A direct CV array can use the ordinary FE_RESET_R copy semantics in the
-	 * generated entry, and a temporary array moves into the holder as
-	 * FE_RESET_R moves a TMP operand. Targets may opt into both and into a
-	 * literal array, which OPcache propagates into FE_RESET_R. References,
-	 * objects and by-reference iteration retain the complete runtime
-	 * primitive.
+	 * A CV array is copied into the holder as FE_RESET_R does. With
+	 * allow_literal a temporary array also moves into the holder, as
+	 * FE_RESET_R moves a TMP operand, and a literal array, which OPcache
+	 * propagates into FE_RESET_R, is taken too. References, objects and
+	 * by-reference iteration keep the runtime primitive.
 	 */
 	const bool source_literal = allow_literal
 		&& operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
@@ -2656,22 +2647,6 @@ zend_tpde_source_call_phase_at(
 	return entry->phases == ZEND_TPDE_SOURCE_CALL_PHASE_NONE ? nullptr : entry;
 }
 
-static inline bool zend_tpde_generator_resume_value_live(
-	const zend_tpde_plan *plan, uint32_t resume_index, uint32_t value_index)
-{
-	if (resume_index >= plan->generator_resume_count
-			|| value_index >= plan->value_count
-			|| plan->generator_resume_live_values == nullptr) {
-		return false;
-	}
-	const uint64_t *words =
-		plan->generator_resume_live_values
-			+ static_cast<size_t>(resume_index)
-				* plan->generator_resume_live_word_count;
-	return (words[value_index / 64]
-			& (uint64_t{1} << (value_index % 64))) != 0;
-}
-
 /* The generator resume of a target source position, or UINT32_MAX; the
  * targets are sorted and unique. */
 static inline uint32_t zend_tpde_generator_resume_at_target(
@@ -3098,9 +3073,10 @@ struct zend_tpde_scalar_diamond {
 };
 
 /*
- * Recognize the smallest acyclic multi-block scalar body.  Successor order is
- * semantically significant: COND_BRANCH reaches successor zero when true and
- * successor one when false, while PHI operands follow predecessor order.
+ * The smallest acyclic multi-block scalar body: an entry branching to two
+ * blocks that join in a final merge block. COND_BRANCH reaches successor
+ * zero when true and successor one when false; PHI operands follow
+ * predecessor order.
  */
 static inline bool zend_tpde_scalar_diamond_at(
 		const zend_tpde_plan *plan,
@@ -3181,11 +3157,10 @@ static inline bool zend_tpde_scalar_diamond_at(
 }
 
 /*
- * A scalar diamond may materialize an unaliased scalar SSA identity into its
- * source-level zval carrier.  The cloned register body has no callee frame,
- * so this transport must disappear with that frame.  Restrict the omission
- * to self-identical, unaliased, non-refcounted scalar stores; assignments and
- * reference-visible stores remain observable and reject inlining.
+ * A self-identical store of an unaliased, non-refcounted scalar into its own
+ * zval carrier, which an inlined scalar diamond drops with the callee frame.
+ * Assignments and reference-visible stores stay observable and reject
+ * inlining.
  */
 static inline bool zend_tpde_scalar_diamond_frame_transport(
 		const zend_tpde_plan *plan,
@@ -3388,8 +3363,6 @@ static inline bool zend_tpde_user_call_setup_layout(
 
 int32_t zend_tpde_instruction_index(
 	const zend_tpde_plan *plan, zend_mir_instruction_id id);
-const zend_tpde_instruction *zend_tpde_instruction_at(
-	const zend_tpde_plan *plan, uint32_t index);
 const zend_mir_instruction_record &zend_tpde_instruction_record_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction);
@@ -3399,9 +3372,6 @@ bool zend_tpde_call_argument_at(
 	zend_mir_call_argument_ref *out);
 bool zend_tpde_image_append(
 	zend_native_image *image, const void *bytes, size_t length);
-bool zend_tpde_image_u8(zend_native_image *image, uint8_t value);
-bool zend_tpde_image_u32(zend_native_image *image, uint32_t value);
-bool zend_tpde_image_u64(zend_native_image *image, uint64_t value);
 const zend_native_image_symbol *zend_tpde_image_symbol_find(
 	const zend_native_image *image,
 	zend_native_image_symbol_kind kind,

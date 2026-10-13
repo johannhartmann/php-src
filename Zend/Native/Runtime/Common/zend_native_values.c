@@ -1,4 +1,4 @@
-/* Exact source-backed zval and reference semantics for native frames. */
+/* Source-backed zval and reference semantics for native frames. */
 
 #include "Zend/Native/Runtime/Common/zend_native_values.h"
 
@@ -101,10 +101,8 @@ static zend_always_inline bool zend_native_value_init_explicit_operation(
 	operation->opcode = (uint8_t) source_opcode;
 	operation->extended_value = extended_value;
 	operation->source_position_id = source_position_id;
-	/*
-	 * Source identity remains available for diagnostics, observers and
-	 * exceptions. No semantic operand is read from this zend_op.
-	 */
+	/* For diagnostics, observers and exceptions; no operand is read from
+	 * this zend_op. */
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
 	return true;
@@ -342,12 +340,10 @@ zend_native_status zend_native_value_assign_ref(
 	}
 
 cleanup_operands:
-	/* ZEND_ASSIGN_REF consumes both VAR operands.  In particular, a direct
-	 * user-call result may carry the sole temporary reference container; if it
-	 * is left live here, the later frame cleanup cannot see it after its SSA
-	 * lifetime ended and the reference leaks. Match FREE_OP by releasing these
-	 * temporary containers without registering their still-live values as GC
-	 * roots. */
+	/* ZEND_ASSIGN_REF consumes both VAR operands. A direct user-call result
+	 * may hold the only reference container, which frame cleanup does not
+	 * see once its lifetime ended. Release them as FREE_OP does, without
+	 * registering the still-live values as GC roots. */
 	if (opline->op2_type == IS_VAR && !Z_ISUNDEF_P(value_slot)) {
 		zval_ptr_dtor_nogc(value_slot);
 		ZVAL_UNDEF(value_slot);
@@ -1598,10 +1594,9 @@ static zend_never_inline zend_native_status zend_native_value_assign_general(
 	value = zend_assign_to_variable_ex(variable, value, value_type,
 		ZEND_CALL_USES_STRICT_TYPES(execute_data), &garbage);
 	/*
-	 * zend_copy_to_variable() transfers TMP operands without incrementing their
-	 * refcount.  The VM treats that source slot as dead immediately; the native
-	 * frame must make the same lifetime transition explicitly because a later
-	 * opcode may reuse and destroy the physical slot.
+	 * zend_copy_to_variable() moves a TMP operand without an addref, and the
+	 * VM treats its slot as dead from here. A later opcode may reuse and
+	 * destroy the slot, so it is undefined.
 	 */
 	if (opline->op2_type == IS_TMP_VAR && value_slot != variable) {
 		ZVAL_UNDEF(value_slot);
@@ -1925,13 +1920,8 @@ zend_native_status zend_native_value_binary_op(
 	zval *result;
 	zend_result operation_status;
 
-	/*
-	 * === and !== of scalars, strings or values of different types decide
-	 * without decoding the operation, as ZEND_IS_IDENTICAL does: compare,
-	 * release the temporaries, then publish the boolean, which may reuse
-	 * an operand's slot. A temporary array or object, whose release may
-	 * run destructors, and undefined CVs take the general path.
-	 */
+	/* zend_native_value_identical_values(); what it leaves takes the
+	 * general path. */
 	if (source_opcode == ZEND_IS_IDENTICAL
 			|| source_opcode == ZEND_IS_NOT_IDENTICAL) {
 		bool left_tmp;
@@ -2774,9 +2764,9 @@ zend_native_iterator_branch_result zend_native_value_cond_branch(
 			execute_data, opline->result_type, opline->result);
 		ZEND_ASSERT(result != NULL);
 		/*
-		 * Zend commonly reuses one TMP slot for the condition and the
-		 * short-circuit result. Consume the old value before publishing the
-		 * bool so an aliased result is not immediately destroyed again.
+		 * The condition and the short-circuit result often share a TMP
+		 * slot: the old value is consumed before the bool is published, so
+		 * an aliased result is not destroyed again.
 		 */
 		zend_native_operand_free(
 			execute_data, opline->op1_type, opline->op1, NULL);
@@ -2953,11 +2943,9 @@ zend_native_status zend_native_value_qm_assign(
 		}
 	}
 	/*
-	 * TMP/VAR operands are moved by ZEND_QM_ASSIGN.  The VM relies on the
-	 * live-range allocator before reusing that physical slot; native helpers
-	 * also inspect and destroy the previous slot contents when producing the
-	 * next value.  Mark the moved-from slot undefined so that a later result
-	 * cannot release the value now owned by the destination.
+	 * ZEND_QM_ASSIGN moves TMP/VAR operands. Native helpers release the old
+	 * contents of a result slot, so the moved-from slot is undefined: a
+	 * later result must not release the value the destination owns.
 	 */
 	if ((opline->op1_type == IS_TMP_VAR || opline->op1_type == IS_VAR)
 			&& value != result) {
@@ -3135,12 +3123,10 @@ zend_native_status zend_native_value_verify_return_type(
 			return ZEND_NATIVE_EXCEPTION;
 		}
 		/*
-		 * A constant VERIFY_RETURN_TYPE result is a fresh TMP/VAR definition.
-		 * Native frames deliberately do not clear every dead temporary at
-		 * entry, so the physical slot may contain stale stack bytes even
-		 * though no zval is live there. Publish the copied constant directly;
-		 * inspecting or destroying the old bytes would turn a register-first
-		 * producer into a whole-frame initialization requirement.
+		 * A constant VERIFY_RETURN_TYPE result is a fresh TMP/VAR
+		 * definition. Native frames do not clear dead temporaries at entry,
+		 * so the slot may hold stale bytes: the copy is published without
+		 * reading them.
 		 */
 		zend_native_zval_copy_deref_or_dup(result, retval_ptr);
 		retval_ref = retval_ptr = result;
@@ -3220,17 +3206,17 @@ zend_native_status zend_native_value_verify_return_type(
 	return zend_native_value_status();
 }
 
-/*
- * Two strings into a temporary: concat_function() without decoding the
- * operation, releasing temporary operands. Returns false, with nothing
- * changed, when an operand is no string.
- */
 static zend_always_inline zend_native_status zend_native_value_concat_string_values(
 	zend_execute_data *execute_data,
 	zval *fast_left, zval *left_value, bool left_tmp,
 	zval *fast_right, zval *right_value, bool right_tmp,
 	zval *fast_result, uint32_t source_position_id);
 
+/*
+ * Two strings into a temporary: concat_function() without decoding the
+ * operation, releasing temporary operands. Returns false, with nothing
+ * changed, when an operand is no string.
+ */
 static zend_always_inline bool zend_native_value_concat_strings(
 	zend_execute_data *execute_data,
 	zval *fast_left, bool left_tmp, zval *fast_right, bool right_tmp,
@@ -4699,10 +4685,10 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	/*
-	 * Reading an existing element of an array by integer or string key is
-	 * the common case, as in the VM's fetch handlers: copy it before the operands are
-	 * consumed, since a temporary container may own it. A caller whose
-	 * read of the same operands failed (read_tried) has looked already.
+	 * An existing element of an array under an integer or string key, as
+	 * in the VM's fetch handlers: copied before the operands are consumed,
+	 * since a temporary container may own it. A caller whose read of the
+	 * same operands failed (read_tried) has looked already.
 	 */
 	if (!read_tried
 			&& (mode == ZEND_NATIVE_DIM_R || mode == ZEND_NATIVE_DIM_IS)
@@ -4740,8 +4726,8 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		}
 	}
 	/* The VM rejects an append fetch in read context before evaluating the
-	 * container.  Optimized op arrays can expose this otherwise invalid shape,
-	 * so preserve that ordering instead of first diagnosing an undefined CV. */
+	 * container, so an undefined CV is not diagnosed first. Optimized op
+	 * arrays can contain this otherwise invalid shape. */
 	if (opline->op2_type == IS_UNUSED
 			&& (!write || mode == ZEND_NATIVE_DIM_UNSET)) {
 		zend_throw_error(NULL, "Cannot use [] for reading");
@@ -4814,9 +4800,9 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 		ZVAL_DEREF(container);
 	}
 	if (mode == ZEND_NATIVE_DIM_UNSET && Z_TYPE_P(container) <= IS_FALSE) {
-		/* BP_VAR_UNSET never promotes an undefined, null, or false container.
-		 * In particular, an optimized later assignment may legitimately assume
-		 * that an undefined CV is still undefined after this fetch. */
+		/* BP_VAR_UNSET never promotes an undefined, null, or false
+		 * container: a later optimized assignment may assume that an
+		 * undefined CV is still undefined after this fetch. */
 		if (Z_TYPE_P(container) == IS_FALSE) {
 			zend_false_to_array_deprecated();
 		}
@@ -4901,8 +4887,8 @@ static zend_native_status zend_native_value_fetch_dim_impl(
 			opline->op2_type, offset);
 		if (offset != NULL && Z_TYPE_P(offset) == IS_UNDEF) {
 			/* ArrayAccess observes an undefined dimension as a supplied null
-			 * argument.  Do not let an UNDEF payload look like an omitted argument
-			 * when the userland offsetGet() method enters natively. */
+			 * argument; an UNDEF would look like an omitted argument to a
+			 * natively entered offsetGet(). */
 			ZVAL_NULL(&undefined_offset);
 			offset = &undefined_offset;
 		}
@@ -5075,12 +5061,12 @@ static zend_always_inline zval *zend_native_array_lookup_key(
 }
 
 /*
- * $cv[$key] into a temporary, like the VM's FETCH_DIM_R handler: an array
- * CV, a long or string key (numeric strings normalized) naming an existing
- * element. The element is copied, then a temporary key is released. Missing
- * keys, other containers and keys, and VAR results take the general path.
+ * $container[$key] like the VM's FETCH_DIM_R handler: an existing element
+ * of an array under a long or string key (numeric strings normalized), or
+ * an offset inside a string. The element is copied, then a temporary key
+ * and a temporary container (as FREE_OP1) are released. Anything else
+ * returns false with nothing changed.
  */
-/* A temporary container is consumed like FREE_OP1 after the element copy. */
 static zend_always_inline bool zend_native_value_fetch_dim_r_read_ex(
 	zval *container, bool container_tmp, zval *offset, bool offset_tmp,
 	zval *target, zend_native_status *status)
@@ -5754,9 +5740,9 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		zval read_value;
 		zval *current = NULL;
 
-		/* Reading an undefined offset may invoke user code that overwrites the
-		 * container slot.  Keep the original object alive while resolving every
-		 * remaining operand and perform the detached write on that object. */
+		/* Reading an undefined offset may invoke user code that overwrites
+		 * the container slot. The original object stays alive while the
+		 * other operands are resolved and takes the write. */
 		GC_ADDREF(object);
 		offset = opline->op2_type == IS_UNUSED ? NULL
 			: zend_native_value_read_r_explicit(execute_data, opline,
@@ -5856,9 +5842,9 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		bool protect_table = false;
 		bool table_owned = true;
 
-		/* ASSIGN_DIM [] transfers the RHS directly into the new bucket. An
-		 * intermediate EG(uninitialized_zval) bucket can shallow-copy a typed
-		 * reference and gives zend_assign_to_variable_ex() false authority. */
+		/* ASSIGN_DIM [] transfers the value directly into the new bucket:
+		 * an intermediate EG(uninitialized_zval) bucket could shallow-copy
+		 * a typed reference and mislead zend_assign_to_variable_ex(). */
 		if (opline->auxiliary_type == IS_CV) {
 			source_slot = zend_native_value_read_explicit(
 				execute_data, opline,
@@ -5869,8 +5855,8 @@ static zend_native_status zend_native_value_assign_dim_impl(
 		}
 		if (protect_table) {
 			/* The undefined-CV warning may run user code that replaces the
-			 * destination.  Keep its former array alive until the warning has
-			 * completed, then only append if the destination still owns it. */
+			 * destination. Its array stays alive until the warning completed,
+			 * and the append happens only if the destination still owns it. */
 			GC_ADDREF(table);
 		}
 		if (!zend_native_value_take_explicit(
@@ -6490,7 +6476,7 @@ zval *zend_native_array_assign_lookup(zval *container, const zval *key)
  * The element a read, test or isset finds when the emitted probe could not
  * decide: a string key without its hash, a key whose bucket key is another
  * string of the same hash, a numeric string. Returns what the probe would
- * (see zend_native_values.h); UNKNOWN still leaves the operation to the
+ * (see zend_native_runtime.h); UNKNOWN still leaves the operation to the
  * helper, which warns or reads objects and INDIRECT elements.
  */
 uintptr_t zend_native_array_find_element(

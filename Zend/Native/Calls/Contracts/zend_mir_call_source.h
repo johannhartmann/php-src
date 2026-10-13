@@ -84,10 +84,9 @@ typedef struct _zend_mir_source_call_argument_ref {
 /*
  * Table order is semantic. Call sites are ordered by INIT opline, arguments by
  * (call_site_id, ordinal), and targets by stable source ID. Parent IDs encode
- * nesting. A named call that the compiler normalized into a complete ordered
- * argument list is indistinguishable from its positional form and needs no
- * syntax-history side channel. No callback may expose a process address as
- * identity.
+ * nesting. A named call the compiler normalized into a complete ordered
+ * argument list is indistinguishable from its positional form. No callback may
+ * expose a process address as identity.
  */
 typedef struct _zend_mir_source_call_view {
 	uint32_t contract_version;

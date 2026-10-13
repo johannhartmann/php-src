@@ -1,4 +1,4 @@
-/* Exact source-backed variable, global and constant binding semantics. */
+/* Source-backed variable, global and constant binding semantics. */
 
 #include "Zend/Native/Runtime/Common/zend_native_bindings.h"
 
@@ -167,8 +167,8 @@ static zend_native_status zend_native_dynamic_fetch(
 		}
 		if (temporary_name == NULL) {
 			/* A warning raised below may invoke user code that overwrites the
-			 * operand slot.  Keep a non-temporary dynamic name alive until the
-			 * symbol-table lookup and possible insertion are complete. */
+			 * operand slot: a non-temporary dynamic name stays alive until the
+			 * symbol-table lookup and insertion are complete. */
 			zend_string_addref(name);
 			protected_name = name;
 		}

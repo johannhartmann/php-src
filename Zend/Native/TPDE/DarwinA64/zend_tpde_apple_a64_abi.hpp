@@ -13,13 +13,7 @@ namespace zend::native::tpde {
  * Apple arm64 follows AAPCS64 with the Darwin ABI differences that matter to
  * TPDE: x18 is reserved, register arguments are not skipped to obtain even
  * register numbers, and stack arguments use their natural size/alignment.
- *
- * The current native entry point has the fixed signature
- *
- *   void entry(const scalar *arguments, uint64_t *reserved, scalar *result)
- *
- * but this is a complete assigner rather than a three-register assertion so
- * the compiler and prologue share one ABI model.
+ * The compiler and the prologue share this one ABI model.
  */
 class CCAssignerAppleA64 final : public ::tpde::CCAssigner {
 	using AsmReg = ::tpde::a64::AsmReg;

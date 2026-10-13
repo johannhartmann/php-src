@@ -596,14 +596,9 @@ ZEND_API zend_result open_file_for_scanning(zend_file_handle *file_handle)
 	return SUCCESS;
 }
 
-/*
- * The compile state a bailout out of a compilation releases and restores in
- * native builds, where native_mir_test continues the request after a fatal
- * error: each compile step links a bailout record that unwinds before the
- * jump (zend_native_bailout_unwind()). _zend_bailout() already resets
- * CG(in_compilation) and CG(active_class_entry). Stock builds keep the
- * upstream behaviour: the bailout ends the request.
- */
+/* State released by a bailout out of the compilation in native builds, where
+ * native_mir_test continues the request after a fatal error.
+ * _zend_bailout() resets CG(in_compilation) and CG(active_class_entry). */
 typedef struct _zend_compile_ast_state {
 #ifdef HAVE_NATIVE_ENGINE
 	zend_native_bailout_record record;
@@ -681,13 +676,10 @@ static zend_op_array *zend_compile_ast_internal(int type)
 }
 
 #ifdef HAVE_NATIVE_ENGINE
-/*
- * The AST arenas of compilations a bailout abandoned, newest first, each
- * linked through a pointer at its start. A tree compiled halfway may share
- * nodes (a get hook borrows its property's type until the hook is
- * compiled), so it is never destroyed, as in stock builds: the arenas stay
- * reachable until the request's heap goes.
- */
+/* AST arenas of compilations abandoned by a bailout, linked through a
+ * pointer at their start. A half compiled tree may share nodes (a get hook
+ * borrows its property's type), so it is never destroyed; the arenas live
+ * until the request heap is released. */
 static ZEND_EXT_TLS zend_arena *zend_compile_abandoned_ast_arenas;
 
 static void zend_compile_unwind(zend_native_bailout_record *record)

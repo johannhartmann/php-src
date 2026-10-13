@@ -3619,10 +3619,8 @@ ZEND_API zend_class_entry *zend_do_link_class(zend_class_entry *ce, zend_string 
 		}
 	}
 
-	/* An enum's internal methods (cases(), from(), tryFrom()) are
-	 * arena-allocated during linking; OPcache persists them with the linked
-	 * class (zend_persist_class_method()), so an enum is cacheable like any
-	 * other class and is no longer linked again by every request. */
+	/* An enum's internal methods are persisted with the linked class
+	 * (zend_persist_class_method()), so enums are cacheable. */
 
 	if (ce->ce_flags & ZEND_ACC_IMMUTABLE && is_cacheable) {
 		if (zend_inheritance_cache_get && zend_inheritance_cache_add) {

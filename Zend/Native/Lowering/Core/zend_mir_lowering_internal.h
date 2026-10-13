@@ -51,11 +51,7 @@ typedef struct _zend_mir_lowering_provider_array {
 	uint32_t provider_count;
 } zend_mir_lowering_provider_array;
 
-/*
- * The source view contains the linear opcode and SSA records, while
- * front-end CFG facts remain process-local.  The lowering shape supplies
- * those facts separately, so the source view does not have to carry them.
- */
+/* Process-local front-end CFG facts, which the source view does not carry. */
 typedef struct _zend_mir_lowering_source_shape {
 	uint32_t reachable_block_count;
 	bool has_control_flow;

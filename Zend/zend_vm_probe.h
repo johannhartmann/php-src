@@ -14,10 +14,7 @@
 #ifndef ZEND_VM_PROBE_H
 #define ZEND_VM_PROBE_H
 
-/*
- * These hooks are private to the native_mir_test build.  In normal builds
- * they disappear at preprocessing time and add neither code nor ABI.
- */
+/* Hooks of the native_mir_test build; empty in other builds. */
 #ifdef HAVE_NATIVE_MIR_TEST
 void zend_native_mir_test_probe_vm_handler(void);
 void zend_native_mir_test_probe_execute_ex(void);

@@ -273,12 +273,9 @@ typedef struct _zend_accel_shared_globals {
 	time_t          force_restart_time;
 #ifdef HAVE_NATIVE_ENGINE
 	uint64_t        native_generation;
-	/* Discarded scripts no other code binds to (see
-	 * zend_accel_discard_script()). */
+	/* Count of discarded scripts nothing binds to, and the last of them
+	 * indexed by that count (see zend_accel_discard_script()). */
 	uint64_t        native_discards;
-	/* The last ACCEL_NATIVE_DISCARD_RING of those scripts, each at the
-	 * value native_discards had before its discard, so that a process
-	 * retires just their generations. */
 	const void     *native_discarded[ACCEL_NATIVE_DISCARD_RING];
 #endif
 	bool       accelerator_enabled;

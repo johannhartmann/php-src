@@ -51,8 +51,7 @@ void zend_startup_system_id(void)
 	PHP_MD5Update(&context, ZEND_BIN_ID, sizeof(ZEND_BIN_ID)-1);
 #ifdef HAVE_NATIVE_ENGINE
 	{
-		/* Native images persisted with a cached script follow the native
-		 * runtime ABI: a cache of another ABI is not this system's. */
+		/* Cached scripts carry native images of this runtime ABI. */
 		static const uint32_t native_runtime_abi =
 			ZEND_NATIVE_RUNTIME_ABI_VERSION;
 		PHP_MD5Update(&context, &native_runtime_abi,
@@ -95,9 +94,7 @@ void zend_finalize_system_id(void)
 		hooks |= ZEND_HOOK_INTERRUPT_FUNCTION;
 	}
 #ifdef HAVE_NATIVE_ENGINE
-	/* Native images call unobserved handlers directly when no observer is
-	 * registered: a cache of the other observer state is not this
-	 * system's. */
+	/* Native images call handlers directly when no observer is registered. */
 	if (ZEND_OBSERVER_ENABLED) {
 		hooks |= ZEND_HOOK_NATIVE_OBSERVERS;
 	}

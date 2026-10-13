@@ -134,9 +134,9 @@ static bool zend_mir_straight_line_analyze_uses(
 	uint32_t current_uses = 0;
 	uint32_t index;
 
-	if (source == NULL || source->contract_version != ZEND_MIR_CONTRACT_VERSION
+	if (source->contract_version != ZEND_MIR_CONTRACT_VERSION
 			|| source->ssa_use_count == NULL
-			|| source->ssa_use_at == NULL || later_out == NULL) {
+			|| source->ssa_use_at == NULL) {
 		return false;
 	}
 	*later_out = false;

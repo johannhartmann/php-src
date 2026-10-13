@@ -48,11 +48,8 @@ typedef struct _zend_mir_logic_plan {
 	uint32_t step_count;
 } zend_mir_logic_plan;
 
-/*
- * The core exposes these context accessors. Declaring the narrow integration
- * seam here keeps the provider independently compilable without copying
- * or exposing the Core context layout.
- */
+/* Core context accessors, declared here to keep the Core context layout
+ * private. */
 const void *zend_mir_lowering_context_provider_context(
 	const zend_mir_lowering_context *context);
 zend_mir_block_id zend_mir_lowering_context_block_id(

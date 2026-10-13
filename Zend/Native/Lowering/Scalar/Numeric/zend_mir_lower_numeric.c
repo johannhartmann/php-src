@@ -147,8 +147,7 @@ static bool zend_mir_numeric_validate_use(
 	if (operand->kind != ZEND_MIR_SOURCE_OPERAND_SSA) {
 		return true;
 	}
-	if (source == NULL || source->ssa_use_count == NULL
-			|| source->ssa_use_at == NULL) {
+	if (source->ssa_use_count == NULL || source->ssa_use_at == NULL) {
 		return false;
 	}
 	count = source->ssa_use_count(source->context);
@@ -186,8 +185,7 @@ static bool zend_mir_numeric_validate_definition(
 	uint32_t count;
 	uint32_t index;
 
-	if (source == NULL || source->ssa_def_count == NULL
-			|| source->ssa_def_at == NULL) {
+	if (source->ssa_def_count == NULL || source->ssa_def_at == NULL) {
 		return false;
 	}
 	count = source->ssa_def_count(source->context);

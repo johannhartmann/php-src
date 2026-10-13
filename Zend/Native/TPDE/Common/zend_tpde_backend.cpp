@@ -918,11 +918,9 @@ static void zend_tpde_refine_non_alias_scalar_values(
 			continue;
 		}
 		/*
-		 * The generic value lowering conservatively preserves MAY_BE_REF
-		 * after variable sends.  Zend SSA's alias class is the stronger
-		 * proof for this concrete SSA definition: NO_ALIAS means the exact
-		 * scalar is not an observable zend_reference and can remain the
-		 * register-authoritative value across calls, copies and PHIs.
+		 * Value lowering keeps MAY_BE_REF after variable sends. NO_ALIAS
+		 * proves this definition is no observable zend_reference, so the
+		 * scalar stays register-authoritative across calls, copies and PHIs.
 		 */
 		value.category = ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;
 		value.refcount_state = ZEND_MIR_REFCOUNT_IMMORTAL;
@@ -970,11 +968,10 @@ static void zend_tpde_refine_literal_assignment_values(
 			continue;
 		}
 		/*
-		 * Zend's SEND_VAR_EX analysis deliberately keeps the destination
-		 * aliasable until the eventual callee declaration is known.  A
-		 * literal assignment into a non-reference predecessor is stronger:
-		 * this SSA definition is an exact string or array payload even when
-		 * a later by-value use made the generic SSA type mask conservative.
+		 * Zend's SEND_VAR_EX analysis keeps the destination aliasable until
+		 * the callee is known. A literal assignment into a non-reference
+		 * predecessor still defines an exact string or array payload, even
+		 * when a later by-value use widened the SSA type mask.
 		 */
 		if (source_ssa->vars[ssa_variable].alias != NO_ALIAS
 				|| zend_tpde_ssa_variable_rebindable(
@@ -1115,11 +1112,10 @@ static void zend_tpde_refine_boxed_scalar_copies(zend_tpde_plan *plan)
 				return -1;
 			}
 			/*
-			 * A COPY into a boxed PHI component preserves the source payload
-			 * type even though its canonical MIR representation remains ZVAL.
-			 * Freeze that semantic fact in the machine plan after MIR
-			 * verification. The boxed value stays slot-authoritative; the
-			 * adjacent ZVAL_STORE consumes the transient scalar definition.
+			 * A COPY into a boxed PHI component keeps the source payload type
+			 * although its MIR representation is ZVAL. The boxed value stays
+			 * slot-authoritative; the adjacent ZVAL_STORE consumes the
+			 * transient scalar definition.
 			 */
 			result.exact_type = source.exact_type;
 			result.category = ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;
@@ -2037,10 +2033,9 @@ bool call_site_requires_source_fragments(
 	}
 	/*
 	 * CHECK_FUNC_ARG and CHECK_UNDEF_ARGS observe the pending call frame at
-	 * their exact source positions.  Keep the ordinary single-enter direct
-	 * path for all other calls, but materialize INIT/SEND/DO fragments when
-	 * either metadata operation is present so FETCH_*_FUNC_ARG sees the
-	 * resolved callee's by-reference contract before it fetches its lvalue.
+	 * their source positions, so a call with either keeps its INIT/SEND/DO
+	 * fragments: FETCH_*_FUNC_ARG must see the callee's by-reference
+	 * contract before it fetches its lvalue.
 	 */
 	for (source_position = site.source_init_opline_index + 1;
 			source_position < site.source_do_opline_index;
@@ -2505,10 +2500,8 @@ bool freeze_source_call_phases(
 				const zend_tpde_value &value = plan->values[
 					static_cast<uint32_t>(binding.value_index)];
 				const zend_mir_scalar_type_mask exact_type = value.exact_type;
-				/* A value the plan keeps as a zval
-				 * is sent from its zval. */
-				direct_value = zend_mir_scalar_type_is_exact(exact_type)
-					&& (exact_type == ZEND_MIR_SCALAR_TYPE_I1
+				/* A value the plan keeps as a zval is sent from its zval. */
+				direct_value = (exact_type == ZEND_MIR_SCALAR_TYPE_I1
 						|| exact_type == ZEND_MIR_SCALAR_TYPE_I64
 						|| exact_type == ZEND_MIR_SCALAR_TYPE_F64)
 					&& value.machine_kind
@@ -2569,10 +2562,9 @@ bool freeze_source_call_phases(
 			}
 		}
 		/*
-		 * The single expansion node is a generated conditional statepoint.
-		 * It is a no-op for a completely direct placement plan and invokes the
-		 * bounded helper only when resolution marked an unpack or a genuinely
-		 * extra named tail for runtime expansion.
+		 * The expansion node is a conditional statepoint: a no-op for a fully
+		 * direct placement, it calls the helper only for an unpack or an
+		 * extra named tail that resolution left to run time.
 		 */
 		if (assign_phase(site.source_do_opline_index, instruction_index,
 					ZEND_TPDE_SOURCE_CALL_PHASE_EXPAND) == nullptr) {
@@ -3092,10 +3084,9 @@ static bool machine_register_boolean_consumer(
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
 		/*
-		 * A terminal branch is converted to a register consumer when its producer
-		 * is selected below.  A result-producing short-circuit branch must already
-		 * have passed the stronger register-only edge check: otherwise selecting
-		 * its producer would leave the branch reading an unmaterialized zval.
+		 * A terminal branch becomes a register consumer once its producer is
+		 * selected. A short-circuit branch with a result must have passed the
+		 * register-only edge check, or it would read an unmaterialized zval.
 		 */
 		if (consumer.value_operation.source_opcode == ZEND_JMPZ
 				|| consumer.value_operation.source_opcode == ZEND_JMPNZ) {
@@ -3415,10 +3406,9 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 	}
 
 	/*
-	 * BOOL and BOOL_NOT preserve the complete semantics of a proven machine
-	 * boolean.  Propagate the register result through such chains so short
-	 * circuit lowering does not create a guarded helper diamond for each
-	 * logical negation between isset/empty and its branch consumer.
+	 * BOOL and BOOL_NOT of a machine boolean are exact. Propagate the
+	 * register result through such chains so that no negation between
+	 * isset/empty and its branch gets a guarded helper diamond.
 	 */
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &instruction = plan->instructions[index];
@@ -3434,16 +3424,8 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 		int32_t producer =
 			instruction.source_op1_binding.definition_instruction_index;
 		if (producer < 0) {
-			const int32_t input = machine_source_binding_value_index(
-				plan, instruction.source_op1_binding);
-			producer = input >= 0
-					&& plan->value_definition_instructions != nullptr
-				? plan->value_definition_instructions[
-					static_cast<uint32_t>(input)]
-				: -1;
-			if (producer < 0 && input >= 0) {
-				producer = value_definition(input);
-			}
+			producer = value_definition(machine_source_binding_value_index(
+				plan, instruction.source_op1_binding));
 		}
 		if (producer < 0
 				|| static_cast<uint32_t>(producer) >= index
@@ -3482,12 +3464,10 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 	}
 
 	/*
-	 * Fold the narrow empty(CV) -> BOOL_NOT form into the earlier empty result.
-	 * The result alias is essential: every later consumer then uses a value
-	 * defined by the producer, rather than a synthetic value whose definition
-	 * may appear after a short-circuit PHI in TPDE's block schedule.  Requiring
-	 * the producer to have one semantic consumer guarantees that its original
-	 * polarity is not observable anywhere else.
+	 * Fold empty(CV) -> BOOL_NOT into the empty result. With the result
+	 * alias every later consumer uses a value the producer defines, not a
+	 * synthetic one TPDE might schedule after a short-circuit PHI. The
+	 * producer's single consumer keeps its original polarity unobservable.
 	 */
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &producer = plan->instructions[index];
@@ -3563,10 +3543,10 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 	}
 
 	/*
-	 * The adaptor already recognizes the canonical two-edge short-circuit PHI
-	 * when both inputs are exact machine booleans.  Freeze only the corresponding
-	 * terminal branch here; keep all intervening BOOL operations as real
-	 * definitions so edge values retain their original polarity and liveness.
+	 * The adaptor recognizes a two-edge short-circuit PHI over machine
+	 * booleans. Only its terminal branch is frozen here; intervening BOOL
+	 * operations stay definitions so edge values keep their polarity and
+	 * liveness.
 	 */
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &phi = plan->instructions[index];
@@ -3639,13 +3619,12 @@ static void freeze_register_boolean_results(zend_tpde_plan *plan)
 	}
 
 	/*
-	 * Zend short-circuit temporaries are source-level values rather than MIR
-	 * values.  When both incoming definitions stay as exact machine booleans,
-	 * freeze the terminal branch as an implicit two-edge register merge.  The
-	 * adaptor will materialize the corresponding TPDE PHI; keeping the shape in
-	 * the plan also lets machine-CFG construction omit the boxed branch diamond.
-	 * The definition reaching the branch from a predecessor is that block's
-	 * last writer of the temporary; both are frozen for the adaptor.
+	 * A Zend short-circuit temporary is a source value, not a MIR value.
+	 * When both definitions reaching the branch are machine booleans, the
+	 * branch becomes an implicit two-edge register merge: the adaptor builds
+	 * the TPDE PHI and the machine CFG omits the boxed branch diamond. The
+	 * definition from a predecessor is that block's last writer of the
+	 * temporary.
 	 */
 	std::vector<uint32_t> block_instruction_offsets;
 	std::vector<uint32_t> block_instructions;
@@ -4169,9 +4148,9 @@ bool freeze_source_value_bindings(
 								& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF);
 						/*
 						 * An unaliased destination whose reaching value is only
-						 * UNDEF or LONG cannot require reference resolution or a
-						 * destructor.  Freeze this exact source proof so the packed
-						 * LONG iterator path need not repeat a runtime type guard.
+						 * UNDEF or LONG needs no reference resolution and no
+						 * destructor, so the packed LONG iterator path skips its
+						 * type guard.
 						 */
 						instruction.source_op2_canonical_scalar_only =
 							use_type != 0
@@ -4191,12 +4170,10 @@ bool freeze_source_value_bindings(
 					operation.auxiliary_storage_id, source_position,
 					index, definitions);
 			/*
-			 * Zend SSA intentionally omits the RETURN use when a preceding
-			 * VERIFY_RETURN_TYPE already consumed the same physical carrier.
-			 * Preserve that explicit MIR edge instead of reconstructing a
-			 * reaching definition from the slot's linear instruction history;
-			 * the latter is invalid for loop exits because a backedge call does
-			 * not dominate the return block.
+			 * Zend SSA omits the RETURN use when a preceding VERIFY_RETURN_TYPE
+			 * consumed the same slot. Take the MIR edge from that check, not a
+			 * reaching definition from the slot's linear history, which is wrong
+			 * at loop exits: a backedge call does not dominate the return block.
 			 */
 			if (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
 					&& instruction.source_op1_binding.value_index < 0
@@ -4546,10 +4523,9 @@ bool freeze_machine_references(
 		};
 
 	/*
-	 * Argument payload loads and safepoint materialization consume canonical
-	 * locations even when no source opcode names the slot.  Freeze those
-	 * locations from the value table itself so the adaptor never has to
-	 * rediscover an address from the live op_array.
+	 * Argument payload loads and safepoint materializations use canonical
+	 * slots that no source opcode may name; the value table lists them so
+	 * the adaptor never derives an address from the live op_array.
 	 */
 	for (uint32_t index = 0; index < plan->value_count; ++index) {
 		const zend_tpde_value &value = plan->values[index];
@@ -4852,15 +4828,9 @@ bool freeze_generator_resume_liveness(
 			static_cast<uint32_t>(target - targets.begin());
 		/*
 		 * The canonical table describes semantic liveness, including values
-		 * whose authoritative copy already lives in the generator frame.
-		 * Only register-authoritative values need a TPDE resume operand.
-		 * Keeping this selection at the frozen machine-plan boundary avoids
-		 * rebuilding SSA liveness in the adaptor while preserving boxed
-		 * frame values without manufacturing unused TPDE definitions.
+		 * whose authoritative copy lives in the generator frame; the adaptor
+		 * takes it from here instead of rebuilding SSA liveness.
 		 */
-		if (plan->generator_resume_live_word_count == 0) {
-			continue;
-		}
 		uint64_t *words =
 			plan->generator_resume_live_values
 				+ static_cast<size_t>(resume)
@@ -5101,10 +5071,9 @@ bool freeze_statepoint_materializations(
 		lazy_scalar_storages.end());
 
 	/*
-	 * Resolve the register value that owns a canonical scalar slot at an
-	 * observable boundary.  This is a sparse reaching-definition query over
-	 * the frozen CFG, not a second block-by-value dataflow matrix.  Exact
-	 * scalar PHIs terminate loop queries at their natural merge point.
+	 * The register value that owns a canonical scalar slot at an observable
+	 * boundary: a sparse reaching-definition query over the frozen CFG.
+	 * Exact scalar PHIs end loop queries at their merge point.
 	 */
 	struct reaching_scalar_definition {
 		int32_t value_index;
@@ -5713,10 +5682,9 @@ bool freeze_statepoint_materializations(
 					return static_cast<int32_t>(candidate_index);
 				}
 				/*
-				 * A source result is only a valid materialization input for its
-				 * direct consumer.  Temporary storage ids are reused, so looking
-				 * through another real instruction can bind an unrelated earlier
-				 * producer and create an invalid machine def-use edge.
+				 * A source result is a materialization input only for its
+				 * direct consumer: temporary storage ids are reused, so looking
+				 * past another instruction could bind an unrelated producer.
 				 */
 				return int32_t{-1};
 			}
@@ -5854,11 +5822,10 @@ bool freeze_statepoint_materializations(
 		}
 		/*
 		 * A native generator resumes register-authoritative values from their
-		 * canonical Zend slots.  Publish the exact semantic suspend-live values
-		 * before the helper transfers control back to the caller.  Sparse
-		 * reaching definitions alone are insufficient here: a loop value may be
-		 * copied from a PHI solely for use after the yield and therefore have no
-		 * intervening ZVAL_STORE (the induction value is a common example).
+		 * canonical slots, so the suspension publishes its suspend-live
+		 * values. Reaching definitions do not suffice: a loop value copied
+		 * from a PHI only for use after the yield, such as an induction
+		 * variable, has no ZVAL_STORE before it.
 		 */
 		if (instruction.has_value_operation
 				&& record.source_position_id != UINT32_MAX
@@ -5918,12 +5885,11 @@ bool freeze_statepoint_materializations(
 		}
 
 		/*
-		 * Canonical-location modules do not duplicate every source slot in
-		 * each frame state. Runtime helpers still read explicit operands from
-		 * the Zend frame, so publish authoritative inputs at that boundary.
-		 * This also covers private typed-call results without a persistent MIR
-		 * result identity. RETURN_BY_REF always returns through its helper,
-		 * which reads the operand's slot.
+		 * Frame states of canonical-location modules omit duplicated slots,
+		 * but runtime helpers read their explicit operands from the Zend
+		 * frame: publish register-authoritative inputs, including private
+		 * typed-call results without a MIR result. RETURN_BY_REF always
+		 * returns through its helper, which reads the operand's slot.
 		 */
 		if ((instruction.runtime_helper != ZEND_NATIVE_HELPER_COUNT
 					|| (record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
@@ -5986,11 +5952,10 @@ bool freeze_statepoint_materializations(
 			}
 		}
 		/*
-		 * Direct call helpers consume their source-backed arguments from the
-		 * canonical Zend frame. A producer may nevertheless keep a newer
-		 * pointer or boxed value in TPDE registers (for example FETCH_DIM_W
-		 * immediately followed by SEND_REF). Publish precisely those dirty
-		 * argument slots before entering the runtime boundary.
+		 * Direct call helpers read their source-backed arguments from the
+		 * Zend frame, while a producer may keep a newer pointer or boxed
+		 * value in registers (FETCH_DIM_W followed by SEND_REF): publish
+		 * those dirty argument slots.
 		 */
 		if ((record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 					|| record.opcode
@@ -6365,13 +6330,11 @@ bool freeze_entry_undef_temporaries(
 		required[storage - first_temporary] = 1;
 	}
 	/*
-	 * Explicit value helpers produce canonical Zend results and deliberately
-	 * require a fresh destination before they allocate, invoke user code or
-	 * consume an operand.  Keep those actual helper destinations valid without
-	 * paying the old cost of clearing every temporary in the frame.
+	 * Explicit value helpers require a fresh destination before they
+	 * allocate, call user code or consume an operand, so their result
+	 * temporaries are initialized at entry, not every temporary.
+	 * fused_need marks those only branch-fused helpers need (see below).
 	 */
-	/* 1: only branch-fused helpers need the index (see below); 2: also
-	 * anything else. */
 	std::vector<uint8_t> fused_need(op_array->T);
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction = plan->instructions[index];
@@ -7445,10 +7408,10 @@ bool initialize_plan(
 		plan->instructions[instruction_index].has_value_operation = true;
 	}
 	/*
-	 * A source-zval RETURN without an executable value operation has the same
-	 * runtime ABI as an executable RETURN. Translate it into a value operation
-	 * once, while the immutable source and SSA views are available, so
-	 * generated code never decodes a Zend opcode to recover operand semantics.
+	 * A source-zval RETURN without an executable value operation has the
+	 * runtime ABI of an executable RETURN. Give it a value operation here,
+	 * while the source and SSA views are available, so generated code never
+	 * decodes a Zend opcode.
 	 */
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		zend_tpde_instruction &instruction = plan->instructions[i];
@@ -7841,10 +7804,10 @@ bool initialize_plan(
 		}
 	}
 	/*
-	 * A receive opcode is an SSA definition, but not a machine operation: its
-	 * result is exactly the incoming local-ABI argument. Keep that edge in the
-	 * frozen plan. This avoids both an adapter-side Zend SSA analysis and a
-	 * canonical-frame reload in the typed body.
+	 * A receive opcode is an SSA definition but no machine operation: its
+	 * result is the incoming local-ABI argument. The plan keeps that edge,
+	 * so neither the adaptor analyzes Zend SSA nor the typed body reloads
+	 * the frame slot.
 	 */
 	if (source_op_array != nullptr && source_ssa != nullptr
 			&& source_ssa->ops != nullptr) {
@@ -7889,7 +7852,6 @@ bool initialize_plan(
 			const uint32_t argument = EX_VAR_TO_NUM(op.result.var);
 			const int32_t result_ssa = source_ssa->ops[opline].result_def;
 			if (argument >= plan->argument_count || result_ssa < 0
-					|| plan->argument_value_indices == nullptr
 					|| plan->argument_value_indices[argument] < 0) {
 				continue;
 			}
@@ -8375,17 +8337,13 @@ bool initialize_plan(
 				plan->values[destination_index].canonical_storage_id;
 			/*
 			 * ZVAL_STORE overwrites the value reaching op1 at its source
-			 * assignment. When that exact reaching SSA value is an
-			 * unaliased non-refcounted scalar, no reference resolution,
-			 * destructor or refcount transition can be observable. Proving
-			 * the reaching definition is both stronger and more useful than
-			 * scanning the slot's entire history: an earlier refcounted value
-			 * may already have been released by a dominating assignment.
-			 */
-			/*
-			 * On Linux x64 the typed tier also stores the results of other
-			 * scalar definitions; the value reaching the destination is the
-			 * use paired with the definition being stored.
+			 * assignment. When that SSA value is an unaliased non-refcounted
+			 * scalar, no reference resolution, destructor or refcount change
+			 * is observable. The reaching definition is the proof, not the
+			 * slot's history: a dominating assignment may already have
+			 * released an earlier refcounted value. On Linux x64 the typed
+			 * tier also stores the results of other scalar definitions; the
+			 * reaching value is the use paired with the stored definition.
 			 */
 			const zend_ssa_op *store_ssa_op =
 				source_op_array != nullptr && source_ssa != nullptr
@@ -8454,13 +8412,12 @@ bool initialize_plan(
 				const bool phi_storage = storage_has_phi(
 					plan->instructions[i].zval_store_storage_id);
 				/*
-				 * An integer assignment which itself defines the canonical
-				 * loop-carried value does not need to publish the preceding PHI
-				 * to the frame. Other PHI-backed stores remain materialized: their
-				 * selected source may not dominate every guarded continuation.
+				 * An integer assignment that defines the loop-carried value
+				 * need not publish the preceding PHI. Other PHI-backed stores
+				 * stay eager: their source may not dominate every guarded
+				 * continuation. A constant has no register definition that a
+				 * boundary could store.
 				 */
-				/* A constant has no register definition that a boundary
-				 * could store. */
 				plan->instructions[i].zval_store_lazy_scalar =
 					!plan->values[source_index].constant
 					&& (block_is_cyclic(record.block_id)
@@ -8547,11 +8504,9 @@ bool initialize_plan(
 							plan->instructions[i], &long_incdec)
 						&& !long_incdec.has_result
 						/*
-						 * The direct target path accepts an SSA source with a
-						 * concrete CV storage, but lazy mutation additionally
-						 * replaces the loop-carried source identity.  Keep that
-						 * stronger transport on its established slot form until
-						 * SSA component boundaries can retain the replacement.
+						 * Lazy mutation also replaces the loop-carried source
+						 * identity, which SSA component boundaries do not
+						 * keep: it requires the slot form.
 						 */
 						&& operation.op1.kind
 							== ZEND_MIR_SOURCE_OPERAND_SLOT);
@@ -8583,12 +8538,11 @@ bool initialize_plan(
 					if (value.canonical_storage_id
 							== operation.op1_storage_id) {
 						/*
-						 * Zend SSA's NO_ALIAS fact is the source-level proof
-						 * that this concrete CV definition cannot be observed
-						 * through a zend_reference.  The value-location model
-						 * may conservatively retain canonical observability for
-						 * the polymorphic cold result; that does not require the
-						 * proven long fast path to publish on every loop edge.
+						 * NO_ALIAS proves this CV definition is not observable
+						 * through a zend_reference. The value-location model
+						 * may keep canonical observability for the polymorphic
+						 * cold result; the long fast path still need not
+						 * publish on every loop edge.
 						 */
 						plan->instructions[i].mutation_storage_id =
 							operation.op1_storage_id;
@@ -8709,11 +8663,9 @@ bool initialize_plan(
 					return false;
 				}
 				/*
-				 * A statically exact scalar that already satisfies the declared
-				 * return type cannot take Zend's coercion or TypeError path.
-				 * Keep VERIFY_RETURN_TYPE as the semantic slow path for boxed or
-				 * otherwise polymorphic values, but do not cross the C ABI merely
-				 * to rediscover a proof already present in ZNMIR.
+				 * An exact scalar that satisfies the declared return type
+				 * cannot take Zend's coercion or TypeError path and needs no
+				 * VERIFY_RETURN_TYPE helper.
 				 */
 				if (source_op_array != nullptr
 						&& source_op_array->arg_info != nullptr
@@ -8782,10 +8734,8 @@ bool initialize_plan(
 						return false;
 					}
 					/*
-					 * FUNC_NUM_ARGS is intrinsically an integer operation.  The
-					 * source SSA overlay may intentionally omit a fact for this
-					 * non-argument temporary, so derive the executable type from
-					 * the opcode contract before validating and compiling it.
+					 * FUNC_NUM_ARGS always yields an integer; the SSA overlay
+					 * may have no fact for this temporary.
 					 */
 					plan->values[result_index].exact_type =
 						ZEND_MIR_SCALAR_TYPE_I64;
@@ -8797,9 +8747,9 @@ bool initialize_plan(
 						return false;
 					}
 					/*
-					 * The count belongs to the active invocation even if source
-					 * analysis saw only fixed-arity callers while compiling this
-					 * function. Generated code must read the current frame.
+					 * The count belongs to the active invocation, even when
+					 * analysis saw only fixed-arity callers: it is read from
+					 * the frame.
 					 */
 					plan->values[result_index].constant = false;
 				}
@@ -9010,13 +8960,10 @@ bool initialize_plan(
 						!= ZEND_MIR_SOURCE_OPERAND_LITERAL
 					&& value_index >= 0
 					/*
-					 * A scalar fact attached to a frame argument describes the
-					 * compiled source, not every invocation.  Until the return
-					 * itself carries a retained entry-guard proof, copying the
-					 * raw payload would skip zval ownership for a polymorphic
-					 * array/object argument.  Keep argument returns on the
-					 * ownership-correct helper path; locally produced exact
-					 * scalars remain eligible for the direct return.
+					 * A scalar fact on a frame argument describes the compiled
+					 * source, not every invocation: copying the raw payload
+					 * would skip zval ownership for an array or object
+					 * argument. Arguments return through the helper.
 					 */
 					&& plan->values[value_index].argument_index < 0
 					&& (source_ssa == nullptr
@@ -9357,30 +9304,27 @@ bool initialize_plan(
 					"direct call has no explicit source completion descriptor");
 				return false;
 			}
-			/* NEW creates its object receiver while executing the INIT opcode.
-			 * A direct-internal descriptor only carries a pre-existing receiver,
-			 * so inherited internal constructors must retain the source phases. */
+			/* NEW creates its receiver in the INIT opcode, but a direct
+			 * internal descriptor only carries an existing receiver: inherited
+			 * internal constructors keep the source phases. */
 			const bool internal_constructor_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
-				&& source_op_array != nullptr
 				&& site.source_init_opline_index < source_op_array->last
 				&& source_op_array->opcodes[
 					site.source_init_opline_index].opcode == ZEND_NEW;
-			/* The direct internal descriptor records the declaring scope in its
-			 * binding cell, but INIT_STATIC_METHOD_CALL may name a derived called
-			 * scope. Preserve the source resolver for late-static-binding-sensitive
-			 * internal handlers instead of collapsing the INIT into that cell. */
+			/* The binding cell records the declaring scope, but
+			 * INIT_STATIC_METHOD_CALL may name a derived called scope: keep
+			 * the source INIT for late static binding. */
 			const bool internal_static_method_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
-				&& source_op_array != nullptr
 				&& site.source_init_opline_index < source_op_array->last
 				&& source_op_array->opcodes[
 					site.source_init_opline_index].opcode
 					== ZEND_INIT_STATIC_METHOD_CALL;
-			/* Internal handlers may deliberately perform semantic validation before
-			 * their parameter parser reports too few arguments. Keep a statically
-			 * under-arity call in source order so INIT/SEND/DO reaches the handler
-			 * with the same frame state as ZEND_DO_ICALL. */
+			/* An internal handler may validate before its parameter parser
+			 * reports too few arguments, so an under-arity call keeps its
+			 * INIT/SEND/DO and reaches the handler with the frame state of
+			 * ZEND_DO_ICALL. */
 			const bool internal_under_arity_call =
 				record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 				&& site.arguments.count < target.required_num_args;
@@ -9550,11 +9494,11 @@ bool initialize_plan(
 							source_op_array, argument,
 							site.source_do_opline_index);
 					/*
-					 * A direct descriptor transfers arguments while executing DO_FCALL.
-					 * Defined CV references may observe intervening writes, but by-value
-					 * arguments must still denote their SEND-time value. Reused storage,
-					 * other reference sources, and possibly-undefined reads therefore keep
-					 * their original SEND opcode timing and validation instead.
+					 * A direct descriptor transfers arguments at DO_FCALL.
+					 * Defined CV references may observe intervening writes, but
+					 * by-value arguments must keep their SEND-time value: reused
+					 * storage, other references and possibly undefined reads
+					 * keep their SEND timing and validation.
 					 */
 					if ((reference_argument && !direct_reference_cv)
 							|| argument_may_be_undefined
@@ -9565,9 +9509,8 @@ bool initialize_plan(
 				if (direct_descriptor) {
 					const zend_op *init = nullptr;
 					if (target.kind == ZEND_MIR_CALL_TARGET_METHOD_USER) {
-						if (source_op_array == nullptr
-								|| site.source_init_opline_index
-									>= source_op_array->last) {
+						if (site.source_init_opline_index
+								>= source_op_array->last) {
 							zend_tpde_set_diagnostic(diag,
 								ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 								"direct native method has no source descriptor");
@@ -9814,14 +9757,11 @@ bool initialize_plan(
 								parameter_ordinal + 1);
 						}
 						/*
-						 * An open method target is deliberately frozen before
-						 * request-local binding, so its MIR argument record can
-						 * only preserve the SEND opcode's syntactic mode. Once
-						 * the binding resolves a concrete user function, its
-						 * parameter declaration is authoritative. In
-						 * particular, SEND_VAR_EX to `array &$arg` must create
-						 * and transfer a reference cell even though the source
-						 * opcode itself is not SEND_REF.
+						 * An open method target is frozen before request-local
+						 * binding, so its MIR argument keeps only the SEND
+						 * opcode's mode; the bound function's parameter
+						 * declaration decides. SEND_VAR_EX to `array &$arg`
+						 * transfers a reference cell although it is no SEND_REF.
 						 */
 						const bool parameter_by_reference =
 							ARG_MUST_BE_SENT_BY_REF(
@@ -9858,11 +9798,10 @@ bool initialize_plan(
 						descriptor->arguments[n].scalar_bits = 0;
 						descriptor->arguments[n].source_frame_offset =
 							UINT32_MAX;
-						if (source_op_array != nullptr
-								&& (argument.source_operand.kind
-										== ZEND_MIR_SOURCE_OPERAND_SLOT
-									|| argument.source_operand.kind
-										== ZEND_MIR_SOURCE_OPERAND_SSA)) {
+						if (argument.source_operand.kind
+								== ZEND_MIR_SOURCE_OPERAND_SLOT
+								|| argument.source_operand.kind
+									== ZEND_MIR_SOURCE_OPERAND_SSA) {
 							uint64_t slot =
 								argument.source_operand.index;
 							if (argument.source_operand.slot_kind
@@ -9877,17 +9816,14 @@ bool initialize_plan(
 											slot * sizeof(zval));
 							}
 						}
-						if (source_op_array != nullptr
-								&& argument.source_operand.kind
-									== ZEND_MIR_SOURCE_OPERAND_LITERAL
+						if (argument.source_operand.kind
+								== ZEND_MIR_SOURCE_OPERAND_LITERAL
 								&& argument.source_operand.index
 									< source_op_array->last_literal) {
 							/*
-							 * The source literal is authoritative. A boxed
-							 * literal may share a topology-only MIR value with
-							 * a NULL placeholder, but it must never be
-							 * materialized as that placeholder in an inline
-							 * direct-call frame.
+							 * The source literal decides: a boxed literal may
+							 * share a topology-only MIR value with a NULL
+							 * placeholder, which an inline frame must not copy.
 							 */
 							descriptor->arguments[n].exact_type =
 								exact_scalar_from_zval(
@@ -9914,7 +9850,6 @@ bool initialize_plan(
 								descriptor->arguments[n].exact_type)
 								&& descriptor->arguments[n].mode
 									== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-								&& source_op_array != nullptr
 								&& source_op_array->arg_info != nullptr
 								&& (argument.source_operand.kind
 										== ZEND_MIR_SOURCE_OPERAND_SLOT
@@ -9932,8 +9867,7 @@ bool initialize_plan(
 										argument.source_operand.index].type);
 						}
 						const zval *source_literal =
-							source_op_array != nullptr
-								&& argument.source_operand.kind
+							argument.source_operand.kind
 									== ZEND_MIR_SOURCE_OPERAND_LITERAL
 								&& argument.source_operand.index
 									< source_op_array->last_literal
@@ -10169,9 +10103,8 @@ bool initialize_plan(
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_DIRECT_USER_CALL_LEAVE);
 				} else {
-					if (source_op_array == nullptr
-							|| site.source_init_opline_index
-								>= source_op_array->last) {
+					if (site.source_init_opline_index
+							>= source_op_array->last) {
 						zend_tpde_set_diagnostic(diag,
 							ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 							"user call has no explicit source init descriptor");
@@ -10266,7 +10199,7 @@ bool initialize_plan(
 				const int32_t binding_index = id_index_find(
 					plan->internal_binding_index,
 					plan->internal_binding_index_capacity, site.target_id);
-				if (binding_index < 0 || source_op_array == nullptr
+				if (binding_index < 0
 						|| site.source_init_opline_index
 							>= source_op_array->last
 						|| site.source_do_opline_index
@@ -10580,9 +10513,8 @@ bool initialize_plan(
 					continue;
 				}
 				/*
-				 * A single source opcode may lower to multiple executable
-				 * value helpers.  They share the source-level try region, so
-				 * every one of them must use the same exception successor.
+				 * The value helpers one source opcode lowers to share its try
+				 * region and so its exception successor.
 				 */
 				if (zend_mir_id_is_valid(candidate.exception_block_id)
 						&& candidate.exception_block_id
@@ -11480,11 +11412,10 @@ static bool freeze_typed_body_signature(
 }
 
 /*
- * Prefer cloning a proof-closed scalar body over emitting even the local
- * component ABI call.  The adaptor performs the final value-mapping proof;
- * this structural screen keeps the frozen machine CFG in the inline-capable
- * form for exactly the instruction family that the generic ZNMIR cloner
- * accepts.
+ * A proof-closed scalar body is cloned rather than called through the local
+ * component ABI. The adaptor makes the final value-mapping proof; this
+ * structural screen admits exactly the instructions the ZNMIR cloner
+ * accepts, so the machine CFG keeps the inline-capable form.
  */
 static bool machine_plan_prefers_effect_closed_inline(
 		const zend_tpde_instruction &call,
@@ -11591,10 +11522,9 @@ static bool machine_plan_prefers_effect_closed_inline(
 						&& callee->typed_body_return_abi.exact_type
 							== call.direct_call->result_type))) {
 			/*
-			 * The typed-body signature is established from every frozen
-			 * return before component calls are classified.  Reuse that
-			 * proof here: the cloned register body cannot take the boxed
-			 * coercion/TypeError path retained by the observable Zend entry.
+			 * The typed-body signature, derived from every return before
+			 * component calls are classified, proves the cloned body cannot
+			 * take the coercion or TypeError path of the Zend entry.
 			 */
 			continue;
 		}
@@ -11971,10 +11901,9 @@ static bool freeze_typed_component_calls(
 			if (guarded_boxed_pointer_transport) {
 				/*
 				 * A property or array read produces a two-part register zval.
-				 * The AArch64 entry guard checks its runtime type before the
-				 * hot block extracts the refcounted payload.  Model the value
-				 * as the callee's borrowed pointer only after that guard; the
-				 * materialized cold call retains canonical Zend semantics.
+				 * The AArch64 entry guard checks its type before the hot block
+				 * extracts the refcounted payload, which is then the callee's
+				 * borrowed pointer; the cold call keeps Zend semantics.
 				 */
 				caller_abi = callee_abi;
 			}
@@ -12022,10 +11951,8 @@ static bool freeze_typed_component_calls(
 					== ZEND_MIR_SCALAR_TYPE_I64;
 			if (guarded_boxed_integer_transport) {
 				/*
-				 * The direct-call descriptor carries an explicit runtime
-				 * IS_LONG guard for this register-defined boxed argument.
-				 * Only after that guard may the typed hot edge transport the
-				 * payload as the callee's I64 local ABI.
+				 * The descriptor's IS_LONG guard for this boxed argument lets
+				 * the typed hot edge pass the payload as the callee's I64.
 				 */
 				caller_abi = callee_abi;
 			}
@@ -12036,11 +11963,9 @@ static bool freeze_typed_component_calls(
 				const zend_tpde_value &source =
 					plan->values[static_cast<uint32_t>(source_value)];
 				/*
-				 * A canonical refcounted value is a valid source for an
-				 * effect-closed local ABI after one payload load.  Keep its
-				 * Zend slot authoritative until the cloned body, but compare
-				 * the transported pointer shape here so the whole call can be
-				 * removed without manufacturing a private Zend frame.
+				 * A canonical refcounted value reaches an effect-closed clone
+				 * by one payload load; its slot stays authoritative, and the
+				 * call needs no private Zend frame.
 				 */
 				if (!caller_abi.valid
 						&& source.machine_kind == callee_abi.machine_kind
@@ -12084,9 +12009,9 @@ static bool freeze_typed_component_calls(
 						&& plan->source_opcodes[
 							source_argument.send_opline_index].op1_type == IS_CV) {
 					/*
-					 * By-value SEND dereferences a reference-cell CV. The direct-call
-					 * descriptor freezes the exact scalar payload type, allowing an
-					 * effect-closed clone to perform the same payload load locally.
+					 * By-value SEND dereferences a reference-cell CV; with the
+					 * payload type the descriptor fixed, the clone does the
+					 * same load.
 					 */
 					caller_abi = callee_abi;
 				}
@@ -12432,10 +12357,9 @@ static bool machine_cfg_register_cond_branch(
 		return true;
 	}
 	/*
-	 * Exact entry isset/empty and BOOL chains acquire their I1 result during
-	 * adaptor construction.  Their canonical source value deliberately remains
-	 * a zval, so recognize the frozen register-result producer before building
-	 * the boxed conditional diamond.
+	 * Entry isset/empty and BOOL chains get their I1 result in the adaptor
+	 * while their source value stays a zval: recognize the register-result
+	 * producer instead.
 	 */
 	if (typed_body || plan->value_definition_instructions == nullptr) {
 		return false;
@@ -12558,12 +12482,10 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 	}
 
 	/*
-	 * Scalar MIR opcodes define their descriptor-selected machine payload even
-	 * when the corresponding source SSA identity still has a canonical ZVAL
-	 * representation.  Freeze that payload identity before register authority
-	 * and operand transports are computed.  COPY and PHI then propagate it to a
-	 * fixed point so loop-carried scalar values have real backedge definitions
-	 * instead of repeatedly reloading the loop's initial canonical slot.
+	 * Scalar MIR opcodes define their descriptor's machine payload even when
+	 * the source SSA value is a canonical ZVAL. COPY and PHI propagate it to
+	 * a fixed point, so loop-carried scalars get backedge definitions instead
+	 * of reloads of the loop's initial slot.
 	 */
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		const zend_mir_instruction_record record =
@@ -12605,11 +12527,10 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 	};
 
 	/*
-	 * A deferred COPY/PHI input is safe only when its entire same-slot
-	 * dependency graph consists of other scalar-selectable COPY/PHI values.
-	 * Prune candidates backwards from boxed or pointer boundaries before the
-	 * fixed point below.  This prevents one scalar seed from promoting only
-	 * half of a mixed scalar/zval loop cycle.
+	 * A deferred COPY/PHI input is safe only when its whole same-slot
+	 * dependency graph consists of scalar-selectable COPY/PHI values.
+	 * Candidates are pruned back from boxed or pointer boundaries, so one
+	 * scalar seed cannot promote half of a mixed scalar/zval loop cycle.
 	 */
 	std::vector<uint8_t> scalar_copy_phi_candidates(plan->value_count);
 	for (uint32_t value_index = 0;
@@ -12740,11 +12661,9 @@ static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
 					scalar_machine_definition(input);
 				if (!machine_definition) {
 					/*
-					 * A loop-carried ZVAL component can be cyclic, so one incoming
-					 * COPY/PHI may not have been selected yet.  Defer that edge when
-					 * it names the same private canonical slot; an arbitrary boxed
-					 * argument or value-operation result remains a hard boundary.
-					 * Only COPY/PHI definitions are candidates.
+					 * In a cyclic loop-carried ZVAL component an incoming
+					 * COPY/PHI candidate of the same slot may not be selected
+					 * yet: defer that edge. Other boxed inputs are a boundary.
 					 */
 					if (input.representation == ZEND_MIR_REPRESENTATION_ZVAL
 							&& !input.canonical_alias_observable
@@ -12825,8 +12744,7 @@ static void freeze_machine_register_authority(
 			&& (argument_abi
 				|| value.location == ZEND_TPDE_MACHINE_LOCATION_REGISTER)
 			&& (argument_abi
-				|| (zend_mir_scalar_type_is_exact(exact_type)
-					&& exact_type != ZEND_MIR_SCALAR_TYPE_NULL)
+				|| zend_mir_scalar_type_is_exact(exact_type)
 				|| machine_value_kind_can_be_register_authoritative(
 					machine_kind));
 	}
@@ -13069,11 +12987,9 @@ static bool freeze_machine_operand_transports(
 	}
 
 	/*
-	 * Select transient definitions before classifying individual uses.  The
-	 * source scalar is not authoritative after ZVAL_STORE, but the store must
-	 * consume the newly computed payload rather than reload the old destination
-	 * zval.  Keeping this in the frozen plan makes the adaptor a mechanical
-	 * consumer of an explicit definition/use transport.
+	 * Transient definitions first: a scalar stored by ZVAL_STORE is not
+	 * register-authoritative, but the store consumes the computed payload
+	 * rather than reloading the destination zval.
 	 */
 	for (uint32_t instruction_index = 0;
 			instruction_index < plan->instruction_count;
@@ -13171,11 +13087,10 @@ static bool freeze_machine_operand_transports(
 					&& zend_mir_scalar_type_is_exact(
 						scalar_descriptor->operands[operand_index].exact_type)) {
 				/*
-				 * Scalar lowering may consume a canonical ZVAL identity using a
-				 * stronger source proof than the merged MIR value fact.  Freeze the
-				 * descriptor-required payload load here, while representation
-				 * selection still owns the transition, rather than presenting the
-				 * register allocator with an undefined ZVAL machine value.
+				 * Scalar lowering may consume a canonical ZVAL value on a
+				 * stronger source proof than the merged MIR fact: load the
+				 * payload the descriptor requires, so the register allocator
+				 * never sees an undefined ZVAL machine value.
 				 */
 				transport_type =
 					scalar_descriptor->operands[operand_index].exact_type;
@@ -13324,8 +13239,7 @@ static bool freeze_machine_required_values(
 	}
 
 	/* A typed body returns the value bound to RETURN_SOURCE_ZVAL, which is
-	 * no MIR operand of it; keep that value, such as the COPY of a returned
-	 * pi, defined in the typed body. */
+	 * no MIR operand of it; that value must be defined in the typed body. */
 	for (uint32_t instruction_index = 0;
 			instruction_index < plan->instruction_count;
 			++instruction_index) {
@@ -13341,9 +13255,8 @@ static bool freeze_machine_required_values(
 		}
 	}
 
-	/* A required TPDE value must have a machine representation in the
-	 * corresponding function. Canonical-slot-only values remain available to
-	 * source helpers, but cannot participate in register liveness. */
+	/* A required TPDE value needs a machine representation; canonical-slot
+	 * values serve source helpers but take no part in register liveness. */
 	for (uint32_t value = 0; value < plan->value_count; ++value) {
 		if (machine_plan_value_has_result_representation(
 				plan, plan->values[value].id)) {
@@ -13967,8 +13880,8 @@ static bool freeze_component_machine_plan(
 	 * freeze_typed_component_calls depends only on frozen plan facts and on
 	 * each callee's typed_body_eligible and typed_body_return_abi. A member's
 	 * call freeze is kept with those callee facts and repeated only when they
-	 * change; its machine control-flow flags and body indices before any call freeze
-	 * restore it. The kept freeze is the final one when the facts still match.
+	 * change; the control-flow flags and body indices saved before the first
+	 * freeze undo it. The kept freeze is final when the facts still match.
 	 */
 	struct component_call_freeze {
 		bool frozen = false;
@@ -14192,11 +14105,9 @@ static bool freeze_component_machine_plan(
 		}
 		/*
 		 * Typed-body eligibility rejects effectful and helper-backed
-		 * instructions.  A frozen component-local typed call is therefore the
-		 * only remaining call-producing instruction in that function view.
-		 * Zend entries retain the aggregate helper fact and may also contain a
-		 * direct typed-body call.  Keep unwind facts separate so future cold
-		 * helper functions do not have to widen either hot function.
+		 * instructions, so a typed component call is the only call a typed
+		 * body emits. A Zend entry keeps the helper fact and may also make a
+		 * typed-body call; the unwind facts of both are kept apart.
 		 */
 		for (uint32_t instruction = 0;
 				instruction < plans[index].instruction_count; ++instruction) {
@@ -14305,9 +14216,8 @@ zend_native_image_metrics collect_plan_metrics(const zend_tpde_plan &plan) {
 							!= ZEND_CALLABLE_CONVERT
 						&& instruction.user_call->do_opcode
 							!= ZEND_CALLABLE_CONVERT_PARTIAL))) {
-			/* Both fixed and runtime-resolved user targets use the universal
-			 * direct Zend-frame path. Descriptor storage is an implementation
-			 * detail and must not change the semantic site count. */
+			/* Fixed and runtime-resolved user targets both count as direct
+			 * Zend-frame call sites, whatever descriptor they carry. */
 			metrics.direct_call_sites++;
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
@@ -14323,12 +14233,10 @@ zend_native_image_metrics collect_plan_metrics(const zend_tpde_plan &plan) {
 					& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0;
 
 			/*
-			 * Typed/effect-closed calls and an inline-frame call's successful
-			 * steady-state path emit no runtime-helper call. A remaining
-			 * descriptor uses the canonical user-call frame entry and finish
-			 * sites around the native callee. Guarded stack growth and
-			 * exception/interrupt completion are correctness slow paths, not
-			 * per-inner-call steady-state sites.
+			 * Typed and effect-closed calls and the fast path of an
+			 * inline-frame call make no helper call; any other descriptor
+			 * calls the frame entry and finish helpers. Stack growth and
+			 * exception or interrupt completion are slow paths, not counted.
 			 */
 			if (!typed_component_call
 					&& !effect_closed_inline
@@ -14418,11 +14326,6 @@ int32_t zend_tpde_instruction_index(
 		plan->instruction_index, plan->instruction_index_capacity, id);
 }
 
-const zend_tpde_instruction *zend_tpde_instruction_at(
-	const zend_tpde_plan *plan, uint32_t index) {
-	return index < plan->instruction_count ? &plan->instructions[index] : nullptr;
-}
-
 const zend_mir_instruction_record &zend_tpde_instruction_record_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction *instruction) {
@@ -14479,16 +14382,6 @@ bool zend_tpde_image_append(
 	std::memcpy(image->text + image->text_size, bytes, length);
 	image->text_size = needed;
 	return true;
-}
-
-bool zend_tpde_image_u8(zend_native_image *image, uint8_t value) {
-	return zend_tpde_image_append(image, &value, sizeof(value));
-}
-bool zend_tpde_image_u32(zend_native_image *image, uint32_t value) {
-	return zend_tpde_image_append(image, &value, sizeof(value));
-}
-bool zend_tpde_image_u64(zend_native_image *image, uint64_t value) {
-	return zend_tpde_image_append(image, &value, sizeof(value));
 }
 
 const zend_native_image_symbol *zend_tpde_image_symbol_find(

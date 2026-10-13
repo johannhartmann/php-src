@@ -266,12 +266,10 @@ static void zend_mir_phi_join_inputs(
 }
 
 /*
- * Refcounted and dynamically typed value operations execute against the
- * real source frame.  Zend SSA can still contain merge nodes for those slots
- * after the private scalar prerequisite projection removes the defining value
- * opcodes.  Keep the original PHI topology and stable IDs, but represent the
- * entire connected dynamic-PHI component as zvals without inventing scalar
- * facts for it.
+ * Refcounted and dynamically typed value operations act on the source frame,
+ * but Zend SSA still has merges for their slots once the scalar projection
+ * removes the defining opcodes. Such PHIs keep their topology and ids; their
+ * whole connected component is represented as zvals, without scalar facts.
  */
 static bool zend_mir_phi_analysis_init(
 	const zend_mir_lowering_context *context,
@@ -445,12 +443,10 @@ static bool zend_mir_cf_fact_for_ssa(
 				&& !zend_mir_raw_fact_for_ssa(context, ssa_variable_id,
 					fact_out, representation_out))) {
 		/*
-		 * Executable value operations act on the canonical source zval when
-		 * Zend's analysis cannot prove one exact non-refcounted scalar type.
-		 * Undefined CV inputs are one important example: COALESCE must observe
-		 * them without a warning, and its merge result still needs a declared
-		 * MIR value.  Predeclare all such source SSA identities as zvals
-		 * instead of silently omitting them.
+		 * A value without one proven exact non-refcounted scalar type lives
+		 * in its source zval and is declared as a zval. For example COALESCE
+		 * reads an undefined CV without a warning, and its merge result
+		 * still needs a MIR value.
 		 */
 		memset(fact_out, 0, sizeof(*fact_out));
 		fact_out->id = ZEND_MIR_ID_INVALID;
@@ -1106,7 +1102,7 @@ zend_mir_lowering_result zend_mir_lower_control_flow_zend_source(
 			zend_mir_cf_result(ZEND_MIR_LOWERING_SUCCESS, ZEND_MIRL_OK);
 		result.guarantees = ZEND_MIR_LOWERING_GUARANTEE_VERIFIED;
 		result.module = module;
-		/* The mapping is deliberately invalidated immediately after stage 3. */
+		/* The map is valid only through stage-3 verification. */
 		zend_mir_phi_analysis_destroy(&phi_analysis);
 		zend_mir_control_flow_map_storage_destroy(&storage);
 		memset(map, 0, sizeof(*map));

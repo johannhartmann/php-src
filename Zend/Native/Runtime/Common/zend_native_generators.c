@@ -1,4 +1,4 @@
-/* Exact Zend generator lifecycle semantics for native frames. */
+/* Zend generator lifecycle semantics for native frames. */
 
 #include "Zend/Native/Runtime/Common/zend_native_generators.h"
 #include "Zend/Native/Runtime/Common/zend_native_operands.h"
@@ -493,21 +493,20 @@ void zend_native_generator_uncaught_exception(
 				>= (uintptr_t) (op_array->opcodes + op_array->last)
 			|| ((uintptr_t) throw_opline - (uintptr_t) op_array->opcodes)
 				% sizeof(zend_op) != 0) {
-		/* A fatal unwind may clear the process-wide source pointer before this
-		 * generator is closed. Position zero has no active temporary live range;
-		 * it is the conservative valid location for the generic close machinery. */
+		/* A fatal unwind may clear the source pointer before the generator
+		 * is closed. Position zero has no live temporary, so the generic
+		 * close releases nothing it should not. */
 		throw_opline = op_array->opcodes;
 	}
-	/* zend_generator_close() derives its unfinished live ranges from EX(opline).
-	 * Native execution never dispatches HANDLE_EXCEPTION, so publish the
-	 * recovered source location before transferring ownership. */
+	/* zend_generator_close() derives the unfinished live ranges from
+	 * EX(opline); native execution never dispatches HANDLE_EXCEPTION. */
 	execute_data->opline = throw_opline;
 	ZEND_OBSERVER_FCALL_END(execute_data, NULL);
 	EG(current_execute_data) = execute_data->prev_execute_data;
 	/*
 	 * Unlike GENERATOR_RETURN, an exceptional exit can leave source
 	 * temporaries live at the throwing opline. The unfinished close performs
-	 * their exact Zend cleanup before releasing the heap frame.
+	 * their Zend cleanup before releasing the heap frame.
 	 */
 	zend_generator_close(generator, false);
 }

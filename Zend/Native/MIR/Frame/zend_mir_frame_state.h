@@ -43,8 +43,8 @@ typedef struct _zend_mir_frame_continuation_spec {
 } zend_mir_frame_continuation_spec;
 
 /*
- * This is an immutable snapshot. The extra scalars carry effect-model fields
- * that are not part of the frame-state reference record.
+ * Immutable snapshot. The extra fields belong to the effect model and are not
+ * part of zend_mir_frame_state_ref.
  */
 typedef struct _zend_mir_frame_state_record {
 	zend_mir_frame_state_ref ref;

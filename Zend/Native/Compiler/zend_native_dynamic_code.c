@@ -415,6 +415,11 @@ zend_native_status zend_native_execute_include_or_eval(
 	call->prev_execute_data = execute_data;
 	zend_init_code_execute_data(call, new_op_array, result);
 	EG(current_execute_data) = previous;
+	/*
+	 * The compiler takes ownership even when compilation fails: the codeunit
+	 * root must live while declarations, closures or active frames can still
+	 * reach any child op_array.
+	 */
 	if (!zend_native_dynamic_compiler_adopt(compiler, new_op_array)) {
 		zend_vm_stack_free_call_frame(call);
 		zend_destroy_static_vars(new_op_array);
@@ -520,10 +525,5 @@ zend_native_status zend_native_execute_include_or_eval(
 			ZEND_ADD_CALL_FLAG(execute_data, ZEND_CALL_NEEDS_REATTACH);
 		}
 	}
-	/*
-	 * The compiler takes ownership even when compilation fails. The native
-	 * registry must retain the codeunit root while declarations, closures or
-	 * active frames can still reach any child op_array.
-	 */
 	return EG(exception) == NULL ? status : ZEND_NATIVE_EXCEPTION;
 }

@@ -1,4 +1,4 @@
-/* Exact source-backed object operations for native frames. */
+/* Source-backed object operations for native frames. */
 
 #include "Zend/Native/Runtime/Common/zend_native_objects.h"
 
@@ -211,11 +211,9 @@ static void zend_native_object_replace(zval *target, zval *value)
 		}
 		return;
 	}
-	/* Opcode result slots are dead on entry, but temporary stack storage is
-	 * intentionally not cleared when a frame is recycled.  Destructing the
-	 * stale bits here can therefore release a value owned by an older frame.
-	 * Native opcode implementations must overwrite result slots exactly like
-	 * their VM counterparts and only consume explicit source operands. */
+	/* Result slots are dead on entry but not cleared when a frame is
+	 * recycled: releasing their stale bits could release a value an older
+	 * frame owns. Results are overwritten, as in the VM. */
 	ZVAL_COPY_DEREF(target, value);
 }
 
@@ -931,8 +929,8 @@ static zend_native_status zend_native_object_assign_ref_explicit(
 
 	ZEND_ASSERT(receiver != NULL && property != NULL && value != NULL
 		&& (result != NULL || operation->result_type == IS_UNUSED));
-	/* OP_DATA is fetched with BP_VAR_W by the VM.  An undefined CV therefore
-	 * becomes NULL before reference type validation and binding. */
+	/* The VM fetches OP_DATA with BP_VAR_W: an undefined CV becomes NULL
+	 * before reference type validation and binding. */
 	if (operation->auxiliary_type == IS_CV && Z_TYPE_P(value) == IS_UNDEF) {
 		ZVAL_NULL(value);
 	}
@@ -1327,7 +1325,6 @@ static zend_native_status zend_native_object_incdec_explicit(
 	zval *read;
 	zval *written;
 	zend_property_info *property_info;
-	zend_result update_status;
 
 	ZVAL_UNDEF(&current);
 	ZEND_ASSERT(receiver != NULL && property != NULL
@@ -1375,9 +1372,9 @@ static zend_native_status zend_native_object_incdec_explicit(
 		cache_slot = (void **) ((char *) execute_data->run_time_cache
 			+ operation->extended_value);
 	}
-	/* The result slot may reuse the temporary receiver slot. Keep the object
-	 * alive until both halves of an overloaded read/write operation complete,
-	 * matching zend_{pre,post}_incdec_overloaded_property(). */
+	/* The result slot may reuse the temporary receiver slot: the object
+	 * stays alive until both halves of an overloaded read/write complete,
+	 * as in zend_{pre,post}_incdec_overloaded_property(). */
 	GC_ADDREF(object);
 	property_ptr = object->handlers->get_property_ptr_ptr(
 		object, name, BP_VAR_RW, cache_slot);
@@ -1406,19 +1403,18 @@ static zend_native_status zend_native_object_incdec_explicit(
 	if (result != NULL && post) {
 		zend_native_object_replace(result, &current);
 	}
-	update_status = decrement
-		? decrement_function(&current) : increment_function(&current);
-	/* Overloaded properties must still receive the updated value when the
-	 * inc/dec operation raises. The VM helper performs this write
-	 * unconditionally so magic-property side effects and diagnostics happen
-	 * before temporary receiver cleanup. */
-	if (property_ptr == NULL
-			|| (EG(exception) == NULL && update_status == SUCCESS)) {
-		written = object->handlers->write_property(
-			object, name, &current, cache_slot);
-		if (result != NULL && !post && written != NULL) {
-			zend_native_object_replace(result, written);
-		}
+	if (decrement) {
+		decrement_function(&current);
+	} else {
+		increment_function(&current);
+	}
+	/* Written even when the inc/dec raised, as the VM's
+	 * zend_{pre,post}_incdec_overloaded_property() writes it, so magic
+	 * side effects and diagnostics precede the receiver's release. */
+	written = object->handlers->write_property(
+		object, name, &current, cache_slot);
+	if (result != NULL && !post && written != NULL) {
+		zend_native_object_replace(result, written);
 	}
 complete:
 	OBJ_RELEASE(object);
@@ -3050,9 +3046,9 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
 /*
  * isset() and empty() of a defined declared property of $this, a CV or a
  * shared temporary object under a literal name whose class and offset the
- * run-time cache slot holds, as
- * zend_std_has_property() answers them; an undefined slot, an object value
- * of empty() and every other form take the explicit operation.
+ * run-time cache slot holds, as zend_std_has_property() answers them; an
+ * undefined slot, an object value of empty() and every other form take the
+ * explicit operation.
  */
 zend_native_status zend_native_execute_object_isset_isempty(
 	zend_execute_data *execute_data,
@@ -3463,7 +3459,7 @@ ZEND_NATIVE_OBJECT_EXPLICIT_HELPER(
  * class, which begins a new native generation: the run-time cache of a
  * later request starts with them, so the operation's first execution takes
  * its cached path instead of resolving the property again. Dynamic and
- * hooked properties and other classes resolve per request as before.
+ * hooked properties and other classes resolve per request.
  *
  * The resolutions are learned at request shutdown from the run-time caches
  * of the op arrays whose templates still learn. The templates live per

@@ -916,10 +916,9 @@ static bool zend_mir_build_block_index(
 		}
 	}
 	/*
-	 * Control-flow lowering invalidates its process-local block map once it
-	 * returns. Its persistent block order is nevertheless source-backed: reachable
-	 * source blocks are created once, in source-table order, before calls or
-	 * value operations are appended. Reconstruct only that stable ordinal.
+	 * The block map of control-flow lowering is gone, but its block order is
+	 * source-backed: reachable source blocks are created once, in source-table
+	 * order, before calls or value operations are appended.
 	 */
 	for (index = 0; index < source->block_count(source->context); index++) {
 		zend_mir_source_block_ref source_block;
@@ -1854,10 +1853,8 @@ bool zend_mir_emit_executable_values(
 			continue;
 		}
 		/*
-		 * Scalar lowering already owns the complete semantics and dataflow
-		 * for these source operations. Emitting the executable-zval
-		 * operation as well would replay the same assignment or increment
-		 * against the Zend frame after the machine SSA result was produced.
+		 * Scalar lowering owns these operations; an executable-zval operation
+		 * would replay the assignment or increment against the Zend frame.
 		 */
 		if (scalarized_opcodes != NULL && scalarized_opcodes[index]) {
 			continue;
@@ -1934,12 +1931,11 @@ bool zend_mir_emit_executable_values(
 				? semantic_ssa->ops[index].op1_use : -1;
 
 			/*
-			 * VERIFY_RETURN_TYPE and the following RETURN share the same
-			 * physical carrier, but Zend SSA intentionally omits the second
-			 * use. Preserve the last explicit source-backed SSA identity so
-			 * the attached return descriptor remains exact and pointer-free.
-			 * Any other RETURN keeps its own use: a join such as the result of
-			 * `$a && $b` is a PHI, not the last definition in opline order.
+			 * VERIFY_RETURN_TYPE and the following RETURN share one carrier,
+			 * but Zend SSA omits the second use: keep the last source-backed
+			 * SSA identity. Any other RETURN keeps its own use: a join such as
+			 * the result of `$a && $b` is a phi, not the last definition in
+			 * opline order.
 			 */
 			operation->op1.ssa_variable_id =
 				use >= 0 && (uint32_t) use < source_ssa_count
@@ -2025,11 +2021,9 @@ bool zend_mir_emit_executable_values(
 
 				/*
 				 * COND_BRANCH describes topology, not the condition carrier.
-				 * A real non-zval MIR operand is already machine-defined and
-				 * must remain on the direct branch path. Control flow whose
-				 * condition is a canonical source zval uses the same
-				 * topology; only that case needs the explicit source
-				 * operation.
+				 * A non-zval MIR condition is machine-defined and stays on
+				 * the direct branch path; only a source zval condition needs
+				 * the explicit source operation.
 				 */
 				machine_condition =
 					view->instruction_operand_count(
@@ -2171,10 +2165,9 @@ static zend_mir_value_category zend_mir_type_category(uint32_t type)
 	uint32_t categories = 0;
 
 	/*
-	 * UNDEF and refcount/cardinality bits qualify a concrete value; they do
-	 * not create another value category. Multiple scalar alternatives remain
-	 * one non-refcounted category, while a scalar/refcounted union stays
-	 * deliberately unknown.
+	 * UNDEF and refcount/cardinality bits qualify a concrete value, not a
+	 * category. Several scalar alternatives are one non-refcounted category;
+	 * a scalar/refcounted union stays unknown.
 	 */
 	if ((concrete & scalar_types) != 0) {
 		categories |= UINT32_C(1) << ZEND_MIR_VALUE_NON_REFCOUNTED_SCALAR;

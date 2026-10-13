@@ -1488,11 +1488,8 @@ void zend_optimize_runtime_op_array(zend_op_array *op_array, bool is_eval)
 	ZEND_ASSERT(op_array->fn_flags & ZEND_ACC_DONE_PASS_TWO);
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.arena = zend_arena_create(64 * 1024);
-	/*
-	 * Request-local op arrays have no zend_script owner.  These selected
-	 * passes either need no script or deliberately consult executor tables
-	 * when ctx.script is NULL.
-	 */
+	/* Request-local op arrays have no zend_script. These passes either need
+	 * none or consult the executor tables when ctx.script is NULL. */
 	ctx.script = NULL;
 	if (is_eval) {
 		ctx.optimization_level = ZEND_OPTIMIZER_PASS_9;

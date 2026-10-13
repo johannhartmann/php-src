@@ -177,7 +177,7 @@ bool zend_mir_module_fail(zend_mir_module *module, zend_mir_diagnostic_code code
 bool zend_mir_module_require_building(zend_mir_module *module);
 bool zend_mir_module_grow_table(zend_mir_module *module, zend_mir_core_table *table,
 	size_t item_size, size_t item_alignment, uint32_t limit);
-/* Grows the table as growing it one item at a time up to count items would. */
+/* Reserves count items, at the capacity that one-item growth would reach. */
 bool zend_mir_module_reserve_table(zend_mir_module *module,
 	zend_mir_core_table *table, size_t item_size, size_t item_alignment,
 	uint32_t limit, uint32_t count);

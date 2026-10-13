@@ -155,19 +155,15 @@ typedef struct _zend_mir_call_transfer_ref {
 } zend_mir_call_transfer_ref;
 
 /*
- * Canonical physical Zend-frame location for an original source-SSA value.
- * The record contains stable IDs only. Multiple SSA identities may name the
- * same storage across control-flow edges; machine-code lowering uses that
- * equality to prove when a boxed PHI requires no machine-register parallel
- * copy. storage_id is in the physical frame-slot namespace used by executable
- * operands, not an index into the independent semantic-storage table.
+ * Physical Zend-frame location of an original source-SSA value. Several SSA
+ * identities may name the same storage across control-flow edges; machine-code
+ * lowering relies on that equality to omit the parallel copy of a boxed PHI.
+ * storage_id is a physical frame-slot id as used by executable operands, not
+ * an index into the semantic storage table.
  *
- * frame_argument_ordinal_plus_one explicitly identifies a value produced by
- * a source RECV/RECV_INIT. Zero means that the value is not a function input;
- * otherwise the encoded ordinal is one-based so a zero-initialized record
- * means "not an argument". This is source-backed MIR metadata: target
- * adaptors must not recover argument identities by decoding Zend opcodes or
- * by guessing from later frame-slot states.
+ * frame_argument_ordinal_plus_one is the one-based ordinal of a value produced
+ * by RECV/RECV_INIT, or zero for any other value. Target adaptors take argument
+ * identity from here, never from Zend opcodes or later frame-slot states.
  */
 typedef struct _zend_mir_value_location_ref {
 	zend_mir_value_id value_id;
@@ -274,17 +270,15 @@ typedef struct _zend_mir_executable_value_ref {
 	zend_mir_source_operand_ref op2;
 	zend_mir_source_operand_ref result;
 	/*
-	 * Some Zend operations attach a stable 32-bit discriminator or table
-	 * index to an IS_UNUSED operand. Preserve that scalar payload explicitly;
-	 * it is zero for every non-UNUSED operand and never contains a pointer.
+	 * Some Zend operations attach a 32-bit discriminator or table index to an
+	 * IS_UNUSED operand. Zero for every other operand; never a pointer.
 	 */
 	uint32_t op1_unused_payload;
 	uint32_t op2_unused_payload;
 	uint32_t result_unused_payload;
 	/*
-	 * Auxiliary value carried by a following ZEND_OP_DATA.  It is copied
-	 * into the executable model while source SSA is alive so assignment
-	 * helpers never rediscover value semantics from an adjacent zend_op.
+	 * Value carried by a following ZEND_OP_DATA, copied while source SSA is
+	 * alive so assignment helpers never inspect the adjacent zend_op.
 	 */
 	zend_mir_source_operand_ref auxiliary;
 	uint32_t auxiliary_unused_payload;
@@ -299,9 +293,8 @@ typedef struct _zend_mir_executable_value_ref {
 	zend_mir_storage_id auxiliary_storage_id;
 	/*
 	 * In-place Zend operations define a new SSA version of op1 without
-	 * necessarily exposing a PHP result operand. Zero means no definition;
-	 * otherwise the stable original SSA id is stored plus one so C zero
-	 * initialization remains the canonical absence spelling.
+	 * necessarily having a result operand: its original SSA id plus one, or
+	 * zero for none.
 	 */
 	uint32_t op1_definition_ssa_variable_id_plus_one;
 	uint32_t extended_value;

@@ -1027,9 +1027,8 @@ zend_result zend_native_call_set_explicit_argument(
 		if (indirect_value) {
 			/*
 			 * FETCH_*_FUNC_ARG exposes an lvalue through an IS_INDIRECT
-			 * temporary.  The temporary owns no part of the referenced
-			 * element, so a by-value send copies the referent and consumes
-			 * only the indirect wrapper.
+			 * temporary that owns no part of the element: a by-value send
+			 * copies the referent and consumes only the wrapper.
 			 */
 			zend_native_zval_copy_deref_or_dup(target, value);
 			zend_native_release_source_operand(source_value, operand_type);
@@ -1044,9 +1043,9 @@ zend_result zend_native_call_set_explicit_argument(
 				zend_native_zval_copy_deref_or_dup(target, target);
 			}
 			/*
-			 * The reference wrapper has been consumed explicitly above.  Optimized
-			 * op arrays may reuse this physical temporary for a later definition;
-			 * native result helpers require a consumed slot to be undefined.
+			 * The reference wrapper was consumed above. A later definition
+			 * may reuse the slot, and native result helpers require a
+			 * consumed slot to be undefined.
 			 */
 			ZVAL_UNDEF(source_value);
 		} else {
@@ -1061,9 +1060,9 @@ zend_result zend_native_call_set_explicit_argument(
 		return FAILURE;
 	}
 	/*
-	 * SEND_VAL_EX is never an lvalue, even when its TMP slot is mutable.
-	 * The VM rejects it before reading the value when the resolved parameter
-	 * requires a reference; do not turn the temporary into a reference cell.
+	 * SEND_VAL_EX is never an lvalue, even when its TMP slot is mutable: the
+	 * VM rejects it before reading the value when the resolved parameter
+	 * requires a reference.
 	 */
 	if (argument->source_opcode == ZEND_SEND_VAL_EX
 			&& ARG_MUST_BE_SENT_BY_REF(function, argument_number)) {
@@ -1073,10 +1072,9 @@ zend_result zend_native_call_set_explicit_argument(
 	}
 	/*
 	 * SEND_VAR_NO_REF passes a temporary to a parameter that requires a
-	 * reference.  The VM moves the temporary into the call frame and wraps
-	 * that frame slot, rather than turning the consumed source slot into a
-	 * reference.  The EX form only diagnoses MUST_REF; PREFER_REF accepts the
-	 * same temporary by value.
+	 * reference: the VM moves the temporary into the call frame and wraps
+	 * that frame slot, not the consumed source slot. The EX form diagnoses
+	 * only MUST_REF; PREFER_REF accepts the temporary by value.
 	 */
 	if (argument->source_opcode == ZEND_SEND_VAR_NO_REF
 			|| (argument->source_opcode == ZEND_SEND_VAR_NO_REF_EX
@@ -1103,14 +1101,10 @@ zend_result zend_native_call_set_explicit_argument(
 		return EG(exception) == NULL ? SUCCESS : FAILURE;
 	}
 	/*
-	 * SEND_VAR_EX and SEND_REF materialize a reference in the canonical
-	 * caller slot when the resolved parameter requires one.  The native
-	 * path must perform the same mutation before the argument is copied into
-	 * the internal call frame; literals can never become by-reference args.
-	 */
-	/*
-	 * PREFER_REF accepts literals by value while still passing mutable lvalues
-	 * by reference.  Only MUST_REF rejects a non-lvalue source.
+	 * SEND_VAR_EX and SEND_REF make the caller's slot a reference, before
+	 * the argument is copied into the frame, when the resolved parameter
+	 * requires one. PREFER_REF accepts literals by value but passes mutable
+	 * lvalues by reference; only MUST_REF rejects a non-lvalue source.
 	 */
 	direct_send_by_reference =
 		argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
@@ -1482,10 +1476,9 @@ static zend_never_inline zend_native_status zend_native_internal_call_run(
 			status = EG(exception) != NULL
 				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 		} else {
-			/* Internal handlers own their parameter parsing and error ordering.
-			 * Some handlers intentionally perform semantic checks before reporting
-			 * an argument-count mismatch, so a generic native precheck would not
-			 * match ZEND_DO_ICALL. */
+			/* Internal handlers parse their own parameters, and some check
+			 * semantics before reporting an argument-count mismatch: a
+			 * generic precheck would not match ZEND_DO_ICALL. */
 #if ZEND_DEBUG
 			bool should_throw = zend_internal_call_should_throw(
 				call->func, call);
@@ -2491,18 +2484,17 @@ uint32_t zend_native_catch_enter(
 		return ZEND_NATIVE_CATCH_EXCEPTION;
 	}
 	/*
-	 * Source-backed argument evaluation can raise after a universal native call
-	 * setup has published its callee but before the call phase itself runs.  In
-	 * that state the callee is owned by the active direct-call record, not by the
-	 * VM's unfinished-call chain.  Release it before the VM cleanup below walks
-	 * execute_data->call; its activation records the real preceding pending call
-	 * and restores both that link and the VM-stack top.
+	 * An argument can raise after a universal call published its callee but
+	 * before the call runs. The callee then belongs to the active direct-call
+	 * record, not to the VM's unfinished-call chain: release it before the
+	 * cleanup below walks execute_data->call. Its activation restores the
+	 * preceding pending call and the VM stack top.
 	 */
 	zend_native_call_direct_unwind(execute_data);
 	/*
-	 * A native exception edge bypasses the VM's HANDLE_EXCEPTION dispatch.
-	 * Retire live temporaries and restore BEGIN_SILENCE state before entering
-	 * the source catch, using the same source-opline interval as the VM.
+	 * A native exception edge bypasses the VM's HANDLE_EXCEPTION dispatch:
+	 * live temporaries are released and the BEGIN_SILENCE state restored
+	 * over the same source-opline interval as the VM's.
 	 */
 	throw_opline = execute_data->opline;
 	if (throw_opline == EG(exception_op)
@@ -2520,10 +2512,9 @@ uint32_t zend_native_catch_enter(
 			&& !chained_catch) {
 		uint32_t source_position =
 			(uint32_t) (throw_opline - op_array->opcodes);
-		/* Match ZEND_HANDLE_EXCEPTION for a destructor raised by the synthetic
-		 * FREE emitted for return/break cleanup.  The compiler already routes
-		 * this edge from the final loop FREE; use that same logical source here
-		 * before the runtime catch/finally walk repeats the selection. */
+		/* As ZEND_HANDLE_EXCEPTION for a destructor raised by the FREE of a
+		 * return/break cleanup: the compiler routes this edge from the
+		 * loop's end, so the walk below starts there too. */
 		if ((throw_opline->opcode == ZEND_FREE
 				|| throw_opline->opcode == ZEND_FE_FREE)
 				&& (throw_opline->extended_value
@@ -2866,9 +2857,9 @@ static uint32_t zend_native_finally_complete_forced_generator(
 	}
 	ZEND_OBSERVER_FCALL_END(execute_data, NULL);
 	EG(current_execute_data) = execute_data->prev_execute_data;
-	/* Forced finally propagation exits before the source generator reaches its
-	 * natural return. Preserve unfinished-execution cleanup for active loop and
-	 * temporary live ranges, matching the VM destructor path. */
+	/* A forced finally exits before the generator's return: as on the VM's
+	 * destructor path, the unfinished close releases the live loop and
+	 * temporary ranges. */
 	zend_generator_close(generator, false);
 	return ZEND_NATIVE_FINALLY_GENERATOR_RETURNED;
 }
@@ -3008,10 +2999,9 @@ void zend_native_interrupt_poll(
 	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(execute_data);
 		/*
-		 * Generated code has no VM exception-dispatch continuation at an
-		 * asynchronous backedge. Transfer to the C-only native frame boundary,
-		 * which preserves EG(exception) and restores the complete Zend frame
-		 * chain before returning to the caller.
+		 * Generated code has no exception continuation at an asynchronous
+		 * backedge: the native frame boundary keeps EG(exception) and
+		 * restores the Zend frame chain before returning to the caller.
 		 */
 		if (UNEXPECTED(EG(exception) != NULL)) {
 			zend_bailout();

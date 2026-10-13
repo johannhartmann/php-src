@@ -1118,12 +1118,8 @@ zend_result zend_post_startup(void) /* {{{ */
 	startup_done = true;
 
 #ifdef HAVE_NATIVE_ENGINE
-	/*
-	 * OPcache performs preload through the post-startup callback and opens a
-	 * complete request while doing so.  Install the global executor before
-	 * that request so preload follows the same native userland cutover and
-	 * ZTS synchronization is live before zend_activate().
-	 */
+	/* OPcache preloads from the post-startup callback inside a full request,
+	 * which must already run on the native executor. */
 	if (zend_native_executor_startup() == FAILURE) {
 		return FAILURE;
 	}
@@ -1384,11 +1380,9 @@ ZEND_API void zend_deactivate(void) /* {{{ */
 		shutdown_scanner();
 	} zend_end_try();
 
-	/* Release quiescent request-local native compilers before object-store
-	 * shutdown checks refcounts held by their dynamic source codeunits. Leased
-	 * or suspended generations remain pinned until the normal post-executor
-	 * native deactivation below. */
 #ifdef HAVE_NATIVE_ENGINE
+	/* Idle request-local native compilers hold references to dynamic source
+	 * and must be released before the object store is shut down. */
 	zend_native_executor_prepare_shutdown();
 #endif
 
@@ -1396,9 +1390,8 @@ ZEND_API void zend_deactivate(void) /* {{{ */
 	shutdown_executor();
 
 #ifdef HAVE_NATIVE_ENGINE
-	/* Suspended generators retain their native code generation until executor
-	 * shutdown releases the remaining objects. Tear down request generations
-	 * only after those final generator frames have relinquished their leases. */
+	/* Suspended generators keep their native code alive until
+	 * shutdown_executor() releases them. */
 	zend_native_executor_deactivate();
 #endif
 
@@ -1674,8 +1667,8 @@ ZEND_API ZEND_COLD void zend_error_zstr_at(
 /* }}} */
 
 #ifdef HAVE_NATIVE_ENGINE
-/* A bailout out of a fatal error releases its message before the jump
- * (zend_native_bailout_unwind()): native_mir_test continues the request. */
+/* Releases the message when a fatal error bails out; native_mir_test
+ * continues the request after the bailout. */
 typedef struct _zend_error_message_record {
 	zend_native_bailout_record record;
 	zend_string *message;

@@ -437,9 +437,9 @@ zend_mir_lowering_status zend_mir_lower_free(
 		return ZEND_MIR_LOWERING_FAILED;
 	}
 	/*
-	 * SCALAR_DROP is the profiled, effect-free marker for an owned
-	 * non-refcounted scalar.  The provider-local terminal state prevents
-	 * subsequent lowering from reusing or consuming the source.
+	 * SCALAR_DROP is an effect-free marker for an owned non-refcounted
+	 * scalar. The RELEASED state keeps later lowering from reusing or
+	 * consuming the source.
 	 */
 	tracked->ownership = ZEND_MIR_OWNERSHIP_STATE_RELEASED;
 	for (index = 0; index < provider_context->entry->slot_count; index++) {

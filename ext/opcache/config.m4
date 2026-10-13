@@ -19,9 +19,7 @@ PHP_ARG_WITH([capstone],
   [no],
   [no])
 
-dnl The native engine is the only userland code generator in native builds.
-dnl Keeping the legacy OPcache JIT linked would preserve a second compiler,
-dnl executable-code allocator, and runtime dispatch surface.
+dnl The native engine replaces the OPcache JIT.
 AS_VAR_IF([PHP_NATIVE_ENGINE], [yes], [
   PHP_OPCACHE_JIT=no
 ])

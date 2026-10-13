@@ -1620,7 +1620,7 @@ bool zend_mir_module_compose_instructions(zend_mir_module *module,
 			(block_count == 0 ? 1 : (size_t) block_count) * sizeof(*call_begin));
 		call_end = malloc(
 			(block_count == 0 ? 1 : (size_t) block_count) * sizeof(*call_end));
-		/* By call site. */
+		/* Indexed by call site. */
 		inserted = calloc(call_count, sizeof(*inserted));
 	}
 	if ((total_count != 0 && new_instructions == NULL)
@@ -1784,11 +1784,10 @@ bool zend_mir_module_compose_instructions(zend_mir_module *module,
 	}
 #undef ZEND_MIR_PLACE_CALL
 	/*
-	 * Suspendable functions may end a reachable block at a source-level
-	 * suspension without a conventional MIR terminator. Such a block still
-	 * owns executable operations (GENERATOR_CREATE/YIELD/RETURN), and their
-	 * only correct insertion point is after the block's existing instruction
-	 * stream. An operation after a block's terminator would be malformed.
+	 * A block of a suspendable function may end at a source-level suspension
+	 * without a MIR terminator; its remaining operations (GENERATOR_CREATE,
+	 * YIELD, RETURN) go after its instructions. After a terminator they would
+	 * be malformed.
 	 */
 	for (index = 0; index < operation_count; index++) {
 		zend_mir_executable_value_ref *operation = &operations[index];

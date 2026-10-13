@@ -1134,11 +1134,9 @@ ZEND_API zend_result zend_build_ssa(zend_arena **arena, const zend_script *scrip
 		return FAILURE;
 	}
 	if (build_flags & ZEND_SSA_PROTECTED_REGIONS) {
-		/* Catch blocks are exception entries and therefore have no ordinary
-		 * CFG predecessor. Rename each disconnected protected-region root so
-		 * its definitions and its outgoing finally-edge Phi inputs are present.
-		 * CVs start conservatively at their entry versions; Native execution
-		 * materializes the authoritative values in execute-data slots. */
+		/* Catch blocks have no CFG predecessor. Rename each disconnected
+		 * protected-region root so its definitions and outgoing Phi inputs
+		 * exist. CVs start at their entry versions. */
 		for (j = 1; j < blocks_count; j++) {
 			if ((blocks[j].flags & ZEND_BB_REACHABLE) == 0
 					|| blocks[j].idom >= 0) {

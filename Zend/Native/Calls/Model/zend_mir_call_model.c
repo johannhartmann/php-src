@@ -516,9 +516,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_source_sequence(
 			}
 			stack[stack_count++] = site->id;
 		} else if (zend_mir_is_call_init(opcode.zend_opcode_number)) {
-			/* The frontend inventory intentionally excludes unreachable blocks.
-			 * Their source opcodes remain addressable for diagnostics, but they
-			 * cannot participate in the executable call sequence. */
+			/* An INIT in an unreachable block, which the frontend inventory
+			 * excludes, takes no part in the call sequence. */
 			continue;
 		}
 		if (zend_mir_id_is_valid(argument_id)) {
@@ -812,19 +811,14 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 			} else if (result_flags == 0
 					&& !zend_mir_id_is_valid(
 						site->result_ssa_variable_id)) {
-				/* Refcounted and otherwise non-scalar internal results remain
-				 * in their source zval slot. A later source-backed opcode
-				 * must independently prove and consume that exact slot. */
+				/* Non-scalar internal results stay in their source zval slot
+				 * for a later source-backed opcode to consume. */
 				plan->results[index] = ZEND_MIR_ID_INVALID;
 			} else if (result_flags
 					== ZEND_MIR_SOURCE_CALL_SITE_RESULT_SCALAR
 					&& zend_mir_id_is_valid(
 						site->result_ssa_variable_id)) {
-				/*
-				 * Exact non-refcounted internal results enter scalar MIR.
-				 * Every other zval result stays in its canonical source slot
-				 * and can be consumed by another source-backed operation.
-				 */
+				/* Exact non-refcounted internal results enter scalar MIR. */
 				if (!zend_mir_result_value(
 						context, site, false, &plan->results[index])) {
 					plan->results[index] = ZEND_MIR_ID_INVALID;
@@ -834,10 +828,9 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 			}
 		} else {
 			/*
-			 * Arbitrary user-call results stay in the canonical source zval
-			 * slot. The scalar overlay is different: an exact declared result
-			 * consumed by scalar SSA is the machine result of the call
-			 * instruction itself.
+			 * User-call results stay in the source zval slot, except that an
+			 * exact declared result consumed by scalar SSA is the machine
+			 * result of the call instruction.
 			 */
 			if (!zend_mir_result_value(
 						context, site, true, &plan->results[index])) {
@@ -857,12 +850,10 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 					== ZEND_MIR_SOURCE_CALL_TARGET_INTERNAL) {
 				zend_mir_source_parameter_mode parameter_mode;
 
-				/* A partial-application placeholder describes a future Closure
-				 * parameter; it is not an argument passed to the selected internal
-				 * function while the partial is constructed.  In particular, PHP
-				 * must reach the runtime's normal dynamic-call and argument-count
-				 * validation even when the placeholder has no corresponding declared
-				 * parameter. */
+				/* A partial-application placeholder is a parameter of the
+				 * future Closure, not an argument of the internal function: it
+				 * must reach the runtime's dynamic-call and argument-count
+				 * validation even without a corresponding declared parameter. */
 				if (argument->mode
 						== ZEND_MIR_SOURCE_CALL_ARGUMENT_PLACEHOLDER
 						|| argument->mode
@@ -875,19 +866,16 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 							ZEND_MIR_ID_INVALID;
 					continue;
 				}
-				/* A named argument's syntactic ordinal is not its declared
-				 * parameter ordinal.  The call model has no parameter name in
-				 * this view, so defer the actual internal by-reference decision
-				 * to descriptor construction, where the zend_function and SEND
-				 * name are both available. */
+				/* A named argument's ordinal is not its parameter ordinal, and
+				 * this view has no parameter names: descriptor construction
+				 * decides by-reference passing from the zend_function. */
 				if (argument->mode == ZEND_MIR_SOURCE_CALL_ARGUMENT_NAMED) {
 					parameter_mode = ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
 				} else if (argument_index
 						>= plan->targets[site->target_id].num_args
 						&& !plan->targets[site->target_id].variadic) {
 					/* Extra internal arguments are evaluated before the runtime
-					 * reports the argument-count error. They have no declared
-					 * parameter mode and therefore use ordinary by-value ownership. */
+					 * reports the argument-count error, and pass by value. */
 					parameter_mode = ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
 				} else if (!zend_mir_target_parameter_mode_at(
 						calls, &plan->targets[site->target_id],
@@ -923,12 +911,8 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 
 					if (argument_index >= target->num_args
 							&& !target->variadic) {
-						/*
-						 * User functions retain positional extra arguments
-						 * for func_get_args(), but those arguments have no
-						 * declared parameter whose by-reference mode must be
-						 * consulted.
-						 */
+						/* Extra arguments, kept for func_get_args(), have
+						 * no declared parameter mode. */
 						parameter_mode =
 							ZEND_MIR_SOURCE_PARAMETER_BY_VALUE;
 					} else if (!zend_mir_target_parameter_mode_at(
@@ -948,10 +932,9 @@ static zend_mir_lowering_diagnostic_code zend_mir_plan_calls(
 						argument->value_ssa_variable_id)
 					: ZEND_MIR_ID_INVALID;
 				/*
-				 * A nested direct call is the first arbitrary boxed
-				 * producer whose machine definition is guaranteed here.
-				 * Other source zvals remain frame-backed until their own
-				 * lowering operation proves a register definition.
+				 * Only a nested direct call's result has a machine
+				 * definition guaranteed here; other source zvals stay
+				 * frame-backed.
 				 */
 				plan->values[plan_argument_index] =
 					parameter_mode == ZEND_MIR_SOURCE_PARAMETER_BY_VALUE
@@ -1208,9 +1191,9 @@ static bool zend_mir_fingerprint_write(
 	if (writer == NULL || (bytes == NULL && length != 0)) {
 		return false;
 	}
-	/* Keep the four independent FNV lanes together so debug and sanitizer
-	 * builds do not expand every emitted byte into sixteen scalar operations.
-	 * The per-lane byte sequence, and therefore the fingerprint, is unchanged. */
+	/* The four independent FNV lanes in one vector, so that debug and
+	 * sanitizer builds do not expand every byte into sixteen scalar
+	 * operations. The fingerprint matches the scalar loop below. */
 #if defined(__GNUC__)
 	typedef uint32_t zend_mir_fingerprint_vector
 		__attribute__((vector_size(4 * sizeof(uint32_t))));
@@ -2063,8 +2046,8 @@ static bool zend_mir_verify_final_control_flow(
 			view->context, block.id);
 		/*
 		 * Successor and predecessor lists describe CFG edges, not unique
-		 * blocks.  Switch-like opcodes may legitimately contribute more
-		 * parallel edges than the module has blocks.
+		 * blocks: a switch may contribute more parallel edges than the module
+		 * has blocks.
 		 */
 		for (edge_index = 0;
 			edge_index < successor_count; edge_index++) {

@@ -224,9 +224,8 @@ void zend_optimize_temporary_variables(zend_op_array *op_array, zend_optimizer_c
 		}
 
 #ifdef HAVE_NATIVE_ENGINE
-		/* A temporary sent to a call stays in its slot until the call's DO,
-		 * so that code which transfers arguments at DO (the native engine's
-		 * direct calls) still finds the SEND-time value. */
+		/* Keep temporaries sent to a call in their slots until the DO: the
+		 * native engine's direct calls read the arguments there. */
 		if (zend_temp_vars_is_call_end(opline->opcode)) {
 			const zend_op *send = opline;
 			uint32_t level = 0;

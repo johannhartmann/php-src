@@ -1394,11 +1394,8 @@ zend_string *accel_make_persistent_key(zend_string *str)
 }
 
 #ifdef HAVE_NATIVE_ENGINE
-/*
- * Whether no other script's native code can bind to this one: it declares
- * no function, class or constant, so only its own main code and closures
- * run from it, and its replacement has its own opcodes.
- */
+/* A script that declares no function, class or constant: no other script's
+ * native code can bind to it. */
 static bool zend_accel_script_binds_nothing(
 	const zend_persistent_script *persistent_script)
 {
@@ -1442,14 +1439,9 @@ static void zend_accel_discard_script(zend_persistent_script *persistent_script)
 	persistent_script->corrupted = true;
 	persistent_script->timestamp = 0;
 #ifdef HAVE_NATIVE_ENGINE
-	/*
-	 * Keep already entered and suspended native frames on their immutable
-	 * generation. Every process observes this shared generation before its
-	 * next userland entry, retires its process-local mapping after
-	 * quiescence and publishes a fresh generation for the replacement
-	 * script. A script nothing binds to, such as a cache file rewritten
-	 * every request, retires only its own generation.
-	 */
+	/* Every process sees the new generation at its next request and retires
+	 * its native code once no frame uses it. A script nothing binds to,
+	 * such as a cache file rewritten every request, retires only itself. */
 	if (zend_accel_script_binds_nothing(persistent_script)) {
 		__atomic_store_n(&ZCSG(native_discarded)[
 				ZCSG(native_discards) % ACCEL_NATIVE_DISCARD_RING],

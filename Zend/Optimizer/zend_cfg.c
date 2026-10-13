@@ -684,11 +684,8 @@ static void compute_postnum(
 }
 /* }}} */
 
-/*
- * Protected-region entries are not connected to the ordinary CFG entry by an
- * exception edge. Build a postorder for one such component without walking
- * back into a component whose dominators were already established.
- */
+/* Postorder of one protected-region component (catch entries have no CFG
+ * predecessor), stopping at blocks whose dominators are already known. */
 static void compute_protected_postnum(
 		int *postnum, uint32_t *cur, bool *component,
 		const zend_cfg *cfg, int block_num,
@@ -840,15 +837,10 @@ ZEND_API void zend_cfg_compute_dominators_tree(const zend_op_array *op_array, ze
 	} while (changed);
 	blocks[0].idom = -1;
 
-	/*
-	 * Catch entries and their control flow are reachable at runtime, but the
-	 * CFG intentionally has no synthetic exception predecessor from a try
-	 * block. An SSA over protected regions (ZEND_SSA_PROTECTED_REGIONS)
-	 * computes a dominator forest for those disconnected components as well.
-	 * This keeps short-circuit temporaries and array-construction values
-	 * live across branches inside a catch/finally region. Components stop
-	 * when they join a block already dominated from the ordinary entry.
-	 */
+	/* The CFG has no exception edge into catch blocks. For
+	 * ZEND_SSA_PROTECTED_REGIONS also compute a dominator forest for these
+	 * disconnected components, each ending where it joins a block dominated
+	 * from the ordinary entry. */
 	if (cfg->flags & ZEND_SSA_PROTECTED_REGIONS) {
 		compute_protected_dominators(cfg, postnum, stack, j);
 	}

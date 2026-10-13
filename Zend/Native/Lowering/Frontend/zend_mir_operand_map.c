@@ -250,10 +250,8 @@ bool zend_mir_frontend_build_operand_index(zend_mir_zend_source *source)
 	}
 	index->use_count = source->ssa_use_count;
 	index->def_count = source->ssa_def_count;
-	/* Direct sources deliberately publish no operand references even though
-	 * their backing SSA still contains uses and definitions. Keep an empty
-	 * lookup for them instead of trying to reconcile hidden operands with
-	 * zero public counts. */
+	/* Direct sources publish no operand references although their SSA has
+	 * uses and definitions; they get an empty lookup. */
 	if (index->use_count == 0 && index->def_count == 0) {
 		source->operand_index = index;
 		return true;

@@ -11,7 +11,7 @@ extern "C" {
 
 /*
  * Materialize a dereferenced request-local owner, duplicating persistent
- * arrays and strings.  target may equal source only when the zval is a
+ * arrays and strings. target may equal source only when the zval is a
  * non-reference shallow transfer whose additional logical owner is not yet
  * reflected in its refcount.
  */
@@ -118,12 +118,6 @@ zend_native_status zend_native_value_assign(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
-/*
- * $cv .= value with the operands resolved to frame offsets: descriptor holds
- * the value kind (ZEND_NATIVE_CONCAT_DIRECT_*) in bits 0-1 and the source
- * position in bits 32-63; slots holds the CV offset (bits 0-31) and the value
- * offset or literal index (32-63). The result is unused.
- */
 zend_native_status zend_native_value_identical_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t result_offset);
 zend_native_status zend_native_value_concat_direct(
@@ -141,6 +135,12 @@ zend_native_status zend_native_concat_strings_vt(zend_execute_data *execute_data
 	zval *left, zval *right, zval *result, uint32_t source_position_id);
 zend_native_status zend_native_concat_strings_tt(zend_execute_data *execute_data,
 	zval *left, zval *right, zval *result, uint32_t source_position_id);
+/*
+ * $cv .= value with the operands resolved to frame offsets: descriptor holds
+ * the value kind (ZEND_NATIVE_CONCAT_DIRECT_*) in bits 0-1 and the source
+ * position in bits 32-63; slots holds the CV offset (bits 0-31) and the value
+ * offset or literal index (32-63). The result is unused.
+ */
 zend_native_status zend_native_value_concat_assign_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots);
 zend_native_status zend_native_value_assign_op(

@@ -195,7 +195,7 @@ native_configure_args() {
         "--prefix=$NATIVE_PROFILE_ROOT/install"
     )
     if [[ -n ${PROFILE_TARGET_ID:-} ]]; then
-        # The V1 target matrix exercises native code across a real Unix fork.
+        # Target profiles test native code across fork().
         NATIVE_CONFIGURE_ARGS+=(--enable-pcntl)
     fi
     NATIVE_CONFIGURE_ARGS+=("${PROFILE_CONFIGURE_FLAGS[@]}")
@@ -309,15 +309,13 @@ native_release_lock() {
 }
 
 # Optimization flags appended after configure's own flags (a debug build
-# forces -O0). PHP's Makefile reads EXTRA_CFLAGS/EXTRA_CXXFLAGS from the
-# environment; a caller's own values are kept in front.
+# forces -O0) through EXTRA_CFLAGS/EXTRA_CXXFLAGS; a caller's own values come
+# first.
 #
-# A profile's PROFILE_FUNCTION_ORDER (relative to the repository root) places
-# the hot runtime functions first in .text, clustered by caller, through
-# ld --section-ordering-file (binutils 2.43+). Without it every change to an
-# earlier object file shifts the hot runtime code. A linker without the option
-# keeps the default layout. NATIVE_FUNCTION_ORDER_DIGEST lets the caller
-# rebuild when the order changes.
+# PROFILE_FUNCTION_ORDER (relative to the repository root) places the hot
+# runtime functions first in .text through ld --section-ordering-file
+# (binutils 2.43+), so that edits to other objects do not shift them.
+# NATIVE_FUNCTION_ORDER_DIGEST lets the caller rebuild when the order changes.
 native_export_build_flags() {
     local flags=${PROFILE_EXTRA_CFLAGS:-}
     unset NATIVE_FUNCTION_ORDER_DIGEST

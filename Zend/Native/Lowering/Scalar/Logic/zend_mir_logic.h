@@ -78,8 +78,8 @@ typedef struct _zend_mir_logic_opcode_proof {
 } zend_mir_logic_opcode_proof;
 
 /*
- * This is process-local provider configuration. Its pointers and array
- * addresses never enter source records, MIR records, facts, or text dumps.
+ * Process-local provider configuration. Its pointers and array addresses
+ * never enter source records, MIR records, facts, or text dumps.
  */
 typedef struct _zend_mir_logic_context {
 	const zend_mir_logic_value_binding *bindings;

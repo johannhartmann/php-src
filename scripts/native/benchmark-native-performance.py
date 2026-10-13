@@ -938,10 +938,8 @@ def measure_product_roles(
         offset = index % len(roles)
         return roles[offset:] + roles[:offset]
 
-    # Keep the fresh-process latency comparison independent of role order.  The
-    # first CLI invocation also pays one-time loader and filesystem-cache costs;
-    # without an unmeasured invocation the first role pays those costs while the
-    # other roles inherit the warmed host state.
+    # One unmeasured invocation per role absorbs the one-time loader and
+    # filesystem cache costs, which would otherwise fall on the first role.
     for role in roles:
         if role.fpm_pool is None:
             optional_invoke(role, descriptor=cold_benchmark)
@@ -949,8 +947,8 @@ def measure_product_roles(
                 shutil.rmtree(role.file_cache)
                 role.file_cache.mkdir()
 
-    # Rotate role order for every sample so thermal and frequency drift cannot
-    # systematically favor the baseline over the candidate (or vice versa).
+    # Rotate the role order per sample so that thermal and frequency drift
+    # favours no role.
     for index in range(samples):
         cold_source = source
         if opcache and any(role.fpm_pool is not None for role in roles):
@@ -2391,8 +2389,7 @@ def main() -> int:
         for record in records
         if "speedup" in record
         and record["suite"] in {"direct", "hot"}
-        # An enabled observer deliberately takes the semantic observer path;
-        # it is measured, but it is not an unobserved representative fast path.
+        # An enabled observer takes the observer path; not a fast path case.
         and record["case"] != "observer_enabled"
         and float(record["speedup"]) < (1 / 1.10)
     ]

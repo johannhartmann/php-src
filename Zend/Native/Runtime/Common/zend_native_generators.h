@@ -5,7 +5,6 @@
 
 #include "Zend/zend_gc.h"
 #include "Zend/Native/Runtime/Common/zend_native_runtime.h"
-#include "Zend/zend_gc.h"
 
 typedef struct _zend_generator zend_generator;
 
@@ -46,8 +45,8 @@ void zend_native_generator_uncaught_exception(
 void zend_native_generator_release_generation(zend_generator *generator);
 
 /* Freeze and restore the native setup record paired with one pending Zend
- * call frame.  The generic generator code continues to own the compact call
- * frame snapshot; these hooks only transfer native resolution/ownership state
+ * call frame. The generic generator code owns the compact call frame
+ * snapshot; these hooks transfer only the native resolution/ownership state
  * and the physical setup frame surrounding it. */
 bool zend_native_generator_freeze_call(
 	zend_generator *generator,

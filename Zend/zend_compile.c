@@ -4082,11 +4082,7 @@ ZEND_API uint8_t zend_get_call_op(const zend_op *init_op, const zend_function *f
 	bool direct_user_executor = zend_execute_ex == execute_ex;
 
 #ifdef HAVE_NATIVE_ENGINE
-	/*
-	 * The native executor is the built-in userland executor in native builds,
-	 * not an extension hook.  Keep the ordinary specialized call opcodes;
-	 * their generic handler path still enters zend_native_executor_execute_ex.
-	 */
+	/* The native executor is the built-in executor, not an extension hook. */
 	direct_user_executor = direct_user_executor
 		|| zend_execute_ex == zend_native_executor_execute_ex;
 #endif

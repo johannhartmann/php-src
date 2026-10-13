@@ -49,9 +49,9 @@ typedef enum _zend_native_status {
 	ZEND_NATIVE_EXCEPTION = 1,
 	ZEND_NATIVE_BAILOUT = 2,
 	/*
-	 * Internal generated-code result used by a private scalar call frame.
-	 * No C boundary may observe this value: the caller immediately retries
-	 * through the canonical Zend-frame path before any PHP-visible mutation.
+	 * Internal result of a private scalar call frame; no C boundary observes
+	 * it. The caller retries through the Zend-frame path before any
+	 * PHP-visible mutation.
 	 */
 	ZEND_NATIVE_RETRY = 3,
 	/* The initial generator frame was transferred to its heap object. */
@@ -63,10 +63,9 @@ typedef enum _zend_native_status {
 } zend_native_status;
 
 /*
- * Request-local executor addresses carried through the internal Native ABI.
- * Resolving the ZTS/NTS executor globals once at the outer C boundary lets
- * nested generated entries update the real Zend VM stack and current frame
- * without a TLS lookup or runtime transition on every Native-to-Native call.
+ * Request-local executor addresses, resolved once at the outer C boundary so
+ * nested generated entries update the VM stack and current frame without a
+ * TLS lookup on every native-to-native call.
  */
 typedef struct _zend_native_execution_context {
 	struct _zend_vm_stack **vm_stack;
@@ -137,8 +136,8 @@ typedef struct _zend_native_call_binding {
 	zend_mir_call_target_id target_id;
 	zend_native_entry_cell *entry_cell;
 	/*
-	 * Index in the current multi-function TPDE component.  UINT32_MAX keeps
-	 * the existing Entry-Cell path for dynamic and cross-component edges.
+	 * Index in the current TPDE component, or UINT32_MAX for dynamic and
+	 * cross-component edges, which call through the entry cell.
 	 */
 	uint32_t component_target_index;
 	bool direct_native;
@@ -187,10 +186,9 @@ typedef enum _zend_native_arg_guard {
 } zend_native_arg_guard;
 
 /*
- * One function in a statically known native component.  The member borrows
- * all inputs for the duration of compilation; TPDE consumes the complete
- * array in one compile invocation and emits one relocatable object containing
- * every member function.
+ * One function of a native component. The member borrows its inputs for the
+ * duration of compilation; one compile invocation emits one object containing
+ * every member.
  */
 typedef struct _zend_native_component_member {
 	const zend_mir_view *module;
@@ -290,10 +288,9 @@ zend_native_status zend_native_execute_frame_with_entry(
 	zend_native_diagnostic *diag);
 
 /*
- * zend_call_function() has already emitted the begin notification before it
- * enters zend_execute_ex.  Native reentry uses this variant so the native
- * boundary owns cleanup and the matching end notification without emitting a
- * duplicate begin event.
+ * For reentry from zend_call_function(), which already emitted the observer
+ * begin notification: the native boundary owns cleanup and emits only the
+ * matching end.
  */
 zend_native_status zend_native_execute_observed_frame(
 	const zend_native_code *code,

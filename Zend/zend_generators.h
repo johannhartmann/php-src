@@ -95,16 +95,11 @@ struct _zend_generator {
 	zend_function *func;
 
 #ifdef HAVE_NATIVE_ENGINE
-	/*
-	 * A suspended native generator owns the exact immutable entry
-	 * generation that created its heap frame.  Keeping the owner on the
-	 * Generator object makes resume and forced-close paths lookup-free.
-	 */
+	/* The native entry generation that created the heap frame; pinned
+	 * while the generator is suspended. */
 	zend_native_entry_cell *native_entry_cell;
 	uint64_t native_entry_generation;
-	/* Pending native call setup records are stack-resident while the generator
-	 * runs.  They are frozen separately from Zend's argument-only call-frame
-	 * snapshot and rebuilt when the generator resumes. */
+	/* Pending native call setup, frozen next to frozen_call_stack. */
 	void *native_frozen_call_stack;
 #endif
 

@@ -84,10 +84,10 @@ void zend_native_compiler_release_ready_transients(
 	zend_native_compiler *compiler, uint32_t first_function_index);
 
 /* Retire a just-completed, request-local dynamic component before its READY
- * publications become visible to the executor indexes. The range must be the
- * current registry and publication tail, and every entry cell must be
- * quiescent. This keeps short-lived eval/include code native without retaining
- * its code, source lease or stable entry cells until request shutdown. */
+ * publications become visible to the executor indexes, so short-lived
+ * eval/include code does not keep its code, source lease and entry cells
+ * until request shutdown. The range must be the current registry and
+ * publication tail, and every entry cell must be quiescent. */
 bool zend_native_compiler_retire_dynamic_component(
 	zend_native_compiler *compiler, uint32_t first_function_index,
 	const zend_op_array *root);
@@ -102,8 +102,7 @@ zend_result zend_native_compiler_activate_session(
 void zend_native_compiler_deactivate_session(
 	zend_native_compiler *compiler);
 
-/* The executor owns the storage classification for published OPcache
- * bundles. Dynamic execution uses it to avoid mutating cache-owned op arrays. */
+/* Dynamic execution must not mutate op arrays owned by an OPcache bundle. */
 bool zend_native_executor_op_array_is_cache_owned(
 	const zend_op_array *op_array);
 

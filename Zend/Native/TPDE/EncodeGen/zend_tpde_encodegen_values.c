@@ -152,10 +152,9 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_probe_element(zval *element)
 
 /*
  * The lookups below answer in one of two modes. Element mode: the element,
- * ZEND_NATIVE_ELEMENT_ABSENT or ZEND_NATIVE_ELEMENT_UNKNOWN. isset mode
- * (isset): 1 when set, 0 when absent or null, ZEND_NATIVE_ISSET_UNKNOWN
- * when the helper decides, without passing the element through the element
- * answers first.
+ * ZEND_NATIVE_ELEMENT_ABSENT or ZEND_NATIVE_ELEMENT_UNKNOWN. isset mode: 1
+ * when set, 0 when absent or null, ZEND_NATIVE_ISSET_UNKNOWN when the helper
+ * decides.
  */
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_absent(bool isset)
 {
@@ -208,10 +207,9 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_index_m(
 
 /*
  * Whether two key strings of the same hash and a length of at most 16 bytes
- * hold the same bytes: one or two 8-byte words each; below 8 bytes the
- * lowest differing byte of the first words must lie past the key.
- * A zend_string's value starts 8-byte aligned and its allocation is rounded
- * up to 8 bytes, so the words stay inside both strings.
+ * hold the same bytes, compared as one or two 8-byte words each. A
+ * zend_string's value starts 8-byte aligned and its allocation is rounded up
+ * to 8 bytes, so the words stay inside both strings.
  */
 ZEND_NATIVE_SNIPPET_INLINE bool zend_native_short_key_equal(
 	const zend_string *left, const zend_string *right, size_t length)
@@ -232,12 +230,11 @@ ZEND_NATIVE_SNIPPET_INLINE bool zend_native_short_key_equal(
 }
 
 /*
- * The element under a non-numeric string key: identity with the bucket key
- * decides, and a bucket key of the same hash and length up to 16 bytes is
- * compared by content; a longer one is left to the emitted code's C lookup
- * (zend_native_array_find_element()).
+ * The element under a non-numeric string key with its hash h, which is never
+ * zero: identity with the bucket key decides, and a bucket key of the same
+ * hash and length up to 16 bytes is compared by content; a longer one is
+ * left to the emitted code's C lookup (zend_native_array_find_element()).
  */
-/* The same with the key's hash known, which is never zero. */
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_string_h_m(
 	const HashTable *table, const zend_string *name, zend_ulong h,
 	bool isset)

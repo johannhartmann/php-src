@@ -73,22 +73,20 @@ static void zend_native_execution_cleanup_frame_ex(
 	}
 
 	/*
-	 * The VM's leave helper destroys every compiled variable before releasing
-	 * a user frame.  Native entries return to C instead, so this boundary owns
-	 * the equivalent cleanup exactly once. An exceptional or bailout exit also
-	 * releases live temporaries at the current source opline. A completed native
-	 * return has already consumed those temporaries in program order, and its
-	 * final scalar instruction need not cross a helper solely to publish an
-	 * opline, so it must not be treated as unfinished execution.
+	 * The VM's leave helper destroys the compiled variables of a user frame;
+	 * native entries return to C, so this boundary does it, exactly once. An
+	 * exceptional or bailout exit also releases the live temporaries at the
+	 * current source opline. A completed return consumed them in program
+	 * order and need not have published its last opline, so it is not
+	 * unfinished execution.
 	 */
 	if (cleanup_unfinished && execute_data->opline != NULL) {
 		const zend_op_array *op_array = &execute_data->func->op_array;
 		const zend_op *cleanup_opline = execute_data->opline;
 
-		/* Throwing replaces EX(opline) with the global HANDLE_EXCEPTION
-		 * sentinel. Native frames return directly to this boundary instead of
-		 * dispatching that handler, so recover the source opline before applying
-		 * Zend's live-range cleanup. */
+		/* Throwing replaces EX(opline) with the HANDLE_EXCEPTION sentinel,
+		 * which native frames never dispatch: the live-range cleanup needs
+		 * the source opline. */
 		if (cleanup_opline->opcode == ZEND_HANDLE_EXCEPTION
 				&& EG(opline_before_exception) != NULL) {
 			cleanup_opline = EG(opline_before_exception);
@@ -108,11 +106,10 @@ static void zend_native_execution_cleanup_frame_ex(
 	}
 	if ((call_info & ZEND_CALL_CODE) != 0) {
 		/*
-		 * Include/eval frames borrow the caller's symbol table. Mirror the
-		 * nested ZEND_CALL_CODE leave path up to, but not including, stack
-		 * frame release: publish frame CVs back into the table and tell the
-		 * owner of the stack frame that the caller must be reattached only
-		 * after this code frame has been released.
+		 * Include/eval frames borrow the caller's symbol table. As the
+		 * nested ZEND_CALL_CODE leave path, up to the stack frame release:
+		 * publish the CVs back into the table and have the stack frame's
+		 * owner reattach the caller once this frame is released.
 		 */
 		if (execute_data->func->op_array.last_var > 0) {
 			zend_detach_symbol_table(execute_data);
@@ -149,9 +146,9 @@ static void zend_native_execution_initialize_return_value(
 	zend_execute_data *execute_data, zend_native_status status)
 {
 	/*
-	 * A user opcode handler may leave a non-generator frame without running a
-	 * RETURN opcode.  The public native execution contract still promises an
-	 * initialized result whenever the frame reports ZEND_NATIVE_RETURNED.
+	 * A user opcode handler may leave a non-generator frame without a RETURN;
+	 * a frame that reports ZEND_NATIVE_RETURNED still has an initialized
+	 * result.
 	 */
 	if (status == ZEND_NATIVE_RETURNED
 			&& execute_data->return_value != NULL
@@ -557,10 +554,9 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 			ZEND_OBSERVER_FCALL_BEGIN(execute_data);
 		}
 		/*
-		 * RECV initialization and argument type verification are observable
-		 * execution.  The VM starts the fcall observer before those opcodes,
-		 * so native frames must do the same when a type error or default-value
-		 * resolution prevents the machine entry from running.
+		 * RECV initialization and argument type verification are observable:
+		 * as in the VM, the fcall observer has begun even when a type error
+		 * or a default value keeps the machine entry from running.
 		 */
 		if (zend_native_frame_prepare(execute_data) == FAILURE) {
 			state->status = EG(exception) != NULL
@@ -575,10 +571,9 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 
 #ifdef HAVE_DTRACE
 	/*
-	 * The global native executor, direct native calls and generator resumes
-	 * all converge here.  Emit exactly one matching return probe for every
-	 * native invocation that returned to this boundary. A bailout has the
-	 * same non-returning probe semantics as the VM DTrace wrapper.
+	 * Exactly one return probe for every native invocation (the executor,
+	 * direct native calls, generator resumes) that returned here; as in the
+	 * VM's DTrace wrapper, a bailout has none.
 	 */
 	if (state->dtrace_frame_started
 			&& state->status != ZEND_NATIVE_BAILOUT) {
@@ -588,10 +583,10 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 #endif
 
 	/*
-	 * Generator frames are owned by zend_generator after CREATE. Suspension
-	 * deliberately keeps the observer and frame alive, while GENERATOR_RETURN
-	 * has already closed and freed the heap frame. Never pass any of these
-	 * states through ordinary function-return cleanup.
+	 * Generator frames are owned by zend_generator after CREATE: suspension
+	 * keeps the observer and frame alive, GENERATOR_RETURN has already closed
+	 * and freed the heap frame. None of these takes the function-return
+	 * cleanup.
 	 */
 	if (state->status == ZEND_NATIVE_GENERATOR_CREATED
 			|| state->status == ZEND_NATIVE_SUSPENDED
@@ -615,10 +610,10 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 	frame_returned = zend_native_execute_frame_returned(execute_data, state);
 
 	/*
-	 * Unlike the VM, this boundary catches bailout locally.  It therefore also
-	 * owns the matching end notification instead of relying on request-shutdown
-	 * observer unwinding.  Keep it behind a second Zend bailout boundary because
-	 * observers are extension code and may themselves throw or bail out.
+	 * Unlike the VM, this boundary catches bailouts, so it sends the end
+	 * notification itself rather than leaving it to request-shutdown observer
+	 * unwinding. Observers are extension code that may throw or bail out,
+	 * hence a zend_try of its own.
 	 */
 	if (state->observer_started && !state->observer_finished
 			&& !ZEND_OBSERVER_ENABLED) {
@@ -654,22 +649,16 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 		} zend_end_try();
 	}
 
-	/*
-	 * Releasing CVs, the receiver or a discarded return value may run a
-	 * destructor that bails out, for example on an uncaught exception during
-	 * shutdown.  Report that as this frame's bailout so callers still release
-	 * their activation state before propagating it.
-	 */
+	/* As in zend_native_execute_frame_release(). */
 	zend_try {
 		if (state->status != ZEND_NATIVE_BAILOUT) {
 			zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
 		}
-		/* A frame entered through zend_execute_ex is normally finalized by
-		 * zend_leave_helper(), which also releases the retained closure or
-		 * receiver.  The request-local native reentry hook replaces that helper;
-		 * its caller still owns the stack frame itself, but not this call-target
-		 * reference.  Direct native-to-native calls release their target at their
-		 * call site and therefore must not pass through this branch. */
+		/* zend_leave_helper() would release the closure or receiver of a
+		 * frame entered through zend_execute_ex. The native reentry hook
+		 * that replaces it leaves the stack frame to its caller, but not
+		 * this reference. Direct native-to-native calls release their
+		 * target at the call site and must not get here. */
 		if (observer_already_started
 				&& state->status != ZEND_NATIVE_BAILOUT) {
 			uint32_t call_info = ZEND_CALL_INFO(execute_data);

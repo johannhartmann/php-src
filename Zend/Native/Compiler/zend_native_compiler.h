@@ -18,7 +18,7 @@ typedef enum _zend_native_codeunit_state {
 	ZEND_NATIVE_CODEUNIT_READY,
 	ZEND_NATIVE_CODEUNIT_FAILED,
 	ZEND_NATIVE_CODEUNIT_SUSPENDABLE_RESERVED,
-	/* Complete target image, intentionally not mapped in the producer. */
+	/* Complete target image, not mapped in the producer. */
 	ZEND_NATIVE_CODEUNIT_IMAGE_READY
 } zend_native_codeunit_state;
 
@@ -50,9 +50,8 @@ typedef struct _zend_native_compile_diagnostic {
 } zend_native_compile_diagnostic;
 
 /*
- * Cumulative, read-only product metrics. They are collected at existing
- * compile and outer execution boundaries, so generated inner calls do not
- * acquire instrumentation branches or helper calls.
+ * Cumulative metrics, collected only at compile and outer execution
+ * boundaries so that generated inner calls carry no instrumentation.
  */
 typedef struct _zend_native_compiler_stats {
 	uint64_t compile_ns;
@@ -107,9 +106,8 @@ typedef struct _zend_native_compiler_config {
 	bool source_probe;
 	bool defer_publication;
 	/*
-	 * The script tables are the request's global symbol tables. Index a
-	 * declaration only when compilation reaches it instead of scanning every
-	 * function and class at creation.
+	 * The script tables are the request's global symbol tables: index a
+	 * declaration only when compilation reaches it.
 	 */
 	bool lazy_source_index;
 	zend_native_external_reentry_resolver_t external_reentry_resolver;
@@ -139,9 +137,8 @@ ZEND_API bool zend_native_compiler_end_request(
 
 /*
  * Compile the reachable static call graph and atomically publish each SCC.
- * The supplied argument signature is retained for source compatibility but
- * does not specialize the baseline entry. Exact representations come only
- * from declared types and path-valid SSA proofs.
+ * The supplied argument types do not specialize the baseline entry; exact
+ * representations come only from declared types and path-valid SSA proofs.
  */
 ZEND_API zend_result zend_native_compiler_compile(
 	zend_native_compiler *compiler,
@@ -154,11 +151,6 @@ ZEND_API zend_native_entry_cell *zend_native_compiler_prepare_function(
 	zend_function *function,
 	zend_native_compile_diagnostic *diagnostic);
 
-/*
- * OPcache persists this pointer-free encoding of the normal TPDE images.
- * Import performs only process-local reference binding, relocation, mapping
- * and atomic entry publication; it never rebuilds SSA, ZNMIR or machine code.
- */
 typedef enum _zend_native_tier2_result {
 	ZEND_NATIVE_TIER2_NOT_OWNED = 0,
 	ZEND_NATIVE_TIER2_RECOMPILED,
@@ -166,14 +158,20 @@ typedef enum _zend_native_tier2_result {
 } zend_native_tier2_result;
 
 /*
- * Tier 2 (ADR 0025 section 4): recompiles the published function whose
- * entry cell is cell from a private op array copy and publishes the copy's
- * code through cell. NOT_OWNED when this compiler does not own the cell.
+ * Tier 2 (ADR 0025 section 4): recompile the function published through cell
+ * from a private op array copy and publish the result through cell.
+ * NOT_OWNED when this compiler does not own the cell.
  */
 ZEND_API zend_native_tier2_result zend_native_compiler_recompile_tier2(
 	zend_native_compiler *compiler,
 	zend_native_entry_cell *cell,
 	zend_native_compile_diagnostic *diagnostic);
+
+/*
+ * OPcache persists this pointer-free encoding of the normal TPDE images.
+ * Import performs only process-local reference binding, relocation, mapping
+ * and atomic entry publication; it never rebuilds SSA, ZNMIR or machine code.
+ */
 ZEND_API zend_result zend_native_compiler_serialize_bundle(
 	zend_native_compiler *compiler,
 	unsigned char **out_bytes,

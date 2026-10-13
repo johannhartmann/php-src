@@ -51,8 +51,8 @@ zend_native_reentry_cache_slot(const zend_op *opcodes, uint64_t signature)
 			& (ZEND_NATIVE_REENTRY_CACHE_SIZE - 1)];
 }
 
-/* zend_call_function() names the lines execute_ex reads for a user
- * function, while it copies the arguments: the cache entry, then (once the
+/* zend_call_function() prefetches the lines execute_ex reads for a user
+ * function while it copies the arguments: the cache entry, then (once the
  * entry is in) the cell it holds. */
 static zend_always_inline const zend_native_reentry_cache_entry *
 zend_native_reentry_prefetch_entry(const zend_function *function)

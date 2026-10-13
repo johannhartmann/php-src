@@ -301,10 +301,9 @@ bool zend_native_generator_freeze_call(
 		tail_size);
 	generator->native_frozen_call_stack = frozen;
 
-	/* The compact Zend snapshot now owns the raw arguments, while the frozen
-	 * native record owns every resolution retain.  Detach the live chain before
-	 * either stack frame disappears so the surrounding internal call becomes
-	 * active again immediately. */
+	/* The compact Zend snapshot owns the raw arguments and the frozen record
+	 * every resolution retain. Detach the live chain before either stack
+	 * frame disappears so the surrounding internal call becomes active. */
 	zend_native_active_direct_call = activation->previous;
 	zend_vm_stack_free_call_frame(call);
 	zend_vm_stack_free_call_frame(setup_frame);
@@ -324,11 +323,11 @@ bool zend_native_generator_frozen_call_stack_gc(
 		return false;
 	}
 
-	/* Native call planning may suspend before an inner INIT has materialized
-	 * its Zend frame. The generic source-opline walk then pairs an outer frozen
-	 * frame with that inner call and undercounts already-sent arguments. Use the
-	 * exact native freeze pairing, but only when it covers the complete compact
-	 * stack so mixed VM/native stacks retain the generic fallback. */
+	/* A generator may suspend before an inner INIT materialized its Zend
+	 * frame; the generic source-opline walk would then pair an outer frozen
+	 * frame with that inner call and undercount sent arguments. Use the
+	 * native freeze pairing only when it covers the whole compact stack,
+	 * leaving mixed stacks to the generic walk. */
 	for (frame = call; frame != NULL; frame = frame->prev_execute_data) {
 		for (frozen = (zend_native_frozen_call_activation *)
 				generator->native_frozen_call_stack;
@@ -525,17 +524,15 @@ void zend_native_generator_cleanup_suspended_arguments(
 	uint32_t source_position = (uint32_t) (
 		execute_data->opline - op_array->opcodes);
 
-	/* Native call planning delays ownership transfer until the DO_* operation.
-	 * If a generator suspends while evaluating arguments, values already
-	 * consumed by SEND_* therefore remain in their source temporaries even
-	 * though Zend's live ranges ended at the SEND. A VM call frame would own
-	 * these values and cleanup_unfinished_calls() would release them before a
-	 * forced finally. Control flow through that finally may leave EX(opline)
-	 * after a syntactic DO_* that was never executed, so matching INIT/DO pairs
-	 * from the final source position is not reliable. Release every initialized
-	 * SEND temporary whose live range is no longer active; completed calls have
-	 * already consumed their source slots, while cleanup_live_vars() continues
-	 * to own all active ranges. */
+	/* Native calls transfer argument ownership at the DO_*, so a generator
+	 * suspended while evaluating arguments keeps values already sent in
+	 * their source temporaries although Zend's live ranges ended at the
+	 * SEND (in the VM, cleanup_unfinished_calls() would release them from
+	 * the call frame). A forced finally may leave EX(opline) after a DO_*
+	 * that never ran, so INIT/DO pairs cannot be matched from it. Release
+	 * every initialized SEND temporary outside its live range: completed
+	 * calls consumed their slots, and cleanup_live_vars() owns the active
+	 * ranges. */
 	for (uint32_t i = 0; i < op_array->last; i++) {
 		const zend_op *opline = &op_array->opcodes[i];
 		uint32_t temporary;
@@ -1279,10 +1276,8 @@ zend_native_status zend_native_call_frameless_internal(
 			return ZEND_NATIVE_EXCEPTION;
 		}
 	}
-	/*
-	 * The source position remains available for diagnostics, observers and
-	 * exceptions. No semantic operand is read from this zend_op.
-	 */
+	/* For diagnostics, observers and exceptions; no operand is read from
+	 * this zend_op. */
 	execute_data->opline =
 		&execute_data->func->op_array.opcodes[source_position_id];
 	for (index = 0; index < argument_count; index++) {
@@ -1595,11 +1590,7 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 			execute_data, (uint32_t) action);
 	}
 
-	/*
-	 * ENTER changes the active Zend frame. Resolve that frame through the
-	 * process-local native entry registry and execute its published native
-	 * body; no VM executor or opline handler participates.
-	 */
+	/* ENTER made another Zend frame current: run its published native code. */
 	entered = EG(current_execute_data);
 	if (entered == NULL || entered == execute_data
 			|| (cell = zend_native_reentry_resolve(entered->func)) == NULL
@@ -2096,8 +2087,8 @@ static void zend_native_call_fast_complete(
 		zval_ptr_dtor(&activation->discarded_return);
 		ZVAL_UNDEF(&activation->discarded_return);
 	}
-	/* The callee's RELEASE_THIS or CLOSURE flag now owns the retained
-	 * receiver or closure. */
+	/* The callee's RELEASE_THIS or CLOSURE flag owns the retained receiver
+	 * or closure. */
 	resolution->owned_target = NULL;
 	resolution->ownership = 0;
 	if ((ownership & ZEND_NATIVE_USER_CALL_OWNS_ENTRY_CELL_ACTIVE) != 0) {
@@ -2403,7 +2394,7 @@ static zend_function *zend_native_call_reject_target(const char *message)
  * The literal or frame slot of a source operand the compiler built from the
  * frame's op array: a literal, CV, TMP or VAR; NULL for any other operand.
  * *temporary, when given, tells whether it is a TMP or VAR slot. Unchecked;
- * zend_native_direct_operand() is the bounded form.
+ * zend_native_direct_operand() is the bounds-checked form.
  */
 static zend_always_inline zval *zend_native_source_operand(
 	zend_execute_data *execute_data,
@@ -2464,7 +2455,8 @@ static zval *zend_native_call_read_r_operand(
 	return value;
 }
 
-/* The bounded frame slot of a CV, TMP or VAR operand; NULL otherwise. */
+/* The bounds-checked frame slot of a CV, TMP or VAR operand; NULL
+ * otherwise. */
 static zval *zend_native_call_source_slot(
 	zend_execute_data *caller, const zend_mir_source_operand_ref *operand)
 {
@@ -3212,8 +3204,8 @@ static bool zend_native_call_dynamic_target(
 			zval *name = zend_native_direct_operand(
 				caller, &descriptor->init_op1, true);
 
-			/* INIT_USER_CALL deliberately replaces and chains an exception
-			 * raised while resolving the callback, just like the VM handler. */
+			/* As the VM handler, INIT_USER_CALL chains an exception raised
+			 * while resolving the callback behind its own. */
 			zend_type_error(
 				"%s(): Argument #1 ($callback) must be a valid callback, %s",
 				name != NULL && Z_TYPE_P(name) == IS_STRING
@@ -3479,12 +3471,11 @@ static bool zend_native_call_resolution_classify(
 	if ((function->common.fn_flags & ZEND_ACC_CALL_VIA_TRAMPOLINE) != 0) {
 		zend_function *normalized;
 
-		/* Internal call-via-handler functions, including Closure::__invoke(),
-		 * overloaded object methods and parent property-hook trampolines,
-		 * perform their own forwarding.  Their handler may also consume the
-		 * temporary function and clear execute_data::func before returning.
-		 * Publish them as ordinary internal targets while retaining the lookup
-		 * allocation until the call frame takes ownership. */
+		/* Internal call-via-handler functions (Closure::__invoke(),
+		 * overloaded object methods, parent property-hook trampolines)
+		 * forward themselves, and their handler may consume the temporary
+		 * function and clear execute_data::func. Call them as internal
+		 * targets, owning the lookup allocation until the frame takes it. */
 		if (function->type == ZEND_INTERNAL_FUNCTION
 				&& function->internal_function.handler != NULL) {
 			resolution->target_kind = ZEND_NATIVE_USER_CALL_TARGET_INTERNAL;
@@ -3773,9 +3764,8 @@ static bool zend_native_call_resolution_build_placements(
 				if (resolution->target_kind
 						== ZEND_NATIVE_USER_CALL_TARGET_NO_CALL) {
 					/* The VM's dummy constructor frame reports an unknown named
-					 * argument only after its source expression was evaluated. Keep
-					 * it in the runtime tail so generated SEND code preserves that
-					 * ordering before the explicit setter raises the error. */
+					 * argument after evaluating its source expression: the
+					 * runtime tail keeps that order. */
 					runtime_tail = true;
 				} else if ((function->common.fn_flags
 						& ZEND_ACC_VARIADIC) == 0) {
@@ -3822,11 +3812,10 @@ static bool zend_native_call_resolution_build_placements(
 				placement->flags |=
 					ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF;
 			}
-			/* A syntactically by-value SEND may still target a by-reference
-			 * parameter after dynamic resolution. Keep it in the source-backed
-			 * runtime tail: the explicit setter must either create a reference in
-			 * the mutable source slot or raise for a literal. A direct scalar
-			 * placement cannot preserve either behavior. */
+			/* A by-value SEND to a by-reference parameter stays in the
+			 * runtime tail: the explicit setter makes a reference of the
+			 * source slot or raises for a literal, which a direct scalar
+			 * placement cannot do. */
 			if ((placement->flags
 					& (ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_SHOULD_REF
 						| ZEND_NATIVE_USER_CALL_PLACEMENT_TARGET_MUST_REF)) != 0
@@ -3850,10 +3839,9 @@ static bool zend_native_call_resolution_build_placements(
 			}
 		}
 		if (argument->mode != ZEND_NATIVE_CALL_ARGUMENT_PLACEHOLDER) {
-			/* Source operands may not have been evaluated at INIT. Generated
-			 * SEND code performs this check at the source point and marks the
-			 * current and remaining placements as one runtime tail if the actual
-			 * reference state requires allocation or separation. */
+			/* The source is not evaluated yet at INIT: the SEND checks it
+			 * and moves this and the remaining placements to the runtime
+			 * tail when its reference state needs allocation or separation. */
 			placement->flags |=
 				ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_REF_CHECK;
 		}
@@ -4244,8 +4232,8 @@ static zend_always_inline zval *zend_native_call_cached_callable(
 		: (zval *) ((char *) caller + entry->receiver_offset);
 }
 
-/* The target a cached callable entry names for the callable now in its
- * slot; see zend_native_call_cached_callable_match(). */
+/* The target a cached callable entry names for the callable in its slot;
+ * see zend_native_call_cached_callable_match(). */
 typedef struct _zend_native_call_callable_hit {
 	zval *slot;
 	zend_function *function;
@@ -4721,12 +4709,6 @@ static bool zend_native_call_callable_identity(
 	return false;
 }
 
-/*
- * Publish a site's native fast path (see zend_native_user_call_site_header)
- * for the target just resolved, or withdraw it. The generated fast path
- * pushes a Zend frame for exactly the sent positional arguments and enters
- * the target like zend_native_call_invoke_user()'s FAST_FRAME path.
- */
 /* The type bits a parameter accepts without a check or coercion; class
  * types, callable and other special types always take the generic check. */
 static uint32_t zend_native_call_fast_receive_mask(const zend_arg_info *info)
@@ -5043,7 +5025,7 @@ static bool zend_native_call_fast_site_persistent(
 	}
 }
 
-/* Arms a site published or re-armed now with the callee's run-time cache
+/* Arms a site just published or re-armed with the callee's run-time cache
  * of this request: a persistent site holds its target, but not the cache,
  * until zend_native_call_persistent_sites_invalidate(), which resetting its
  * cell runs. A re-arm keeps every fact zend_native_call_fast_site_persistent()
@@ -5321,6 +5303,12 @@ static void zend_native_call_fast_publish_internal(
 		&caller->func->op_array, descriptor, header, NULL, true);
 }
 
+/*
+ * Publish a site's native fast path (see zend_native_user_call_site_header)
+ * for the target just resolved, or withdraw it. The generated fast path
+ * pushes a Zend frame for exactly the sent positional arguments and enters
+ * the target like zend_native_call_invoke_user()'s FAST_FRAME path.
+ */
 static void zend_native_call_fast_publish(
 	const zend_execute_data *caller,
 	zend_native_user_call_site_header *header,
@@ -6078,13 +6066,12 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 }
 
 /*
- * A method site whose receivers change class ($event->isPropagationStopped()
- * for many event classes, $type->convertToPHPValue() for many types): its
- * header keys one class, and the general resolver records every user method
- * it resolves for the site under the receiver's class, the site's method
- * name and the calling scope, as for a [$object, 'method'] callable. Only
- * targets taking every sent argument by value are recorded: the site's
- * sends follow the header's by-reference mask.
+ * A method site whose receivers change class: its header keys one class,
+ * and the general resolver records every user method it resolves for the
+ * site under the receiver's class, the site's method name and the calling
+ * scope, as for a [$object, 'method'] callable. Only targets taking every
+ * sent argument by value are recorded: the site's sends follow the header's
+ * by-reference mask.
  */
 static void zend_native_call_recorded_method_record(
 	const zend_execute_data *caller,
@@ -6192,11 +6179,11 @@ zend_native_call_dynamic_init_result zend_native_call_fast_method_init(
 }
 
 /*
- * $object->$method(...): a method named by a CV (Twig's attribute access
- * calls every getter so). The general resolver records the user method it
- * resolved under the receiver's class, the interned name and the calling
- * scope; zend_native_call_fast_dynamic_init() finds it again and the sends
- * go to the frame as the VM sends, unpacked arguments included.
+ * $object->$method(...), a method named by a CV: the general resolver
+ * records the user method it resolved under the receiver's class, the
+ * interned name and the calling scope. zend_native_call_fast_dynamic_init()
+ * finds it again, and the sends go to the frame as the VM sends, unpacked
+ * arguments included.
  */
 static void zend_native_call_recorded_dynamic_method_record(
 	const zend_execute_data *caller,
@@ -6972,7 +6959,7 @@ static bool zend_native_call_restore_runtime_target(
 		return false;
 	}
 	/* The reserved frame covers every statically known target. Restore the
-	 * undefined gap immediately before its source SEND, just as the VM does. */
+	 * undefined gap right before its source SEND, as the VM does. */
 	for (ordinal = ZEND_CALL_NUM_ARGS(callee);
 			ordinal <= placement->target_index; ordinal++) {
 		ZVAL_UNDEF(ZEND_CALL_ARG(callee, ordinal + 1));
@@ -7138,7 +7125,7 @@ zend_execute_data *zend_native_call_expand_user_arguments(
 }
 
 /*
- * Pushes the pending Zend call frame of a legacy source call: it may extend
+ * Pushes the pending Zend call frame of a source call: it may extend
  * the VM stack, and the generated caller remains current after it returns.
  * zend_native_call_invoke_finish_source() re-enters native code, restores
  * the caller on every outcome and releases the frame. Returns the entry
@@ -7174,12 +7161,9 @@ static zend_native_entry_cell *zend_native_call_begin(
 	}
 	source_init = &caller->func->op_array.opcodes[
 		descriptor->init_source_position];
-	/*
-	 * Target resolution may allocate objects or raise before the call frame
-	 * exists (notably NEW creates the object before invoking its constructor).
-	 * Publish the source call site first so exception file/line and backtrace
-	 * state match the VM for every exit from call setup.
-	 */
+	/* Target resolution may allocate or throw before the frame exists (NEW
+	 * creates the object first): publish the call site so exceptions and
+	 * backtraces match the VM. */
 	caller->opline = source_init;
 	EG(current_execute_data) = caller;
 	initial_argument_count = descriptor->initial_argument_count;
@@ -7584,11 +7568,10 @@ void zend_native_cleanup_unfinished_exception(
 				if (!zend_is_smart_branch(throw_op)) {
 					zval *result = ZEND_CALL_VAR(
 						execute_data, throw_op->result.var);
-					/* A throwing operation may publish EG(exception) through its
-					 * result slot without transferring a second reference.  The
-					 * exception remains owned by EG(exception) until CATCH moves it;
-					 * treating this borrowed alias as an ordinary temporary would
-					 * destroy the exception before the handler can receive it. */
+					/* A throwing operation may leave EG(exception) in its result
+					 * slot without a reference of its own: EG(exception) owns it
+					 * until CATCH moves it, so the borrowed alias is not
+					 * released. */
 					if (EG(exception) != NULL
 							&& Z_TYPE_P(result) == IS_OBJECT
 							&& Z_OBJ_P(result) == EG(exception)
@@ -7622,11 +7605,9 @@ zend_result zend_native_prepare_finally_exception(
 		return FAILURE;
 	}
 	op_array = &caller->func->op_array;
-	/* The exception may have been raised by a nested user frame, whose
-	 * zend_rethrow_exception() replaced the caller's published opline with the
-	 * shared HANDLE_EXCEPTION sentinel. The native edge is source-backed, so
-	 * restore its exact call site before selecting catch/finally routing or
-	 * propagating out of the frame. */
+	/* A nested frame's zend_rethrow_exception() may have replaced the
+	 * caller's opline with the HANDLE_EXCEPTION sentinel: restore the call
+	 * site before routing to a catch or finally, or propagating. */
 	caller->opline = &op_array->opcodes[source_opline_index];
 	exception = EG(exception);
 	/* Zend's dispatcher walks the innermost active region outward. */
@@ -7787,11 +7768,10 @@ static zend_native_status zend_native_call_invoke(
 		return zend_native_internal_call_invoke_finish(
 			caller, &internal_cell, return_value);
 	}
-	/* A rebound Closure has a request-local zend_op_array wrapper with the
-	 * canonical opcode storage but a distinct scope and runtime cache.  The
-	 * entry cell owns code for that canonical opcode body; frame initialization
-	 * must nevertheless use the function actually selected by PHP so visibility,
-	 * late-static binding, and closure-local state retain their runtime meaning. */
+	/* A rebound Closure shares the opcodes the cell's code was compiled
+	 * from but has its own scope and run-time cache: the frame is
+	 * initialized from the function PHP selected, so visibility, late
+	 * static binding and closure state follow it. */
 	caller->call = pending_call;
 	zend_init_func_execute_data(call, &call->func->op_array, NULL);
 	EG(current_execute_data) = caller;
@@ -8063,8 +8043,8 @@ void zend_native_frame_activation_pop(
 /*
  * A direct activation without a setup record leads its callee frame when the
  * frame shares the current VM-stack page and lives in emalloc() memory when
- * the frame starts a fresh page; Darwin's generated calls still append it to
- * the frame. Free the callee and the activation, which must not be used
+ * the frame starts a fresh page; Darwin's generated calls append it to the
+ * frame. Free the callee and the activation, which must not be used
  * afterwards.
  */
 static void zend_native_direct_activation_free_callee(
@@ -8151,8 +8131,8 @@ static void zend_native_call_direct_release(
 	target_release = zend_native_call_snapshot_target_release(
 		callee, activation->dynamic_target, activation->generator_created);
 	/* Clear every activation field needed by pop before the callee frame can
-	 * disappear.  Legacy activations live inside that frame, while universal
-	 * activations live in the preceding setup record. */
+	 * disappear: a direct activation may live next to that frame, a
+	 * universal one lives in the preceding setup record. */
 	activation->callee = NULL;
 	caller->call = pending_call;
 	EG(current_execute_data) = caller;
@@ -8592,9 +8572,8 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 		*context->active_direct_call;
 	if (activation == NULL || activation->caller != caller
 			|| activation->descriptor != descriptor) {
-		/* Direct-enter failures happen before an activation can be published.
-		 * Route their exception from the source call site exactly once instead
-		 * of treating the absent callee frame as a corrupt completion. */
+		/* A failed direct enter published no activation: route its
+		 * exception from the source call site. */
 		if (status == ZEND_NATIVE_EXCEPTION && EG(exception) != NULL) {
 			result.status = zend_native_prepare_finally_exception(
 				caller, descriptor->source_position) == SUCCESS
@@ -8632,11 +8611,6 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 		zend_throw_error(
 			NULL, "Native callee violated its exact scalar result contract");
 		status = ZEND_NATIVE_EXCEPTION;
-	}
-	if (status == ZEND_NATIVE_BAILOUT) {
-		result.status = status;
-		zend_native_call_direct_abandon_activation(activation);
-		return result;
 	}
 	/* The completed callee remains published in caller->call until release.
 	 * Zend's unfinished-execution cleanup interprets that field as pending call
@@ -8843,10 +8817,9 @@ static zend_native_status zend_native_call_dynamic_internal_entry(
 			&& zend_handle_undef_args(execute_data) == FAILURE) {
 		goto complete;
 	}
-	/* Internal handlers own parameter parsing and its observable error order.
-	 * This also covers fake Closure::fromCallable() handlers, whose temporary
-	 * function metadata intentionally advertises no ordinary parameters while
-	 * the handler accepts and forwards the raw arguments. */
+	/* Internal handlers parse their parameters in their own error order; a
+	 * fake Closure::fromCallable() handler advertises no parameters and
+	 * forwards the raw arguments. */
 	#if ZEND_DEBUG
 	bool should_throw = zend_internal_call_should_throw(
 		execute_data->func, execute_data);
@@ -8906,12 +8879,11 @@ static bool zend_native_frame_descends_from(
 void zend_native_call_direct_unwind(zend_execute_data *outermost)
 {
 	/*
-	 * An observed direct callee owns its own C bailout boundary.  Its active
-	 * call record, however, is owned by the generated caller and remains live
-	 * until the callee returns a bailout status to that caller.  Unwind only
-	 * activations nested below this boundary; freeing the activation whose
-	 * callee is outermost would release the very frame whose observer and
-	 * compiled variables this boundary still has to finish.
+	 * An observed direct callee has its own bailout boundary, but its
+	 * activation belongs to the generated caller until the callee returns
+	 * the bailout status. Unwind only activations nested below the boundary:
+	 * the one whose callee is outermost holds the frame whose observer and
+	 * CVs the boundary still finishes.
 	 */
 	while (zend_native_active_direct_call != NULL
 			&& zend_native_active_direct_call->callee != outermost
@@ -9257,7 +9229,7 @@ zend_native_status zend_native_call_convert_descriptor_explicit(
 /*
  * The miss of a stale new C(...) fast site whose re-arm failed because C is
  * not bound yet, as the first new of an autoloaded class in a request finds
- * it: fetch C as the VM's NEW does, loading it, and when the name now binds
+ * it: fetch C as the VM's NEW does, loading it, and when the name then binds
  * the class the site was published for, run the fast Init. Returns
  * ZEND_NATIVE_USER_CALL_RESOLUTION_FAST after the fast Init,
  * ZEND_NATIVE_USER_CALL_RESOLUTION_FAILURE with the exception set when C
@@ -9304,7 +9276,7 @@ static uint32_t zend_native_call_fast_new_loaded(
 	if (ce != header->fast_key || EG(exception) != NULL) {
 		return ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS;
 	}
-	/* The re-arm now finds C bound. */
+	/* The next re-arm finds C bound. */
 	header->fast_rearm_epoch = 0;
 	return zend_native_call_fast_new(caller, descriptor,
 			(uint32_t) ((const char *) result - (const char *) caller))
@@ -9313,12 +9285,11 @@ static uint32_t zend_native_call_fast_new_loaded(
 }
 
 /*
- * The universal Init of a source call site, out of line: reserve the setup
- * frame and its activation, make the activation active, resolve the target
- * and push the callee frame, as the generated universal Init did inline.
- * result_offset is the result slot's frame offset, or UINT32_MAX for a
- * discarded result. On failure nothing stays active and the status is
- * returned with the exception set. A fast site
+ * The universal Init of a source call site: reserve the setup frame and
+ * its activation, make the activation active, resolve the target and push
+ * the callee frame. result_offset is the result slot's frame offset, or
+ * UINT32_MAX for a discarded result. On failure nothing stays active and
+ * the status is returned with the exception set. A fast site
  * (ZEND_NATIVE_USER_CALL_UNIVERSAL_FAST_SITE) may run its fast Init instead
  * and return ZEND_NATIVE_USER_CALL_RESOLUTION_FAST.
  */
@@ -9422,10 +9393,9 @@ uint32_t zend_native_call_universal_init(
 }
 
 /*
- * The universal Do of a source call site, out of line: normalize a
- * trampoline, then call the internal target's entry or invoke the user
- * target, releasing the activation as the generated universal Do did,
- * also when the call fails. Returns ZEND_NATIVE_RETURNED, or
+ * The universal Do of a source call site: normalize a trampoline, then
+ * call the internal target's entry or invoke the user target, releasing the
+ * activation also when the call fails. Returns ZEND_NATIVE_RETURNED, or
  * ZEND_NATIVE_EXCEPTION with the exception pending.
  */
 uint32_t zend_native_call_universal_do(
@@ -9465,11 +9435,10 @@ uint32_t zend_native_call_universal_do(
 }
 
 /*
- * The universal Send of a frame-held argument, out of line: a placement the
- * resolution expands at run time is sent through the activation, any other
- * through the source setter, as the generated universal Send did. On
- * failure the activation is released and FAILURE returned with the
- * exception pending.
+ * The universal Send of a frame-held argument: a placement the resolution
+ * expands at run time is sent through the activation, any other through the
+ * source setter. On failure the activation is released and FAILURE returned
+ * with the exception pending.
  */
 zend_result zend_native_call_universal_send(
 	zend_execute_data *caller,
@@ -9777,16 +9746,6 @@ static bool zend_native_call_fast_receive_frame(
 }
 
 /*
- * The fast Do of a call site whose Init pushed the frame (see
- * zend_native_user_call_site_header), out of line: unlink the frame from
- * EX(call), initialize it for its target as i_init_func_execute_data()
- * does, receive the parameters natively or through
- * zend_native_call_fast_prepare(), enter the target and leave through
- * zend_native_call_fast_leave(). dynamic_entry is the entry a dynamic
- * site's Init resolved, NULL for a published one; result_offset is the
- * result slot's frame offset, UINT32_MAX for a discarded result.
- */
-/*
  * A constant-expression default, as ZEND_RECV_INIT receives it: the value
  * cached in the run-time cache, else evaluated (and cached when it is not
  * counted and had no side effects). A value the parameter's type bits do not
@@ -9833,6 +9792,16 @@ static zend_never_inline uint32_t zend_native_call_fast_receive_ast_default(
 	return ZEND_NATIVE_RETURNED;
 }
 
+/*
+ * The fast Do of a call site whose Init pushed the frame (see
+ * zend_native_user_call_site_header): unlink the frame from EX(call),
+ * initialize it for its target as i_init_func_execute_data() does, receive
+ * the parameters natively or through zend_native_call_fast_prepare(), enter
+ * the target and leave through zend_native_call_fast_leave().
+ * dynamic_entry is the entry a dynamic site's Init resolved, NULL for a
+ * published one; result_offset is the result slot's frame offset,
+ * UINT32_MAX for a discarded result.
+ */
 uint32_t zend_native_call_fast_do(
 	zend_execute_data *caller,
 	zend_native_execution_context *context,
@@ -10029,10 +9998,9 @@ uint32_t zend_native_call_fast_do_internal(
 }
 
 /*
- * The universal Expand of a source call site, out of line: a resolution
- * that expands arguments at run time expands them into the callee frame,
- * as the generated universal Expand did. On failure the activation is
- * released and FAILURE returned with the exception pending.
+ * The universal Expand of a source call site: a resolution that expands
+ * arguments at run time expands them into the callee frame. On failure the
+ * activation is released and FAILURE returned with the exception pending.
  */
 zend_result zend_native_call_universal_expand(void)
 {
@@ -10180,19 +10148,6 @@ static bool zend_native_call_fast_rearm_internal(
 	}
 }
 
-/*
- * A published fast site whose epoch is stale, as every site is after a
- * request ends, would take the universal protocol once to be published
- * again. Re-arm it in place when its target still applies, as the VM's
- * first call in a request looks the function up again: a function name
- * must still bind the published function, and a method site's class must
- * be an immutable (persistent) class, whose identity and methods cannot
- * change between requests. The target must be immutable, so its entry cell
- * outlives the request that published it; the cell must still hold the
- * published native entry, and the run-time cache is the current request's.
- * Tried once per site and epoch; false leaves the site to the universal
- * protocol, which may still publish it in this epoch.
- */
 static bool zend_native_call_fast_rearm_site(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor);
@@ -10229,6 +10184,19 @@ static bool zend_native_call_rearm_name_binding(
 	return bound != NULL && Z_PTR_P(bound) == function;
 }
 
+/*
+ * A published fast site whose epoch is stale, as every site is after a
+ * request ends, would take the universal protocol once to be published
+ * again. Re-arm it in place when its target still applies, as the VM's
+ * first call in a request looks the function up again: a function name
+ * must still bind the published function, and a method site's class must
+ * be an immutable (persistent) class, whose identity and methods cannot
+ * change between requests. The target must be immutable, so its entry cell
+ * outlives the request that published it; the cell must still hold the
+ * published native entry, and the run-time cache is the current request's.
+ * Tried once per site and epoch; false leaves the site to the universal
+ * protocol, which may still publish it in this epoch.
+ */
 bool zend_native_call_fast_rearm(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor)
@@ -10455,10 +10423,10 @@ zend_native_direct_call_result zend_native_call_fragment(
 					"Invalid native call-fragment argument");
 			}
 			result.status = zend_native_call_fragment_cleanup(caller, cell);
-			/* The fragment cleanup has retired this nested call frame.  Resume
-			 * Zend's unfinished-call walk at the retired call's INIT, not at its
-			 * failing SEND; otherwise that SEND ordinal is applied to the now
-			 * innermost enclosing call frame. */
+			/* The cleanup retired this call frame: resume Zend's
+			 * unfinished-call walk at its INIT, since from the failing SEND
+			 * the walk would apply that SEND's ordinal to the enclosing
+			 * call. */
 			if (result.status == ZEND_NATIVE_EXCEPTION
 					&& EG(exception) != NULL
 					&& zend_native_prepare_finally_exception(caller,

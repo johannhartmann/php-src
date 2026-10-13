@@ -896,11 +896,10 @@ static bool zend_mir_guard_compare_structure(
 
 /*
  * The comparisons that structurally guard the increment at inc_index of
- * slot. They depend on the op_array and its SSA only, so overlay
- * preparation finds them once per increment and keeps them for the compile;
- * the bound facts the guard also needs change while the scalar facts are
- * inferred and closed, and are read on every query. Returns false when the
- * memo cannot be extended; the caller then scans without it.
+ * slot. They depend on the op_array and its SSA only and are found once per
+ * increment; the bound facts change while scalar facts are inferred, so
+ * every query reads them again. Returns false when the memo cannot grow;
+ * the caller then scans without it.
  */
 static bool zend_mir_guard_compares(
 	const zend_mir_integration *integration,
@@ -1634,11 +1633,9 @@ static bool zend_mir_infer_scalar_facts(
 				}
 			}
 			fact = &integration->overlay_inferred_facts[phi->ssa_var];
-			/* A Pi node can describe an impossible successor of a constant
-			 * comparison. Zend retains that dead edge in conservative SSA, so
-			 * its absolute constraint may have an empty intersection with the
-			 * already exact fact. The fact is vacuously valid on the dead edge;
-			 * keep it unchanged instead of rejecting the complete op_array. */
+			/* A Pi on the impossible successor of a constant comparison,
+			 * which Zend's SSA keeps, may contradict the exact fact. The fact
+			 * holds vacuously on that dead edge, so it stays unchanged. */
 			if ((fact->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0
 					&& (maximum < fact->integer_min
 						|| minimum > fact->integer_max)) {
@@ -1650,8 +1647,8 @@ static bool zend_mir_infer_scalar_facts(
 			}
 		}
 	}
-	/* Propagate the now-closed induction facts through compare and verify
-	 * definitions without relying on optimizer observation order. */
+	/* Propagate the closed induction facts through compare and verify
+	 * definitions, independent of opline order. */
 	for (pass = 0; pass < 3; pass++) {
 		for (index = 0; index < op_array->last; index++) {
 			const zend_op *opline = &op_array->opcodes[index];
@@ -1838,9 +1835,8 @@ static bool zend_mir_scalarizable_opcode(
 
 	/*
 	 * A registered user-opcode callback may mutate any canonical frame slot
-	 * before the selected opcode executes. Such a frame cannot retain
-	 * source-SSA payloads in machine registers across the callback boundary.
-	 * Callback-free functions keep the scalar fast path unchanged.
+	 * before the selected opcode executes, so no source-SSA payload may stay
+	 * in a machine register across it.
 	 */
 	if (integration->user_opcode_callbacks) {
 		return false;
@@ -2064,12 +2060,12 @@ static bool zend_mir_observes_top_level_globals(
 }
 
 /*
- * Zend SSA deliberately omits exceptional predecessors.  A CV read from a
- * catch/finally entry onward therefore cannot use an inferred scalar SSA value
- * as its sole authority: the throwing path may have skipped the definition
- * that produced that value, or the handler may have updated the frame without
- * an SSA merge.  Keep those identities source-backed so both normal and
- * exceptional continuations read the canonical frame slot.
+ * Zend SSA omits exceptional predecessors. A CV read from a catch/finally
+ * entry onward therefore cannot use an inferred scalar SSA value as its sole
+ * authority: the throwing path may have skipped the definition that produced
+ * that value, or the handler may have updated the frame without an SSA
+ * merge. Keep those identities source-backed so both normal and exceptional
+ * continuations read the canonical frame slot.
  */
 static bool zend_mir_index_exception_continuation_cvs(
 	const zend_op_array *op_array, const zend_ssa *ssa,
@@ -2145,13 +2141,11 @@ static bool zend_mir_index_exception_continuation_cvs(
 }
 
 /*
- * Machine lowering and boxed-frame materialization are deliberately separate
- * decisions. A scalar instruction is always the sole implementation of its
- * source opcode. If a later boxed operation consumes that value, materialize
- * the machine result into its canonical frame slot with an explicit
- * ZVAL_STORE instead of replaying the source opcode through the executable
- * value-operation helper.
- * Propagate that requirement through scalar definitions and PHIs.
+ * A scalar instruction is always the sole implementation of its source
+ * opcode. When a boxed operation consumes its value, an explicit ZVAL_STORE
+ * materializes the machine result into its canonical frame slot; the source
+ * opcode is never replayed through the value-operation helper. Propagates
+ * that requirement through scalar definitions and PHIs.
  */
 static bool zend_mir_plan_boxed_materialization(
 	zend_mir_integration *integration,
@@ -2348,12 +2342,6 @@ static void zend_mir_invalidate_inferred_fact(
 		sizeof(integration->overlay_inferred_facts[ssa_variable_id]));
 }
 
-/*
- * Inference runs before the overlay decides which source-backed definitions
- * are replaced by canonical zval execution. Removing such a definition must
- * also remove every PHI and scalar instruction whose proof depended on it.
- * Otherwise the call model can mistake a boxed zval for a borrowed scalar.
- */
 /*
  * The control-flow lowering lowers every value connected through a live PHI
  * (the PHI results and their inputs) as one component, and as zvals as soon
@@ -2573,6 +2561,12 @@ static bool zend_mir_close_phi_components(
 	return true;
 }
 
+/*
+ * Inference runs before the overlay decides which source-backed definitions
+ * execute as canonical zvals. Removing such a definition also removes every
+ * PHI and scalar instruction whose proof depended on it; otherwise the call
+ * model could mistake a boxed zval for a borrowed scalar.
+ */
 static bool zend_mir_close_scalar_overlay(
 	zend_mir_integration *integration,
 	const zend_op_array *op_array, const zend_ssa *ssa)
@@ -2629,10 +2623,8 @@ static bool zend_mir_close_scalar_overlay(
 			}
 			ssa_op = &ssa->ops[index];
 			integration->overlay_scalarized_opcodes[index] = 0;
-			/* RETURN remains semantically required when its scalar proof is
-			 * invalidated by a boxed producer or PHI.  Leave it to the
-			 * executable value operation so the canonical source zval is
-			 * returned instead of removing the reachable block terminator. */
+			/* A RETURN whose scalar proof fails still terminates its block:
+			 * the value operation returns the canonical source zval. */
 			integration->overlay_suppressed_opcodes[index] =
 				op_array->opcodes[index].opcode == ZEND_RETURN ? 0 : 1;
 			zend_mir_invalidate_inferred_fact(
@@ -2917,13 +2909,11 @@ static bool zend_mir_prepare_overlay(
 			}
 			/*
 			 * A source-backed value operation owns its result as a canonical
-			 * zval.  Type inference may describe the common fast path, but it
-			 * is not a proof that every semantic path has an unboxed machine
-			 * result (integer arithmetic may overflow to double, for example).
-			 * Do not let a removed value definition remain available to the
-			 * call model as an exact scalar SSA value.  Direct call results are
-			 * different: their generated call instruction defines the machine
-			 * result and therefore retains its declared-result fact.
+			 * zval. Type inference describes the common path only (integer
+			 * arithmetic may overflow to double), so a removed value
+			 * definition must not reach the call model as an exact scalar.
+			 * A direct call result keeps its declared-result fact: the call
+			 * instruction defines the machine result.
 			 */
 			if (value_fragment && !call_fragment) {
 				const int definitions[3] = {
@@ -4399,8 +4389,7 @@ static bool zend_mir_prepare_initial_slot_values(
 			/*
 			 * Removed call/value fragments may define the same TMP slot
 			 * repeatedly. The retained RETURN sees the latest SSA
-			 * representative, so the private prerequisite entry state
-			 * must publish that representative as well.
+			 * representative, so the entry state publishes it too.
 			 */
 			initial_values[slot_id] = candidate;
 		}
@@ -4516,14 +4505,11 @@ static bool zend_mir_prepare_providers(
 	integration->numeric_context.conversion_value =
 		zend_mir_typed_conversion_value;
 	integration->numeric_context.proofs =
-		ZEND_MIR_NUMERIC_PROOF_SINGLE_BLOCK
-		| ZEND_MIR_NUMERIC_PROOF_NO_CALLS
+		ZEND_MIR_NUMERIC_PROOF_NO_CALLS
 		| ZEND_MIR_NUMERIC_PROOF_NO_REENTRY
 		| ZEND_MIR_NUMERIC_PROOF_NO_DESTRUCTOR
-		| ZEND_MIR_NUMERIC_PROOF_NO_EXCEPTION;
-	integration->numeric_context.proofs &=
-		~ZEND_MIR_NUMERIC_PROOF_SINGLE_BLOCK;
-	integration->numeric_context.proofs |= ZEND_MIR_NUMERIC_PROOF_SOURCE_CFG;
+		| ZEND_MIR_NUMERIC_PROOF_NO_EXCEPTION
+		| ZEND_MIR_NUMERIC_PROOF_SOURCE_CFG;
 	if (!zend_mir_numeric_provider_set_init(
 			&integration->numeric_context,
 			&integration->numeric_providers)) {
@@ -4539,19 +4525,15 @@ static bool zend_mir_prepare_providers(
 	/* prepare_overlay lists the overlay's SSA uses in opline order. */
 	integration->lifetime_context.ssa_uses_in_opline_order = true;
 	integration->lifetime_context.proofs =
-		ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK
-		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
+		ZEND_MIR_STRAIGHT_LINE_PROOF_NO_CALLS
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_REENTRY
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_EXACT_SCALAR
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NON_REFCOUNTED
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NOT_BY_REFERENCE
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_OBSERVER
 		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_DESTRUCTOR
-		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_EXCEPTION;
-	integration->lifetime_context.proofs &=
-		~ZEND_MIR_STRAIGHT_LINE_PROOF_SINGLE_BLOCK;
-	integration->lifetime_context.proofs |=
-		ZEND_MIR_STRAIGHT_LINE_PROOF_SOURCE_CFG;
+		| ZEND_MIR_STRAIGHT_LINE_PROOF_NO_EXCEPTION
+		| ZEND_MIR_STRAIGHT_LINE_PROOF_SOURCE_CFG;
 	if (!zend_mir_lifetime_provider_init(
 			&integration->lifetime_context,
 			&integration->lifetime_provider)) {
@@ -4750,12 +4732,11 @@ static bool zend_mir_forward_add_instruction(
 			|| record->representation == ZEND_MIR_REPRESENTATION_ZVAL);
 	/*
 	 * The control-flow lowering predeclares every member of a dynamic PHI
-	 * component as a zval.
-	 * A COPY into one of those identities may still consume an exact machine
-	 * scalar, including one produced by an earlier boxed COPY. Keep the defining
-	 * instruction consistent with the value table and defer the source check to
-	 * add_operand; a qualifying source needs an explicit ZVAL_STORE so the
-	 * canonical destination slot is initialized.
+	 * component as a zval. A COPY into one may still consume an exact machine
+	 * scalar, also one an earlier boxed COPY produced. The instruction takes
+	 * the zval representation of the value table; add_operand checks the
+	 * source and, when it qualifies, emits the ZVAL_STORE that initializes the
+	 * canonical destination slot.
 	 */
 	if (boxed_scalar_copy) {
 		forwarded.representation = ZEND_MIR_REPRESENTATION_ZVAL;
@@ -4839,10 +4820,9 @@ static bool zend_mir_forward_add_operand(
 				&& (value_id >= integration->source.ssa_count
 					|| !integration->overlay_machine_ssa[value_id]))) {
 		/*
-		 * A boxed COPY already names the canonical source zval.  Only an
-		 * exact scalar payload needs to be materialized into the destination
-		 * slot; references and other boxed values must retain their zval
-		 * identity instead of being reinterpreted as machine scalars.
+		 * A boxed COPY already names the canonical source zval. Only an
+		 * exact scalar payload is stored into the destination slot;
+		 * references and other boxed values keep their zval identity.
 		 */
 		integration->overlay_pending_store = false;
 		return true;
@@ -5381,8 +5361,8 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_op_array(
 		return zend_mir_lowering_make_result(
 			status, frontend_diagnostic.code);
 	}
-	/* Values live across a generator suspension stay canonical (ADR 0024);
-	 * generator functions keep the boxed form for now. */
+	/* Values live across a generator suspension stay canonical (ADR 0024),
+	 * so generator functions keep the boxed form. */
 	integration.typed = typed_execution
 		&& (op_array->fn_flags & ZEND_ACC_GENERATOR) == 0;
 	integration.value_op_array = op_array;

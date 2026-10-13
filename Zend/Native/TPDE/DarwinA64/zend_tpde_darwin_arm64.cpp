@@ -1011,8 +1011,7 @@ bool ZendCompilerA64::compile_boxed_cond_guard(IRInstRef instruction) {
 	 * JMPZ_EX/JMPNZ_EX consume their source TMP before publishing the boolean
 	 * result.  The generic helper owns that lifetime transition; the scalar
 	 * truthiness fast path only observes the slot and must not overwrite a
-	 * refcounted source value directly. Register-authoritative values have been
-	 * materialized above so the helper observes the canonical frame value.
+	 * refcounted source value directly.
 	 */
 	if (layout.has_result) {
 		generate_raw_jump(Jump::jmp, slow);
@@ -2615,9 +2614,9 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto context_liveness = val_ref(node.operands[1]);
 		/*
 		 * Source-call phases contain target-local fast/slow branches which are
-		 * invisible to TPDE's IR CFG.  Publish every live non-fixed assignment
-		 * before either path can spill or clobber it so the join may reload the
-		 * same canonical value regardless of the runtime path taken.
+		 * invisible to TPDE's IR CFG.  Spill every live non-fixed assignment
+		 * before either path can clobber it, so the join reloads the same
+		 * canonical value on both paths.
 		 */
 		(void) spill_before_branch(true);
 		auto context_register = [&]() {
@@ -4042,10 +4041,8 @@ bool ZendCompilerA64::compile_inst_impl(
 		resume_frame.reset();
 		resume_frame_ref.reset();
 		reconcile_target_branch_state(generator_gateway_state_);
-		/* Keep the canonical frame assignment locked while allocating and
-		 * reloading every resume-live value. Otherwise register pressure may
-		 * evict the frame between two loads while the raw register handle is
-		 * still used as their base. */
+		/* Lock the frame assignment across the reloads, as in
+		 * emit_materializations(). */
 		const auto frame_local = adaptor->val_local_idx(
 			IRValueRef{Adaptor::FRAME_VALUE});
 		auto *frame_assignment = val_assignment(frame_local);
@@ -5283,11 +5280,10 @@ bool ZendCompilerA64::compile_inst_impl(
 		continuation_edge_emitted_ = true;
 		return true;
 	};
-	/* Very large source components can contain hundreds of thousands of
-	 * guarded value operations.  Keep their native control flow and canonical
-	 * runtime semantics, but avoid repeating the sizeable speculative fast
-	 * sequence at every site.  The existing cold block remains ordinary TPDE
-	 * code and calls the operation-specific native runtime helper. */
+	/* Very large components can contain hundreds of thousands of guarded
+	 * value operations.  To bound code size they skip the speculative fast
+	 * sequence and branch straight to the cold block, which calls the
+	 * operation's runtime helper. */
 	if (adaptor->compact_guarded_value_operation(instruction)) {
 		return branch_to_guarded_cold();
 	}
@@ -7054,10 +7050,9 @@ bool ZendCompilerA64::compile_inst_impl(
 					static_cast<uint32_t>(offsetof(zend_string, len)), 8);
 			}
 			/*
-			 * Source call arguments may remain canonical zvals even when the
-			 * producer is register-authoritative.  Publish strlen's complete
-			 * result before such a call can observe the temporary; later machine
-			 * consumers still use result_reg directly.
+			 * A source call argument may read the result TMP as a canonical
+			 * zval although the producer is register-authoritative, so publish
+			 * the complete zval; machine consumers keep using result_reg.
 			 */
 			store_off(frame_scratch.cur_reg(), layout.result_offset,
 				result_reg, 8);
@@ -8437,10 +8432,10 @@ bool ZendCompilerA64::compile_inst_impl(
 			if (adaptor->machine_kind(node.result)
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 				/*
-				 * Keep the complete two-part boxed value authoritative on the
-				 * guarded edge. Property reads copy their value, so refcounted
-				 * payloads acquire the ownership represented by the derived value
-				 * below before control reaches the direct consumer.
+				 * The two-part boxed result stays register-authoritative on
+				 * the guarded edge. A property read copies its value, so a
+				 * refcounted payload is addref'ed before it reaches the
+				 * consumer.
 				 */
 				auto result = result_ref(node.result);
 				auto payload = result.part(0);
@@ -9322,11 +9317,10 @@ bool ZendCompilerA64::compile_inst_impl(
 					return false;
 				}
 				/*
-				 * The interrupt poll contains a target-local fast/slow branch which
-				 * is invisible to TPDE's IR CFG. The slow-path call invalidates
-				 * caller-saved assignments in the shared compile-time state. Spill
-				 * live values before the branch so the fast path reaches the join
-				 * with the same canonical copies available for later reloads.
+				 * The interrupt poll's fast/slow branch is invisible to TPDE's
+				 * IR CFG, and the slow-path call invalidates caller-saved
+				 * assignments. Spill live values before the branch so both paths
+				 * reach the join with the same canonical copies.
 				 */
 				const auto spilled = spill_before_branch(true);
 				auto done = text_writer.label_create();
@@ -11107,11 +11101,11 @@ bool ZendCompilerA64::compile_inst_impl(
 						(void) discarded;
 					}
 					/*
-					 * A split guard already routed observer-visible execution
-					 * into the materialized cold block.  Older machine CFGs
-					 * keep that guard in this block and therefore retain the
-					 * context operand; handle both layouts without creating a
-					 * private Zend frame on the register-only edge.
+					 * A split observer guard already routed observer-visible
+					 * execution into the materialized cold block; otherwise
+					 * the guard stays in this block, which then keeps the
+					 * context operand. Neither layout creates a private Zend
+					 * frame on the register-only edge.
 					 */
 					if (has_inline_context) {
 						auto [context_ref, context] =
@@ -12178,8 +12172,7 @@ bool ZendCompilerA64::compile_inst_impl(
 
 					/*
 					 * Guard the native C stack before recursive entry.  The
-					 * existing slow path raises the canonical Zend overflow
-					 * error; no helper is called on a successful call.
+					 * slow path raises the canonical Zend overflow error.
 					 */
 #ifdef ZEND_CHECK_STACK_LIMIT
 					load_off(first_reg, context_reg,

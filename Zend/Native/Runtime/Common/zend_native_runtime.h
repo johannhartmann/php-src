@@ -21,8 +21,8 @@ typedef void (*zend_native_source_probe_t)(
 	zend_execute_data *execute_data,
 	uint32_t source_position_id);
 
-/* A retired id keeps its number; its table slot aborts
- * (zend_native_call_retired_helper()). */
+/* Process-local helper ids, not a public PHP ABI. A retired id keeps its
+ * number; its table slot aborts (zend_native_call_retired_helper()). */
 typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_USER_CALL_BEGIN = 1, /* retired */
 	ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER = 2,
@@ -201,7 +201,6 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE = 174,
 	ZEND_NATIVE_HELPER_CHECK_FUNC_ARG_RESOLVED = 175,
 	ZEND_NATIVE_HELPER_FRAME_ACTIVATION_POP = 176,
-	/* Process-local generated-code ABI only; this is not a public PHP ABI. */
 	ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RELEASE = 177,
 	ZEND_NATIVE_HELPER_CONST_INCLUDE_ONCE = 178,
 	ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_SOURCE_ARGUMENT = 179,
@@ -383,9 +382,9 @@ typedef struct _zend_native_runtime_helper {
 } zend_native_runtime_helper;
 
 /*
- * The helper table is process-local and never serialized into MIR.
- * Generated code binds stable helper IDs to these addresses while it is
- * compiled in the current process. Helper ID N occupies table slot N - 1.
+ * The helper table is never serialized into MIR: generated code binds
+ * stable helper IDs to these addresses while it is compiled in the current
+ * process. Helper ID N occupies table slot N - 1.
  */
 /* Checks the table once, at engine startup. */
 zend_result zend_native_runtime_validate(void);

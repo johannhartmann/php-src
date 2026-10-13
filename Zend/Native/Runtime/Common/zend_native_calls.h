@@ -397,24 +397,22 @@ typedef struct _zend_native_user_call_descriptor {
  */
 typedef struct _zend_native_user_call_site_header {
 	/*
-	 * Native fast path (ADR 0025 section 3): while fast_epoch equals the
-	 * current call-cache epoch, the site's generated code calls fast_function
-	 * as the VM does, without resolution or activation: it pushes the frame,
-	 * stores the positional arguments and calls fast_entry. fast_key is the
-	 * receiver class of a method site; a function site needs none, since a
-	 * name binds one function per request. Published only for lease-managed
-	 * entry cells, untyped non-variadic targets taking exactly the sent
-	 * arguments by value, with identity placements.
-	 */
-	/* A site whose target needs no name or class binding (a method of an
+	 * Native fast path (ADR 0025 section 3): while fast_epoch is at least
+	 * the current call-cache epoch, the site's generated code calls
+	 * fast_function as the VM does, without resolution or activation: it
+	 * pushes the frame, stores the positional arguments and calls
+	 * fast_entry. fast_key is the receiver class of a method site; a
+	 * function site needs none, since a name binds one function per
+	 * request.
+	 *
+	 * A site whose target needs no name or class binding (a method of an
 	 * immutable class, self::, parent::, static::) holds it across
-	 * requests: its fast_epoch is zend_native_call_persistent_site_epoch(),
-	 * at or above every epoch until the persistent sites are invalidated.
-	 * The site is fast while fast_epoch is at least the current epoch.
-	 * fast_run_time_cache is the callee's run-time cache in the request
-	 * that armed a request-local site; a persistent site has none and its
-	 * call looks the current request's up as the VM does
-	 * (zend_native_call_fast_run_time_cache()). */
+	 * requests: its fast_epoch is at or above every epoch until the
+	 * persistent sites are invalidated. fast_run_time_cache is the callee's
+	 * run-time cache in the request that armed a request-local site; a
+	 * persistent site has none and its call looks the current request's up
+	 * as the VM does (zend_native_call_fast_run_time_cache()).
+	 */
 	uint64_t fast_epoch;
 	const void *fast_key;
 	zend_function *fast_function;
@@ -582,11 +580,11 @@ typedef struct _zend_native_user_call_resolution {
 } zend_native_user_call_resolution;
 
 /*
- * Legacy direct activations live immediately after their Zend frame. Universal
- * setup activations instead live in a fake VM-stack frame before resolution and
- * before the eventual callee, so call-frame growth cannot invalidate them.
- * Generated callers link either form before any bailout-capable transition so
- * the outermost C-only boundary can unwind without per-call catchers.
+ * A direct activation lives next to its Zend frame; a universal setup
+ * activation lives in a fake VM-stack frame before the eventual callee, so
+ * call-frame growth cannot invalidate it. Generated callers link either form
+ * before any bailout-capable transition, so the outermost C boundary can
+ * unwind without per-call catchers.
  */
 typedef struct _zend_native_direct_activation {
 	zend_execute_data *setup_frame;
@@ -677,61 +675,54 @@ zend_native_frame_entry_t zend_native_reentry_resolve_entry_miss(
 bool zend_native_call_normalize_trampoline(
 	zend_execute_data *call, zend_function *expected_target);
 
-/*
- * Resolve and pin a universal dynamic target without creating or publishing a
- * Zend frame. The resolver may allocate, call object/class handlers, reenter,
- * throw, or bail out while performing lookup/RTC/reentry work. It retains every
- * target resource and entry-cell lease in the returned ownership mask. It never
- * transfers call arguments and never invokes or finishes a call. It resolves
- * target-dependent positional/named/variadic/by-reference placement into the
- * buffer embedded after the already-linked setup activation. AUTO conservatively
- * uses the descriptor's known initial argument count. Source reference state is
- * intentionally deferred until each SEND source point. Insufficient capacity
- * fails without allocating a plan.
- */
-/* Slow stack-growth transition only. It marks the returned fake frame
- * ZEND_CALL_ALLOCATED; generated code initializes the remaining fields and
- * links the setup record with direct stores. The setup storage contains a fake
- * Zend frame header, an aligned activation, N placement rows, then at least
- * 2*N+1 uint32 target-set entries. */
+/* Reserves a setup record on the VM stack, its fake frame marked
+ * ZEND_CALL_ALLOCATED when it starts a new page; the caller initializes the
+ * remaining fields and links the record. The storage holds a fake Zend frame
+ * header, an aligned activation, N placement rows, then at least 2*N+1
+ * uint32 target-set entries. */
 void *zend_native_frame_activation_reserve(uint32_t setup_size);
+/*
+ * Resolve and pin a universal call target without creating a Zend frame.
+ * Lookup may allocate, call handlers, reenter, throw or bail out. Every
+ * retained target resource and entry-cell lease is named in the returned
+ * ownership mask; no argument is transferred and nothing is invoked. The
+ * target-dependent placement goes into the buffer after the linked setup
+ * activation; AUTO takes the descriptor's initial argument count. The
+ * reference state of a source is checked at its SEND. Insufficient capacity
+ * fails.
+ */
 zend_native_user_call_resolution_status zend_native_call_resolve_user(
 	zend_native_direct_activation *activation,
 	zend_native_entry_cell *entry_cell_hint,
 	uint32_t argument_count_hint);
-/* Bailout-unwind primitive. Normal generated completion unlinks and pops the
- * activation with direct stores and bounded ownership-release helpers. */
+/* Releases or, after a bailout, abandons the active activation. */
 void zend_native_frame_activation_release(
 	zend_native_direct_activation *activation);
-/* Canonically pops an already-unlinked, ownership-free setup record. Unlike
- * activation_release(), this bounded helper performs no zval destruction or
- * target release; it only handles the inline/page-crossing VM-stack detail. */
+/* Pops an unlinked, ownership-free setup record from the VM stack; destroys
+ * nothing, unlike zend_native_frame_activation_release(). */
 void zend_native_frame_activation_pop(
 	zend_native_direct_activation *activation);
 
 /*
- * Executes all source-ordered argument operations marked for runtime expansion
- * in one bounded transition. The helper receives compiler-decoded descriptors;
- * it does not decode operands from an opline, invoke an opcode handler, or enter
- * a VM dispatcher. Array/Traversable expansion may allocate, call iterator
- * methods, reenter, throw, or bail out. The returned frame may differ after VM
- * stack growth. NULL denotes failure with caller->call retaining cleanup state.
+ * Executes the argument operations marked for runtime expansion, in source
+ * order. Array/Traversable expansion may allocate, call iterator methods,
+ * reenter, throw or bail out. The returned frame may differ after VM stack
+ * growth; NULL is failure with caller->call holding the cleanup state.
  */
 zend_execute_data *zend_native_call_expand_user_arguments(
 	zend_native_direct_activation *activation);
 /*
- * Execute one source-backed runtime-tail SEND at its original source phase.
- * The placement is marked consumed only after success, and the final bounded
- * expansion helper skips consumed placements so source expressions, unpacking,
- * and by-reference diagnostics are never repeated at DO.
+ * Execute one runtime-tail SEND at its source position. The placement is
+ * marked consumed on success, and zend_native_call_expand_user_arguments()
+ * skips consumed placements, so no source expression, unpacking or
+ * by-reference diagnostic is repeated at DO.
  */
 zend_result zend_native_call_send_resolved_argument(
 	zend_native_direct_activation *activation, uint32_t placement_index);
 /*
- * Normalize one resolved trampoline after generated code placed its raw
- * arguments in callee. This bounded helper may allocate/destruct, mutate the
- * pending frame, throw, or bail out; it does not invoke the target or dispatch
- * opcodes. On success resolution becomes NATIVE_USER or INTERNAL.
+ * Normalize a resolved trampoline after generated code placed its raw
+ * arguments in callee; may allocate, destroy, throw or bail out. On success
+ * the resolution becomes NATIVE_USER or INTERNAL.
  */
 zend_native_user_call_resolution_status
 zend_native_call_normalize_user_resolution(
@@ -739,11 +730,6 @@ zend_native_call_normalize_user_resolution(
 	const zend_native_user_call_descriptor *descriptor,
 	zend_execute_data *callee,
 	zend_native_user_call_resolution *resolution);
-/*
- * Releases only the resources still named by resolution->ownership. Object
- * destruction may invoke user code, reenter, throw, or bail out; generated code
- * must therefore publish all live state before calling this helper.
- */
 /*
  * Request-local cache of target-dependent call resolution per call site (see
  * zend_native_call_resolve_user()). Entry cell resets and compiler
@@ -758,6 +744,11 @@ zend_native_call_normalize_user_resolution(
 void zend_native_call_resolution_cache_invalidate(void);
 void zend_native_call_persistent_sites_invalidate(void);
 void zend_native_call_resolution_cache_destroy(void);
+/*
+ * Releases the resources still named by resolution->ownership. Object
+ * destruction may run user code, reenter, throw or bail out, so generated
+ * code publishes all live state first.
+ */
 void zend_native_call_release_user_resolution(
 	zend_native_user_call_resolution *resolution);
 zend_native_user_opcode_result zend_native_user_opcode_invoke(
@@ -765,30 +756,25 @@ zend_native_user_opcode_result zend_native_user_opcode_invoke(
 	zend_native_execution_context *context,
 	uint32_t source_position_id);
 /*
- * Prepare defaults, argument types, and the variadic aggregate for an already
+ * Prepare defaults, argument types and the variadic parameter of an
  * initialized user frame. Constant resolution and value destruction may
- * allocate, call user code, reenter, throw, or bail out. This helper does not
- * notify observers, invoke the callee, or establish an inner bailout catcher.
+ * allocate, call user code, reenter, throw or bail out. Observers are not
+ * notified.
  */
 zend_result zend_native_frame_prepare(zend_execute_data *execute_data);
 /* zend_native_frame_prepare() for a user frame that
  * ZEND_NATIVE_FRAME_PREPARED() does not pass. */
 zend_result zend_native_frame_receive(zend_execute_data *execute_data);
 /*
- * Initialize one raw published dynamic user frame and then apply
- * zend_native_frame_prepare(). The resolver guarantees an initialized RTC, so
- * zend_init_func_execute_data performs only frame-local moves/stores before the
- * ownership flags change atomically. Defaults/type/variadic preparation after
- * that boundary may allocate, destruct, call user code, reenter, throw, or bail.
- * It does not notify observers, invoke/finalize/pop the frame, or catch bailout.
+ * Initialize a raw published dynamic user frame, then apply
+ * zend_native_frame_prepare(). The resolver initialized the run-time cache,
+ * so zend_init_func_execute_data() only moves frame-local values before the
+ * ownership flags change. Observers are not notified.
  */
 zend_result zend_native_call_prepare_dynamic_frame(
 	zend_native_direct_activation *activation);
-/*
- * Bounded observer notifications for a fully published frame. Observer
- * callbacks may reenter, throw, or bail out. Neither helper invokes the callee,
- * prepares/cleans its frame, dispatches opcodes, or establishes a catcher.
- */
+/* Observer notifications for a fully published frame; observer callbacks
+ * may reenter, throw or bail out. */
 zend_native_status zend_native_frame_observer_begin(
 	zend_native_direct_activation *activation);
 zend_native_status zend_native_frame_observer_end(
@@ -829,13 +815,11 @@ void zend_native_call_set_integer_argument(
 void zend_native_call_set_double_argument(
 	zend_execute_data *caller, uint32_t ordinal, double value);
 /*
- * Completes only ZEND_CALLABLE_CONVERT(_PARTIAL) for caller->call. The
- * operands are compiler-decoded source identities; source_position is used
- * only to publish EX(opline) and the partial's declaring opline. This helper
- * does not invoke the pending target or dispatch an opcode. It consumes the
- * pending frame on conversion or pre-existing-exception cleanup. Closure and
- * partial creation may allocate or throw; target destruction may invoke user
- * code, reenter, throw, or bail out. The helper does not notify observers.
+ * ZEND_CALLABLE_CONVERT(_PARTIAL) of caller->call. source_position publishes
+ * EX(opline) and the partial's declaring opline. The pending frame is
+ * consumed on conversion or when an exception is already pending. Closure
+ * and partial creation may allocate or throw; target destruction may run
+ * user code, reenter, throw or bail out. Observers are not notified.
  */
 zend_native_status zend_native_call_convert_explicit(
 	zend_execute_data *caller,
@@ -845,18 +829,16 @@ zend_native_status zend_native_call_convert_explicit(
 	uint64_t encoded_result,
 	uint32_t extended_value,
 	uint32_t source_position);
-/* Builds the pending call frame from an immutable user-call descriptor and
- * converts it without source-opline operand decoding or opcode dispatch. */
+/* Builds the pending call frame from a user-call descriptor and converts
+ * it. */
 zend_native_status zend_native_call_convert_descriptor_explicit(
 	zend_execute_data *caller,
 	zend_native_entry_cell *cell,
 	const zend_native_user_call_descriptor *descriptor);
 /*
- * Reserves a new VM-stack page for an as-yet uninitialized dynamic frame. The
- * returned frame start and caller->call are the same published address. Stack
- * growth may allocate or bail out; it does not inspect or copy an existing
- * frame, destroy values, throw, notify observers, reenter, invoke the target,
- * or dispatch an opcode.
+ * Reserves a new VM-stack page for an uninitialized dynamic frame and
+ * publishes it as caller->call. Stack growth may allocate or bail out;
+ * nothing else happens.
  */
 zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	zend_execute_data *caller, uint32_t reservation_size);
@@ -1091,11 +1073,6 @@ void zend_native_execution_context_init(
  * observers_enabled is the one of the template's build). */
 const zend_native_execution_context *zend_native_execution_context_shared(void);
 /*
- * Native direct activations live inside the active fiber's Zend VM stack.
- * Fiber switches therefore save and clear the thread-local chain before the
- * C-stack transfer and restore the saved chain when that fiber resumes.
- */
-/*
  * Unwinding before the bailout jump (ADR 0010: cleanup is reachable from
  * the active bailout catcher). A native boundary that must clean up when a
  * bailout passes it links a record into this thread's chain instead of
@@ -1146,17 +1123,21 @@ static zend_always_inline void zend_native_bailout_records_resume(
 }
 void zend_native_bailout_records_reset(void);
 
+/*
+ * Native direct activations live inside the active fiber's Zend VM stack.
+ * Fiber switches therefore save and clear the thread-local chain before the
+ * C-stack transfer and restore the saved chain when that fiber resumes.
+ */
 void *zend_native_call_fiber_suspend(void);
 void zend_native_call_fiber_resume(void *active_direct_call);
 void zend_native_call_fiber_destroy(void);
 void zend_native_call_fiber_abandon(void *active_direct_call);
 void zend_native_call_direct_unwind(zend_execute_data *outermost);
 /*
- * Discard activations below a caught fatal-bailout boundary without invoking
- * destructors. Zend's bailout path marks the request as unclean and abandons
- * live frame values; cleanup here would double-destroy values already being
- * visited by GC. This helper only restores call links, active-entry accounting,
- * and VM-stack storage. It does not allocate, throw, reenter, or bail out.
+ * Discard activations below a caught fatal-bailout boundary without
+ * destroying values: Zend's bailout path abandons live frame values, and
+ * destroying them could free values GC is visiting. Only call links,
+ * active-entry accounting and VM-stack storage are restored.
  */
 void zend_native_call_direct_abandon(zend_execute_data *outermost);
 void zend_native_cleanup_unfinished_exception(
@@ -1164,10 +1145,9 @@ void zend_native_cleanup_unfinished_exception(
 	uint32_t catch_op_num);
 void zend_native_execution_cleanup_frame(zend_execute_data *execute_data);
 /*
- * Finalize one returned dynamic frame: verify its return type, service the
- * interrupt, and clean CV/argument/symbol-table state. It does not invoke the
- * target, transport the result, unlink an activation, restore caller state,
- * pop the frame, allocate a per-call object, or establish a bailout catcher.
+ * Finalize a returned dynamic frame: verify its return type, service the
+ * interrupt and release CVs, arguments and the symbol table. The frame is
+ * neither unlinked nor popped.
  */
 zend_native_status zend_native_execution_finish_direct_frame(
 	zend_execute_data *execute_data, zend_native_status status);
@@ -1329,10 +1309,8 @@ zend_native_status zend_native_receive_explicit(
 	uint64_t encoded_result,
 	uint32_t source_position);
 /*
- * Reload the pending callee from caller->call and perform one explicit RECV.
- * The helper may allocate/destruct, resolve constants, invoke user code through
- * reentrant destruction or lookup, throw, or bail out while applying receive
- * semantics. It neither creates a frame nor dispatches an opcode handler.
+ * One explicit RECV of the pending callee in caller->call. Constant
+ * resolution and destruction may run user code, throw or bail out.
  */
 zend_native_status zend_native_receive_explicit_pending(
 	zend_execute_data *caller,

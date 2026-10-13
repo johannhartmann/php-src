@@ -366,9 +366,6 @@ static bool zend_mir_emit_terminator_edges(
 	uint32_t i;
 	bool success = false;
 
-	if (edge_count != 0 && edges == NULL) {
-		goto done;
-	}
 	if (edge_count > 2) {
 		mappings = calloc(edge_count, sizeof(*mappings));
 		if (mappings == NULL) {

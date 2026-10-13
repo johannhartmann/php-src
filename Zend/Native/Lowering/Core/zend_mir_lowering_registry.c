@@ -17,11 +17,10 @@
 #include "zend_mir_lowering_internal.h"
 
 /*
- * Opcode disposition profile for the scalar provider registry.  A provider
+ * Opcode disposition profile for the scalar provider registry. A provider
  * may only claim opcode numbers marked ACCEPTED; the deferred dispositions
  * name the lowering family (control flow, calls, value operations) that owns
- * the opcode instead.  Reserved opcode numbers 45 and 79 intentionally have
- * no entry.
+ * the opcode instead. The unused opcode numbers 45 and 79 have no entry.
  */
 static const zend_mir_lowering_profile_entry zend_mir_profile_entries[] = {
 	{UINT32_C(0), ZEND_MIR_LOWERING_PROFILE_ACCEPTED},
