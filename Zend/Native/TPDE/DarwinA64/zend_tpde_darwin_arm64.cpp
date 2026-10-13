@@ -1216,7 +1216,7 @@ bool ZendCompilerA64::compile_boxed_cond_cold(IRInstRef instruction) {
 	builder.add_ret(decision, ::tpde::CCAssignment{});
 	auto decision_scratch = std::move(decision).into_scratch(this);
 	auto decision_reg = decision_scratch.cur_reg();
-	ASM(CMPxi, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
+	ASM(CMPwi, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
 	auto valid = text_writer.label_create();
 	generate_raw_jump(Jump::Jlt, valid);
 	decision_scratch.reset();
@@ -1667,8 +1667,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto source_reg = source.load_to_reg();
 		auto result_reg = result.alloc_reg();
 		mov(result_reg, source_reg, 8);
-		if (node.kind == Adaptor::InstKind::LoadFrame
-				&& adaptor->plan()->entry_undef_temporary_count != 0) {
+		if (adaptor->plan()->entry_undef_temporary_count != 0) {
 			auto initialized = text_writer.label_create();
 			ScratchReg call_info{this};
 			auto call_info_reg = call_info.alloc_gp();
@@ -1780,17 +1779,16 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto dispatch_to = text_writer.label_create();
 		ASM(CMNwi, action_reg, 1);
 		generate_raw_jump(Jump::Jeq, exception);
-		ASM(CMPxi, action_reg, ZEND_USER_OPCODE_CONTINUE);
+		ASM(CMPwi, action_reg, ZEND_USER_OPCODE_CONTINUE);
 		generate_raw_jump(Jump::Jeq, continued);
-		ASM(CMPxi, action_reg, ZEND_USER_OPCODE_RETURN);
+		ASM(CMPwi, action_reg, ZEND_USER_OPCODE_RETURN);
 		generate_raw_jump(Jump::Jeq, return_action);
-		ASM(CMPxi, action_reg, ZEND_USER_OPCODE_LEAVE);
+		ASM(CMPwi, action_reg, ZEND_USER_OPCODE_LEAVE);
 		generate_raw_jump(Jump::Jeq, returned);
-		ASM(CMPxi, action_reg, ZEND_USER_OPCODE_DISPATCH);
+		ASM(CMPwi, action_reg, ZEND_USER_OPCODE_DISPATCH);
 		generate_raw_jump(Jump::Jeq, dispatch);
 		generate_raw_jump(Jump::jmp, dispatch_to);
 		action.reset(this);
-		generate_raw_jump(Jump::jmp, exception);
 		auto compare_position = [&](uint32_t source) {
 			if (source <= UINT32_C(0xfff)) {
 				compare_unsigned_immediate(position_reg, source);
@@ -2081,7 +2079,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
 							| handler.source_position_id,
 						DarwinConfig::GP_BANK, 4, expected_reg);
-					ASM(CMPx, selected_reg, expected_reg);
+					ASM(CMPw, selected_reg, expected_reg);
 					auto continued = text_writer.label_create();
 					generate_raw_jump(Jump::Jne, continued);
 					jump_to_source(handler.source_position_id);
@@ -2528,13 +2526,13 @@ bool ZendCompilerA64::compile_inst_impl(
 			operation_call.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			auto completed = text_writer.label_create();
-			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+			ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
 			generate_raw_jump(Jump::Jeq, completed);
 			if (dispatch_case.instruction != nullptr
 					&& zend_mir_id_is_valid(
 						dispatch_case.instruction->exception_block_id)) {
 				auto propagate = text_writer.label_create();
-				ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+				ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
 				generate_raw_jump(Jump::Jne, propagate);
 				generate_exception_branch(adaptor->block_ref(
 					dispatch_case.instruction->exception_block_id));
@@ -4364,9 +4362,6 @@ bool ZendCompilerA64::compile_inst_impl(
 			}
 			return true;
 		}
-		if (frame_offset > UINT32_MAX - sizeof(zval)) {
-			return false;
-		}
 		auto emit = [&](AsmReg address, uint32_t offset) {
 			if (result_kind
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
@@ -4753,15 +4748,6 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		const IRInstRef next = *remaining_instructions.from;
 		const Adaptor::InstNode &consumer = adaptor->node(next);
-		if (consumer.kind != Adaptor::InstKind::MIR
-				|| consumer.operands.size() != 1
-				|| consumer.operands[0] != node.result
-				|| adaptor->instruction_record(next).opcode
-					!= ZEND_MIR_OPCODE_COND_BRANCH
-				|| this->analyzer.liveness_info(
-					adaptor->val_local_idx(node.result)).ref_count != 2) {
-			return false;
-		}
 		const auto &successors = adaptor->block_succs(
 			IRBlockRef{consumer.control_block});
 		if (successors.size() != 2) {
@@ -5000,12 +4986,12 @@ bool ZendCompilerA64::compile_inst_impl(
 		ValuePart status{DarwinConfig::GP_BANK, 4};
 		builder.add_ret(status, ::tpde::CCAssignment{});
 		auto status_reg = status.cur_reg_or_load(this);
-		ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+		ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
 		auto continued = text_writer.label_create();
 		generate_raw_jump(Jump::Jeq, continued);
 		if (zend_mir_id_is_valid(mir.exception_block_id)) {
 			auto propagate = text_writer.label_create();
-			ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+			ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
 			generate_raw_jump(Jump::Jne, propagate);
 			generate_exception_branch(
 				adaptor->block_ref(mir.exception_block_id));
@@ -9916,7 +9902,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					ValuePart decision{DarwinConfig::GP_BANK, 4};
 					builder.add_ret(decision, ::tpde::CCAssignment{});
 					auto decision_reg = decision.cur_reg_or_load(this);
-					ASM(CMPxi, decision_reg,
+					ASM(CMPwi, decision_reg,
 						ZEND_NATIVE_ITERATOR_EXCEPTION);
 					auto valid = text_writer.label_create();
 					generate_raw_jump(Jump::Jlt, valid);
@@ -10288,7 +10274,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					ValuePart decision{DarwinConfig::GP_BANK, 4};
 					builder.add_ret(decision, ::tpde::CCAssignment{});
 					auto decision_reg = decision.cur_reg_or_load(this);
-					ASM(CMPxi, decision_reg,
+					ASM(CMPwi, decision_reg,
 						ZEND_NATIVE_ITERATOR_EXCEPTION);
 					auto valid = text_writer.label_create();
 					generate_raw_jump(Jump::Jlt, valid);
@@ -10634,7 +10620,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						decision, ::tpde::CCAssignment{});
 					auto decision_reg =
 						decision.cur_reg_or_load(this);
-					ASM(CMPxi, decision_reg,
+					ASM(CMPwi, decision_reg,
 						ZEND_NATIVE_ITERATOR_EXCEPTION);
 					auto valid = text_writer.label_create();
 					generate_raw_jump(Jump::Jlt, valid);
@@ -10703,7 +10689,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					static_cast<uint32_t>(decision_slot),
 					decision_reg, 4);
 			}
-			ASM(CMPxi, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
+			ASM(CMPwi, decision_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
 			auto valid = text_writer.label_create();
 			generate_raw_jump(Jump::Jlt, valid);
 			/* Release the helper return register before constructing an early
@@ -11880,14 +11866,14 @@ bool ZendCompilerA64::compile_inst_impl(
 							fast_status, ::tpde::CCAssignment{});
 						auto fast_status_reg =
 							fast_status.cur_reg_or_load(this);
-						ASM(CMPxi, fast_status_reg, ZEND_NATIVE_RETURNED);
+						ASM(CMPwi, fast_status_reg, ZEND_NATIVE_RETURNED);
 						auto leaf_returned = text_writer.label_create();
 						generate_raw_jump(Jump::Jeq, leaf_returned);
-						ASM(CMPxi, fast_status_reg, ZEND_NATIVE_RETRY);
+						ASM(CMPwi, fast_status_reg, ZEND_NATIVE_RETRY);
 						generate_raw_jump(Jump::Jeq, call_slow_target());
 						if (zend_mir_id_is_valid(call.exception_block_id)) {
 							auto propagate = text_writer.label_create();
-							ASM(CMPxi, fast_status_reg,
+							ASM(CMPwi, fast_status_reg,
 								ZEND_NATIVE_EXCEPTION);
 							generate_raw_jump(Jump::Jne, propagate);
 							generate_exception_branch(
@@ -13651,12 +13637,12 @@ bool ZendCompilerA64::compile_inst_impl(
 			ValuePart status{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
-			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+			ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
 			auto continued = text_writer.label_create();
 			generate_raw_jump(Jump::Jeq, continued);
 			if (zend_mir_id_is_valid(call.exception_block_id)) {
 				auto propagate = text_writer.label_create();
-				ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+				ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
 				generate_raw_jump(Jump::Jne, propagate);
 				generate_exception_branch(
 					adaptor->block_ref(call.exception_block_id));
@@ -13864,12 +13850,12 @@ bool ZendCompilerA64::compile_inst_impl(
 				ValuePart status{DarwinConfig::GP_BANK, 4};
 				builder.add_ret(status, ::tpde::CCAssignment{});
 				auto status_reg = status.cur_reg_or_load(this);
-				ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+				ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
 				auto continued = text_writer.label_create();
 				generate_raw_jump(Jump::Jeq, continued);
 				if (zend_mir_id_is_valid(call.exception_block_id)) {
 					auto propagate = text_writer.label_create();
-					ASM(CMPxi, status_reg, ZEND_NATIVE_EXCEPTION);
+					ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
 					generate_raw_jump(Jump::Jne, propagate);
 					generate_exception_branch(
 						adaptor->block_ref(call.exception_block_id));
@@ -13979,7 +13965,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			ValuePart status{DarwinConfig::GP_BANK, 4};
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
-			ASM(CMPxi, status_reg, ZEND_NATIVE_RETURNED);
+			ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
 			auto continued = text_writer.label_create();
 			generate_raw_jump(Jump::Jeq, continued);
 			RetBuilder return_builder{*this, *cur_cc_assigner()};
@@ -14179,14 +14165,14 @@ bool ZendCompilerA64::compile_inst_impl(
 			builder.add_ret(status, ::tpde::CCAssignment{});
 			auto status_reg = status.cur_reg_or_load(this);
 			if (zend_mir_id_is_valid(mir.exception_block_id)) {
-				ASM(CMPxi, status_reg, ZEND_NATIVE_CATCH_EXCEPTION);
+				ASM(CMPwi, status_reg, ZEND_NATIVE_CATCH_EXCEPTION);
 				auto no_exception = text_writer.label_create();
 				generate_raw_jump(Jump::Jne, no_exception);
 				generate_exception_branch(
 					adaptor->block_ref(mir.exception_block_id));
 				label_place(no_exception);
 			}
-			ASM(CMPxi, status_reg, ZEND_NATIVE_CATCH_MATCHED);
+			ASM(CMPwi, status_reg, ZEND_NATIVE_CATCH_MATCHED);
 			const auto &successors = adaptor->block_succs(
 				IRBlockRef{node.control_block});
 			uint32_t successor_count =
