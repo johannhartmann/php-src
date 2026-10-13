@@ -328,6 +328,21 @@ public:
 		return canonical_value_register(
 			IRValueRef{Adaptor::FRAME_VALUE});
 	}
+	/* A helper wrote a scalar result to its frame slot. Zend writes a bool
+	 * as type_info only, so its value comes from IS_TRUE, not the payload. */
+	void load_slot_scalar(AsmReg dst, zend_tpde_machine_value_kind kind,
+			uint64_t frame_offset) {
+		if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+			load_off(dst, canonical_frame_register(),
+				static_cast<uint32_t>(
+					frame_offset + offsetof(zval, u1.type_info)), 4);
+			ASM(CMPwi, dst, IS_TRUE);
+			generate_raw_set(Jump::Jeq, dst);
+			return;
+		}
+		load_off(dst, canonical_frame_register(),
+			static_cast<uint32_t>(frame_offset), 8);
+	}
 	ValuePart copy_fixed_argument(AsmReg source) {
 		ScratchReg copy{this};
 		auto copy_reg = copy.alloc_gp();
@@ -5207,8 +5222,8 @@ bool ZendCompilerA64::compile_inst_impl(
 				auto [result_ref, result] =
 					result_ref_single(node.result);
 				auto result_reg = result.alloc_reg();
-				load_off(result_reg, canonical_frame_register(),
-					static_cast<uint32_t>(frame_offset), 8);
+				load_slot_scalar(result_reg,
+					adaptor->machine_kind(node.result), frame_offset);
 				result.set_modified();
 				generate_branch_to_block(Jump::jmp,
 					IRBlockRef{node.continuation_block}, false, true);
@@ -10702,8 +10717,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				auto [result_ref, result] =
 					result_ref_single(node.result);
 				auto result_reg = result.alloc_reg();
-				load_off(result_reg, canonical_frame_register(),
-					static_cast<uint32_t>(frame_offset), 8);
+				load_slot_scalar(result_reg, result_kind, frame_offset);
 				result.set_modified();
 				ScratchReg branch_decision{this};
 				auto branch_decision_reg =
