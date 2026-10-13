@@ -5939,6 +5939,8 @@ bool ZendCompilerA64::compile_inst_impl(
 						static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
 					load_off(type_reg, key_reg,
 						static_cast<uint32_t>(offsetof(zend_string, h)), 8);
+					generate_raw_jump(
+						Jump{Jump::Cbz, type_reg, false}, slow);
 					load_off(limit_reg, array_reg,
 						static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
 					ASM(ORRw, limit_reg, type_reg, limit_reg);
@@ -5958,6 +5960,8 @@ bool ZendCompilerA64::compile_inst_impl(
 						static_cast<uint32_t>(offsetof(Bucket, key)), 8);
 					ASM(CMPx, limit_reg, key_reg);
 					generate_raw_jump(Jump::Jeq, found);
+					generate_raw_jump(
+						Jump{Jump::Cbz, limit_reg, false}, mixed_next);
 					load_off(decision_reg, limit_reg,
 						static_cast<uint32_t>(offsetof(zend_string, len)), 8);
 					load_off(array_reg, key_reg,
@@ -6008,6 +6012,15 @@ bool ZendCompilerA64::compile_inst_impl(
 					4);
 				if (adaptor->machine_kind(node.result)
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					/* A hole, an indirect or a reference element is left to
+					 * the helper. */
+					ASM(ANDwi, limit_reg, type_reg, Z_TYPE_MASK);
+					ASM(CMPwi, limit_reg, IS_UNDEF);
+					generate_raw_jump(Jump::Jeq, slow);
+					ASM(CMPwi, limit_reg, IS_INDIRECT);
+					generate_raw_jump(Jump::Jeq, slow);
+					ASM(CMPwi, limit_reg, IS_REFERENCE);
+					generate_raw_jump(Jump::Jeq, slow);
 					auto result = result_ref(node.result);
 					auto payload = result.part(0);
 					auto type_info = result.part(1);
@@ -6218,7 +6231,14 @@ bool ZendCompilerA64::compile_inst_impl(
 		ASM(ORRx, element_reg, slot_reg, slot_reg);
 		load_off(type_reg, element_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-		ASM(CMPwi, type_reg, IS_UNDEF);
+		/* An undefined, indirect or reference element is left to the
+		 * helper, which dereferences like FETCH_DIM_R. */
+		ASM(ANDwi, limit_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, limit_reg, IS_UNDEF);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(CMPwi, limit_reg, IS_INDIRECT);
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(CMPwi, limit_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::Jeq, slow);
 
 		if (adaptor->machine_kind(node.result)
@@ -6544,7 +6564,8 @@ bool ZendCompilerA64::compile_inst_impl(
 		load_off(limit_reg, slot_reg, 0, 4);
 		label_place(mixed_loop);
 		ASM(CMPwi, limit_reg, HT_INVALID_IDX);
-		generate_raw_jump(Jump::Jeq, answer_false);
+		generate_raw_jump(
+			Jump::Jeq, layout.is_empty ? answer_true : answer_false);
 		ASM(ADDx_lsl, slot_reg, element_reg, limit_reg, 5);
 		load_off(type_reg, slot_reg,
 			static_cast<uint32_t>(offsetof(Bucket, h)), 8);
@@ -6561,11 +6582,22 @@ bool ZendCompilerA64::compile_inst_impl(
 			4);
 		generate_raw_jump(Jump::jmp, mixed_loop);
 
+		/* A key that may be numeric (first byte a digit or '-'; the empty
+		 * string's first byte is its terminator) or has no hash yet is left
+		 * to the helper. */
 		label_place(mixed_string);
+		load_off(decision_reg, key_reg,
+			static_cast<uint32_t>(offsetof(zend_string, val)), 1);
+		ASM(CMPwi, decision_reg, '-');
+		generate_raw_jump(Jump::Jeq, slow);
+		ASM(SUBwi, decision_reg, decision_reg, '0');
+		ASM(CMPwi, decision_reg, 9);
+		generate_raw_jump(Jump::Jls, slow);
 		load_off(element_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, arData)), 8);
 		load_off(type_reg, key_reg,
 			static_cast<uint32_t>(offsetof(zend_string, h)), 8);
+		generate_raw_jump(Jump{Jump::Cbz, type_reg, false}, slow);
 		load_off(limit_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, nTableMask)), 4);
 		ASM(ORRw, limit_reg, type_reg, limit_reg);
@@ -6621,7 +6653,8 @@ bool ZendCompilerA64::compile_inst_impl(
 		load_off(limit_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, nNumUsed)), 4);
 		ASM(CMPx, key_reg, limit_reg);
-		generate_raw_jump(Jump::Jhs, answer_false);
+		generate_raw_jump(
+			Jump::Jhs, layout.is_empty ? answer_true : answer_false);
 		load_off(element_reg, array_reg,
 			static_cast<uint32_t>(offsetof(HashTable, arPacked)), 8);
 		ASM(ADDx_lsl, element_reg, element_reg, key_reg, 4);
@@ -6632,6 +6665,8 @@ bool ZendCompilerA64::compile_inst_impl(
 		load_off(type_reg, element_reg,
 			static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_INDIRECT);
+		generate_raw_jump(Jump::Jeq, slow);
 		ASM(CMPwi, type_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::Jne, not_reference);
 		load_off(element_reg, element_reg, 0, 8);
