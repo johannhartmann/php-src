@@ -103,6 +103,15 @@ private:
 		return zend_tpde_encode_value_operand(operand,
 			adaptor->plan()->source_frame_variable_count, unused_payload);
 	}
+	/* An operand of a value-operation helper; only helpers with unused
+	 * operand payloads receive the unused payload. */
+	uint64_t encode_helper_operand(bool explicit_object_operands,
+			const zend_mir_source_operand_ref &operand,
+			uint32_t unused_payload) const {
+		return explicit_object_operands
+			? encode_source_operand(operand, unused_payload)
+			: encode_source_operand(operand);
+	}
 	std::vector<::tpde::SymRef> image_symbols_;
 	std::vector<::tpde::SymRef> image_slots_;
 	std::vector<::tpde::Label> generator_resume_labels_;
@@ -364,6 +373,25 @@ public:
 		store_off(frame_register(frame),
 			static_cast<uint32_t>(offsetof(zend_execute_data, opline)),
 			scratch, 8);
+	}
+	/* Stores one part of a boxed value at part_offset from frame. With
+	 * reload_spilled, a part whose assignment is stack_valid() is reloaded
+	 * from the stack instead of trusting its register. */
+	template <typename Frame>
+	void store_boxed_part(Frame frame, ValuePartRef &part,
+			uint32_t part_offset, uint32_t size, bool reload_spilled = true) {
+		if (reload_spilled && part.has_assignment()
+				&& part.assignment().stack_valid()) {
+			auto assignment = part.assignment();
+			ScratchReg scratch{this};
+			auto reg = scratch.alloc_gp();
+			load_from_stack(reg, assignment.frame_off(),
+				assignment.part_size());
+			store_off(frame_register(frame), part_offset, reg, size);
+		} else {
+			store_off(frame_register(frame), part_offset,
+				part.load_to_reg(), size);
+		}
 	}
 	/* A helper wrote a scalar result to its frame slot. Zend writes a bool
 	 * as type_info only, so its value comes from IS_TRUE, not the payload. */
@@ -2518,32 +2546,26 @@ bool ZendCompilerA64::compile_inst_impl(
 			const bool explicit_auxiliary =
 				zend_tpde_helper_has_explicit_auxiliary(
 					dispatch_case.helper);
-			auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
-					uint32_t unused_payload) {
-				return explicit_object_operands
-					? encode_source_operand(
-						operand, unused_payload)
-					: encode_source_operand(operand);
-			};
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder operation_call{*this, assigner};
 			operation_call.add_arg(
 				CallArg{node.operands[dispatch_case.frame_operand]});
 			operation_call.add_arg(ValuePart{
-				encode_operand(
+				encode_helper_operand(explicit_object_operands,
 					operation.op1, operation.op1_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			operation_call.add_arg(ValuePart{
-				encode_operand(
+				encode_helper_operand(explicit_object_operands,
 					operation.op2, operation.op2_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			operation_call.add_arg(ValuePart{
-				encode_operand(
+				encode_helper_operand(explicit_object_operands,
 					operation.result, operation.result_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			if (explicit_auxiliary) {
 				operation_call.add_arg(ValuePart{
-					encode_operand(operation.auxiliary,
+					encode_helper_operand(explicit_object_operands,
+						operation.auxiliary,
 						operation.auxiliary_unused_payload)
 						| zend_tpde_auxiliary_cache_bits(
 							dispatch_case.helper, operation), 8,
@@ -4297,21 +4319,8 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto type_info = boxed.part(1);
 		auto [frame_ref, frame] = val_ref_single(node.operands[1]);
 		auto frame_reg = frame.load_to_reg();
-		auto store_part = [&](ValuePartRef &part, uint32_t part_offset,
-				uint32_t size) {
-			if (part.has_assignment() && part.assignment().stack_valid()) {
-				auto assignment = part.assignment();
-				ScratchReg scratch{this};
-				auto reg = scratch.alloc_gp();
-				load_from_stack(reg, assignment.frame_off(),
-					assignment.part_size());
-				store_off(frame_reg, part_offset, reg, size);
-			} else {
-				store_off(frame_reg, part_offset, part.load_to_reg(), size);
-			}
-		};
-		store_part(payload, static_cast<uint32_t>(offset), 8);
-		store_part(type_info,
+		store_boxed_part(frame_reg, payload, static_cast<uint32_t>(offset), 8);
+		store_boxed_part(frame_reg, type_info,
 			static_cast<uint32_t>(offset + offsetof(zval, u1.type_info)), 4);
 		return true;
 	}
@@ -4844,25 +4853,13 @@ bool ZendCompilerA64::compile_inst_impl(
 		auto boxed = val_ref(operand);
 		auto payload = boxed.part(0);
 		auto type_info = boxed.part(1);
-		auto store_part = [&](ValuePartRef &part, uint32_t part_offset,
-				uint32_t size) {
-			if (node.kind == Adaptor::InstKind::GuardedCold
-					&& part.has_assignment()
-					&& part.assignment().stack_valid()) {
-				auto assignment = part.assignment();
-				ScratchReg scratch{this};
-				auto reg = scratch.alloc_gp();
-				load_from_stack(reg, assignment.frame_off(),
-					assignment.part_size());
-				store_off(canonical_frame_register(), part_offset, reg, size);
-			} else {
-				store_off(canonical_frame_register(), part_offset,
-					part.load_to_reg(), size);
-			}
-		};
-		store_part(payload, static_cast<uint32_t>(offset), 8);
-		store_part(type_info,
-			static_cast<uint32_t>(offset + offsetof(zval, u1.type_info)), 4);
+		const bool reload_spilled =
+			node.kind == Adaptor::InstKind::GuardedCold;
+		store_boxed_part(CanonicalFrame{}, payload,
+			static_cast<uint32_t>(offset), 8, reload_spilled);
+		store_boxed_part(CanonicalFrame{}, type_info,
+			static_cast<uint32_t>(offset + offsetof(zval, u1.type_info)), 4,
+			reload_spilled);
 		return true;
 	};
 	auto execute_value_operation_with = [&](ValuePart *frame_argument,
@@ -4954,14 +4951,8 @@ bool ZendCompilerA64::compile_inst_impl(
 		} else {
 			builder.add_arg(CallArg{node.operands.back()});
 		}
-		auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
-				uint32_t unused_payload) {
-			return explicit_object_operands
-				? encode_source_operand(operand, unused_payload)
-				: encode_source_operand(operand);
-		};
 		builder.add_arg(ValuePart{
-			encode_operand(
+			encode_helper_operand(explicit_object_operands,
 				operation.op1, operation.op1_unused_payload), 8,
 			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 		if (const_include_once) {
@@ -4992,16 +4983,17 @@ bool ZendCompilerA64::compile_inst_impl(
 			return true;
 		} else {
 			builder.add_arg(ValuePart{
-				encode_operand(
+				encode_helper_operand(explicit_object_operands,
 					operation.op2, operation.op2_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			builder.add_arg(ValuePart{
-				encode_operand(
+				encode_helper_operand(explicit_object_operands,
 					operation.result, operation.result_unused_payload), 8,
 				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 			if (explicit_auxiliary) {
 				builder.add_arg(ValuePart{
-					encode_operand(operation.auxiliary,
+					encode_helper_operand(explicit_object_operands,
+						operation.auxiliary,
 						operation.auxiliary_unused_payload)
 						| zend_tpde_auxiliary_cache_bits(helper, operation), 8,
 					DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
@@ -13738,24 +13730,9 @@ bool ZendCompilerA64::compile_inst_impl(
 						auto type_info = boxed.part(1);
 						auto [frame_ref, frame] = val_ref_single(frame_operand);
 						auto frame_reg = frame.load_to_reg();
-						auto store_boxed_part = [&](ValuePartRef &part,
-								uint32_t part_offset, uint32_t size) {
-							if (part.has_assignment()
-									&& part.assignment().stack_valid()) {
-								auto assignment = part.assignment();
-								ScratchReg scratch{this};
-								auto reg = scratch.alloc_gp();
-								load_from_stack(reg, assignment.frame_off(),
-									assignment.part_size());
-								store_off(frame_reg, part_offset, reg, size);
-							} else {
-								store_off(frame_reg, part_offset,
-									part.load_to_reg(), size);
-							}
-						};
-						store_boxed_part(payload,
+						store_boxed_part(frame_reg, payload,
 							static_cast<uint32_t>(offset), 8);
-						store_boxed_part(type_info,
+						store_boxed_part(frame_reg, type_info,
 							static_cast<uint32_t>(offset
 								+ offsetof(zval, u1.type_info)), 4);
 					}
