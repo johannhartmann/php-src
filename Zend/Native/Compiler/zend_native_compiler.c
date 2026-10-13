@@ -133,6 +133,7 @@ struct _zend_native_compiler {
 	bool source_probe;
 	bool defer_publication;
 	bool lazy_source_index;
+	bool borrows_request_tables;
 	zend_native_external_reentry_resolver_t external_reentry_resolver;
 	void *external_reentry_context;
 	bool persistent;
@@ -542,6 +543,7 @@ static zend_native_compiler *zend_native_compiler_request_companion(
 	config.frame_probe = compiler->frame_probe;
 	config.frame_probe_context = compiler->frame_probe_context;
 	config.source_probe = compiler->source_probe;
+	config.borrows_request_tables = true;
 	session->request_compiler =
 		zend_native_compiler_create(&config, diagnostic);
 	return session->request_compiler;
@@ -4184,6 +4186,21 @@ static bool zend_native_compiler_compile_pending(
 	return true;
 }
 
+/*
+ * A request compiler borrows the storage of the request symbol tables, which
+ * runtime declarations, include and eval grow (and reallocate) between
+ * compilations. Refresh the views before each compilation so it never reads
+ * released storage and declaration ids address buckets the view counts.
+ */
+static void zend_native_compiler_refresh_request_tables(
+	zend_native_compiler *compiler)
+{
+	if (compiler->borrows_request_tables) {
+		compiler->script->function_table = *EG(function_table);
+		compiler->script->class_table = *EG(class_table);
+	}
+}
+
 static zend_result zend_native_compiler_compile_locked_impl(
 	zend_native_compiler *compiler,
 	zend_op_array *root,
@@ -4205,6 +4222,7 @@ static zend_result zend_native_compiler_compile_locked_impl(
 			"invalid native compiler input");
 		return FAILURE;
 	}
+	zend_native_compiler_refresh_request_tables(compiler);
 	/* A published root needs no source indexing or registration. */
 	root_function = zend_native_compiler_find_function(compiler, root);
 	if (root_function != NULL
@@ -4747,18 +4765,7 @@ zend_result zend_native_compiler_compile_dynamic_component(
 			first_class_bucket, component_compiler,
 			first_compiled_function, root_entry, diagnostic);
 	}
-	if (compiler->script->function_table.pDestructor != NULL
-			&& compiler->script->class_table.pDestructor != NULL) {
-		/*
-		 * Dynamic include/eval may grow the request symbol tables before it
-		 * reenters a compiler that borrows their storage. Refresh those views
-		 * so compilation never reads released HashTable storage; declaration
-		 * ids address buckets of this snapshot. Owner-script tables have no
-		 * element destructors; keep those independent tables intact.
-		 */
-		compiler->script->function_table = *EG(function_table);
-		compiler->script->class_table = *EG(class_table);
-	}
+	zend_native_compiler_refresh_request_tables(compiler);
 	if (component_compiler != NULL) {
 		*component_compiler = compiler;
 	}
@@ -5366,6 +5373,7 @@ zend_native_compiler *zend_native_compiler_create(
 	compiler->source_probe = config->source_probe;
 	compiler->defer_publication = config->defer_publication;
 	compiler->lazy_source_index = config->lazy_source_index;
+	compiler->borrows_request_tables = config->borrows_request_tables;
 	compiler->external_reentry_resolver =
 		config->external_reentry_resolver;
 	compiler->external_reentry_context =

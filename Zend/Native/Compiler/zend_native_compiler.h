@@ -110,6 +110,11 @@ typedef struct _zend_native_compiler_config {
 	 * declaration only when compilation reaches it.
 	 */
 	bool lazy_source_index;
+	/*
+	 * The script tables are views of EG(function_table) and EG(class_table),
+	 * refreshed before each compilation.
+	 */
+	bool borrows_request_tables;
 	zend_native_external_reentry_resolver_t external_reentry_resolver;
 	void *external_reentry_context;
 } zend_native_compiler_config;

@@ -1743,6 +1743,7 @@ zend_native_executor_create_owned_generation(
 	/* A request generation borrows the global symbol tables; indexing all of
 	 * them for every root would make each include O(all declarations). */
 	config.lazy_source_index = !persistent && bundle == NULL;
+	config.borrows_request_tables = !persistent && bundle == NULL;
 	if (persistent) {
 		config.external_reentry_resolver =
 			zend_native_executor_resolve_external_reentry;
