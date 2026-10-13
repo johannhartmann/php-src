@@ -874,12 +874,6 @@ uintptr_t zend_native_table_find_boxed(
 		table, payload, (uint8_t) type_info, false);
 }
 
-/* Whether a zval holds exactly an integer. */
-uint64_t zend_native_zval_is_long(const zval *value)
-{
-	return Z_TYPE_INFO_P(value) == IS_LONG;
-}
-
 /*
  * Whether consuming a temporary container only drops a reference: an
  * uncounted value, or a counted one with another owner. A sole owner would
@@ -1014,17 +1008,6 @@ uint64_t zend_native_zval_is_scalar(const zval *container)
 		container = &Z_REF_P(container)->val;
 	}
 	return Z_TYPE_P(container) <= IS_DOUBLE;
-}
-
-/*
- * 1 when FE_FREE of a foreach holder is one dropped reference: an array
- * that another owner keeps alive. Object iterators and a last reference
- * need the runtime.
- */
-uint64_t zend_native_iterator_shared(const zval *holder)
-{
-	return Z_TYPE_P(holder) == IS_ARRAY
-		&& (!Z_REFCOUNTED_P(holder) || Z_REFCOUNT_P(holder) > 1);
 }
 
 /* Drop one reference of a shared value (see zend_native_container_shared). */
