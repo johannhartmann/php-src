@@ -12,6 +12,11 @@
 
 namespace zend::native::tpde {
 
+/* The offset of a CV or temporary frame slot from the frame. */
+constexpr uint64_t frame_slot_offset(uint64_t storage) {
+	return (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+}
+
 /*
  * The target-independent part of the Zend compilers. A backend passes it to
  * TPDE as the compiler base (BaseTy), so it sits between ::tpde::CompilerBase
@@ -20,7 +25,11 @@ namespace zend::native::tpde {
  * declares it a friend and supplies the target code it uses:
  *  - JUMP_ALWAYS, JUMP_EQUAL, JUMP_NOT_EQUAL: its jump conditions;
  *  - emit_decision_test(reg): flags for a test of the 32-bit reg against 0;
- *  - patch_direct_call_stack_guard(offset, destination, frame_size).
+ *  - patch_direct_call_stack_guard(offset, destination, frame_size);
+ *  - FRAME_OFFSET_LIMIT: the largest frame displacement its loads and
+ *    stores encode;
+ *  - load_slot_part(reg, base, offset, kind, role): loads a value part from
+ *    the zval at base + offset.
  */
 template <typename Adaptor, typename Derived, typename Config>
 struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
@@ -29,6 +38,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	using ValuePart = typename Base::ValuePart;
 	using ValuePartRef = typename Base::ValuePartRef;
 	using ScratchReg = typename Base::ScratchReg;
+	using ValueRef = typename Base::ValueRef;
 
 	using Base::Base;
 
@@ -291,6 +301,164 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 			}
 			dispatch(call.source_position_id, this->adaptor->block_ref(target));
 		}
+	}
+
+	/*
+	 * Calls store(frame_reg, value, storage, offset) for each value the
+	 * statepoint of instruction materializes into its frame slot, at offset
+	 * from the frame in frame_reg. The canonical frame assignment stays
+	 * locked meanwhile: loading a later operand may otherwise evict the frame
+	 * and reuse its raw register before the next store. A check of
+	 * interrupt boundaries, unless interrupt_slow_path, and a typed body
+	 * materialize nothing.
+	 */
+	template <typename Store>
+	bool for_each_materialization(IRInstRef instruction,
+			bool interrupt_slow_path, Store &&store) {
+		if (this->adaptor->typed_body()) {
+			return true;
+		}
+		const typename Adaptor::InstNode &node = this->adaptor->node(instruction);
+		const auto materializations = this->adaptor->materializations(instruction);
+		if (materializations.empty()) {
+			return true;
+		}
+		const zend_mir_instruction_record record =
+			this->adaptor->mir_instruction(instruction).record;
+		if (!interrupt_slow_path
+				&& record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+				&& (record.effects & ZEND_MIR_EFFECT_MASK(
+					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
+			return true;
+		}
+		if (node.materialization_operand_index == UINT32_MAX
+				|| node.materialization_count != materializations.size()
+				|| node.materialization_operand_index
+					> node.liveness_operands.size()
+				|| materializations.size() > node.liveness_operands.size()
+					- node.materialization_operand_index) {
+			return false;
+		}
+		const auto frame_local = this->adaptor->val_local_idx(
+			IRValueRef{Adaptor::FRAME_VALUE});
+		auto *frame_assignment = this->val_assignment(frame_local);
+		ZEND_ASSERT(frame_assignment != nullptr);
+		ValuePartRef frame_value{
+			this, frame_local, frame_assignment, 0, false};
+		const AsmReg frame_reg = frame_value.load_to_reg();
+		for (uint32_t index = 0; index < materializations.size(); ++index) {
+			const zend_tpde_materialization &materialization =
+				materializations[index];
+			const uint64_t offset =
+				frame_slot_offset(materialization.storage_id);
+			if (!zend_mir_id_is_valid(materialization.storage_id)
+					|| offset > Derived::FRAME_OFFSET_LIMIT - sizeof(zval)) {
+				return false;
+			}
+			const IRValueRef value =
+				node.liveness_operands[
+					node.materialization_operand_index + index];
+			if (!store(frame_reg, value, materialization.storage_id,
+					offset)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/*
+	 * Whether a value to materialize into storage is there already: a value
+	 * loaded from its own CV slot is, as a write to the CV defines a new
+	 * value, and the frame stands in for a value the adaptor found in its
+	 * slot.
+	 */
+	bool materialized_in_own_slot(IRValueRef value,
+			zend_mir_storage_id storage) const {
+		return value == IRValueRef{Adaptor::FRAME_VALUE}
+			|| (storage < this->adaptor->plan()->source_frame_variable_count
+				&& this->adaptor->slot_load_storage(value) == storage);
+	}
+
+	/*
+	 * Redefines each value live across the generator resume instruction
+	 * from its canonical frame slot, frame_reg holding the frame, and hands
+	 * its reference to reloaded(). A resume landing defines the values
+	 * (result_ref); a resume through the gateway uses them and also stores
+	 * each reloaded part to its spill slot.
+	 */
+	template <typename Reloaded>
+	bool reload_generator_resume_values(IRInstRef instruction,
+			AsmReg frame_reg, bool define, Reloaded &&reloaded) {
+		for (const IRValueRef operand :
+				this->adaptor->generator_resume_values(instruction)) {
+			const zend_mir_storage_id storage =
+				this->adaptor->canonical_storage(operand);
+			const zend_tpde_machine_value_kind machine_kind =
+				this->adaptor->machine_kind(operand);
+			const uint64_t offset = frame_slot_offset(storage);
+			if (!zend_mir_id_is_valid(storage)
+					|| offset + offsetof(zval, u1.type_info)
+						> Derived::FRAME_OFFSET_LIMIT) {
+				return false;
+			}
+			auto value = define
+				? this->result_ref(operand) : this->val_ref(operand);
+			if (!value.has_assignment() || value.variable_ref()) {
+				return false;
+			}
+			/*
+			 * The reload redefines the machine value from its canonical
+			 * Zend slot. Invalidate TPDE's register copy before allocating
+			 * so no stale reload is emitted ahead of the authoritative frame
+			 * load.
+			 */
+			const ValueParts parts = val_parts(operand);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto assignment = value.part_unowned(part).assignment();
+				if (!assignment.register_valid()) {
+					continue;
+				}
+				const auto stale_reg = assignment.get_reg();
+				const bool owns_register =
+					this->register_file.is_used(stale_reg)
+					&& this->register_file.reg_local_idx(stale_reg)
+						== this->adaptor->val_local_idx(operand)
+					&& this->register_file.reg_part(stale_reg) == part;
+				if (owns_register) {
+					if (assignment.fixed_assignment()) {
+						this->register_file.dec_lock_count_must_zero(stale_reg);
+						--this->assignments.cur_fixed_assignment_count[
+							assignment.bank().id()];
+					} else if (this->register_file.is_fixed(stale_reg)) {
+						return false;
+					}
+					this->register_file.unmark_used(stale_reg);
+				}
+				assignment.set_fixed_assignment(false);
+				assignment.set_register_valid(false);
+			}
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto value_part = value.part_unowned(part);
+				value_part.assignment().set_modified(true);
+				auto value_reg = value_part.cur_reg_or_alloc();
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				if (!this->derived()->load_slot_part(value_reg, frame_reg,
+						offset, machine_kind, role)) {
+					return false;
+				}
+				value_part.set_modified();
+				if (!define) {
+					/* A resume continuation may branch to an earlier-compiled
+					 * block. Publish the authoritative frame reload before
+					 * that block restores the value from TPDE's canonical
+					 * spill slot. */
+					this->derived()->spill(value_part.assignment());
+				}
+			}
+			reloaded(std::move(value));
+		}
+		return true;
 	}
 
 	bool try_force_fixed_assignment(IRValueRef value) const {

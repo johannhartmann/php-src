@@ -35,6 +35,7 @@ using IRInstRef = zend::native::tpde::IRInstRef;
 using IRBlockRef = zend::native::tpde::IRBlockRef;
 using IRFuncRef = zend::native::tpde::IRFuncRef;
 using zend::native::tpde::ZendCompilerCommon;
+using zend::native::tpde::frame_slot_offset;
 
 /*
  * Profile-guided layout (ZEND_NATIVE_LAYOUT_PROFILE=path): per function key,
@@ -345,11 +346,6 @@ LayoutTraining layout_training;
 struct ZendX64Config : tpde::x64::PlatformConfig {
 	static constexpr bool DEFAULT_VAR_REF_HANDLING = false;
 };
-
-/* The offset of a CV or temporary frame slot from the frame. */
-constexpr uint64_t frame_slot_offset(uint64_t storage) {
-	return (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
-}
 
 /* A zval's second 64-bit word: u1, the type info, and u2. */
 constexpr int32_t zval_high_word = static_cast<int32_t>(offsetof(zval, u1));
@@ -1289,6 +1285,8 @@ public:
 	static constexpr auto JUMP_ALWAYS = Jump::jmp;
 	static constexpr auto JUMP_EQUAL = Jump::je;
 	static constexpr auto JUMP_NOT_EQUAL = Jump::jne;
+	/* Frame displacements are signed 32-bit. */
+	static constexpr uint64_t FRAME_OFFSET_LIMIT = INT32_MAX;
 	void emit_decision_test(AsmReg reg) {
 		ASM(TEST32rr, reg, reg);
 	}
@@ -6040,65 +6038,14 @@ void ZendCompilerX64::emit_try_addref(
 
 bool ZendCompilerX64::emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path) {
-	if (adaptor->typed_body()) {
-		return true;
-	}
-	const Adaptor::InstNode &node = adaptor->node(instruction);
-	const auto materializations = adaptor->materializations(instruction);
-	if (materializations.empty()) {
-		return true;
-	}
-	const zend_mir_instruction_record record =
-		adaptor->mir_instruction(instruction).record;
-	if (!interrupt_slow_path
-			&& record.opcode == ZEND_MIR_OPCODE_STATEPOINT
-			&& (record.effects & ZEND_MIR_EFFECT_MASK(
-				ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
-		return true;
-	}
-	if (node.materialization_operand_index == UINT32_MAX
-			|| node.materialization_count != materializations.size()
-			|| node.materialization_operand_index
-				> node.liveness_operands.size()
-			|| materializations.size() > node.liveness_operands.size()
-				- node.materialization_operand_index) {
-		return false;
-	}
-	/* Keep the canonical frame assignment locked while materializing every
-	 * value. Loading a later operand may otherwise evict the frame and reuse
-	 * its raw register before the next store. */
-	const auto frame_local = adaptor->val_local_idx(
-		IRValueRef{Adaptor::FRAME_VALUE});
-	auto *frame_assignment = val_assignment(frame_local);
-	ZEND_ASSERT(frame_assignment != nullptr);
-	ValuePartRef frame_value{
-		this, frame_local, frame_assignment, 0, false};
-	const AsmReg frame_reg = frame_value.load_to_reg();
-	for (uint32_t index = 0; index < materializations.size(); ++index) {
-		const zend_tpde_materialization &materialization =
-			materializations[index];
-		const uint64_t offset =
-			frame_slot_offset(materialization.storage_id);
-		if (!zend_mir_id_is_valid(materialization.storage_id)
-				|| offset > static_cast<uint64_t>(INT32_MAX)
-					- sizeof(zval)) {
-			return false;
-		}
-		const IRValueRef value =
-			node.liveness_operands[
-				node.materialization_operand_index + index];
+	return for_each_materialization(instruction, interrupt_slow_path,
+			[&](AsmReg frame_reg, IRValueRef value,
+				zend_mir_storage_id storage, uint64_t offset) {
 		const zend_tpde_machine_value_kind machine_kind =
 			adaptor->machine_kind(value);
 		auto value_ref = val_ref(value);
-		/* A value loaded from its own CV slot is still there: a write to
-		 * the CV defines a new value. The frame stands in for a value the
-		 * adaptor found in its slot. */
-		if (value == IRValueRef{Adaptor::FRAME_VALUE}
-				|| (materialization.storage_id
-						< adaptor->plan()->source_frame_variable_count
-					&& adaptor->slot_load_storage(value)
-						== materialization.storage_id)) {
-			continue;
+		if (materialized_in_own_slot(value, storage)) {
+			return true;
 		}
 		auto payload = value_ref.part(0);
 		AsmReg boolean_payload_reg = AsmReg::make_invalid();
@@ -6160,8 +6107,8 @@ bool ZendCompilerX64::emit_materializations(
 				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
 				type_info_reg);
 		}
-	}
-	return true;
+		return true;
+	});
 }
 
 bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
@@ -6670,63 +6617,11 @@ bool ZendCompilerX64::reload_generator_values(
 			static_cast<int32_t>(offsetof(
 				zend_native_execution_context, current_execute_data))));
 	ASM(MOV64rm, frame_reg, FE_MEM(frame_reg, 0, FE_NOREG, 0));
-	for (const IRValueRef operand :
-			adaptor->generator_resume_values(instruction)) {
-		const zend_mir_storage_id storage =
-			adaptor->canonical_storage(operand);
-		const zend_tpde_machine_value_kind machine_kind =
-			adaptor->machine_kind(operand);
-		const uint64_t offset =
-			frame_slot_offset(storage);
-		if (!zend_mir_id_is_valid(storage)
-				|| offset + offsetof(zval, u1.type_info) > INT32_MAX) {
-			return false;
-		}
-		auto value = val_ref(operand);
-		if (!value.has_assignment() || value.variable_ref()) {
-			return false;
-		}
-		const ValueParts parts = val_parts(operand);
-		for (uint32_t part = 0; part < parts.count(); ++part) {
-			auto assignment = value.part_unowned(part).assignment();
-			if (!assignment.register_valid()) {
-				continue;
-			}
-			const auto stale_reg = assignment.get_reg();
-			const bool owns_register = register_file.is_used(stale_reg)
-				&& register_file.reg_local_idx(stale_reg)
-					== adaptor->val_local_idx(operand)
-				&& register_file.reg_part(stale_reg) == part;
-			if (owns_register) {
-				if (assignment.fixed_assignment()) {
-					register_file.dec_lock_count_must_zero(stale_reg);
-					--assignments.cur_fixed_assignment_count[
-						assignment.bank().id()];
-				} else if (register_file.is_fixed(stale_reg)) {
-					return false;
-				}
-				register_file.unmark_used(stale_reg);
-			}
-			assignment.set_fixed_assignment(false);
-			assignment.set_register_valid(false);
-		}
-		for (uint32_t part = 0; part < parts.count(); ++part) {
-			auto value_part = value.part_unowned(part);
-			value_part.assignment().set_modified(true);
-			auto value_reg = value_part.cur_reg_or_alloc();
-			const zend_tpde_machine_part_role role =
-				parts.representation.parts[part].semantic_role;
-			if (!load_slot_part(value_reg, frame_reg, offset, machine_kind,
-					role)) {
-				return false;
-			}
-			value_part.set_modified();
-			/* A resume continuation may branch to an earlier-compiled block.
-			 * Publish the authoritative frame reload before that block restores
-			 * the value from TPDE's canonical spill slot. */
-			spill(value_part.assignment());
-		}
-		locked_values.push_back(std::move(value));
+	if (!reload_generator_resume_values(instruction, frame_reg, false,
+			[&](ValueRef &&value) {
+				locked_values.push_back(std::move(value));
+			})) {
+		return false;
 	}
 	resumed_frame.reset(this);
 	return true;
@@ -10205,67 +10100,8 @@ bool ZendCompilerX64::compile_generator_resume(InstContext &ctx) {
 	ValuePartRef frame_value{
 		this, frame_local, frame_assignment, 0, false};
 	auto frame_reg = frame_value.load_to_reg();
-	for (const IRValueRef operand :
-			adaptor->generator_resume_values(instruction)) {
-		const zend_mir_storage_id storage =
-			adaptor->canonical_storage(operand);
-		const zend_tpde_machine_value_kind machine_kind =
-			adaptor->machine_kind(operand);
-		const uint64_t offset =
-			frame_slot_offset(storage);
-		if (!zend_mir_id_is_valid(storage)
-				|| offset + offsetof(zval, u1.type_info)
-					> INT32_MAX) {
-			return false;
-		}
-		auto value = result_ref(operand);
-		if (!value.has_assignment()
-				|| value.variable_ref()) {
-			return false;
-		}
-		/*
-		 * Resume redefines the machine value from its canonical Zend
-		 * slot. Invalidate TPDE's spill copy before allocating so no
-		 * stale reload is emitted ahead of the authoritative frame load.
-		 */
-		const ValueParts parts = val_parts(operand);
-		for (uint32_t part = 0; part < parts.count(); ++part) {
-			auto assignment = value.part_unowned(part).assignment();
-			if (!assignment.register_valid()) {
-				continue;
-			}
-			const auto stale_reg = assignment.get_reg();
-			const bool owns_register = register_file.is_used(stale_reg)
-					&& register_file.reg_local_idx(stale_reg)
-						== adaptor->val_local_idx(operand)
-					&& register_file.reg_part(stale_reg) == part;
-			if (owns_register) {
-				if (assignment.fixed_assignment()) {
-					register_file.dec_lock_count_must_zero(stale_reg);
-					--assignments.cur_fixed_assignment_count[
-						assignment.bank().id()];
-				} else if (register_file.is_fixed(stale_reg)) {
-					return false;
-				}
-				register_file.unmark_used(stale_reg);
-			}
-			assignment.set_fixed_assignment(false);
-			assignment.set_register_valid(false);
-		}
-		for (uint32_t part = 0; part < parts.count(); ++part) {
-			auto value_part = value.part_unowned(part);
-			value_part.assignment().set_modified(true);
-			auto value_reg = value_part.cur_reg_or_alloc();
-			const zend_tpde_machine_part_role role =
-				parts.representation.parts[part].semantic_role;
-			if (!load_slot_part(value_reg, frame_reg, offset, machine_kind,
-					role)) {
-				return false;
-			}
-			value_part.set_modified();
-		}
-	}
-	return true;
+	return reload_generator_resume_values(instruction, frame_reg, true,
+		[](ValueRef &&) {});
 }
 
 bool ZendCompilerX64::compile_zval_guard_arguments(InstContext &ctx) {
