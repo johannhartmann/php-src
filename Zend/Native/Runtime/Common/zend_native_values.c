@@ -2896,12 +2896,15 @@ zend_native_status zend_native_value_isset_isempty_cv(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	if ((opline->extended_value & ZEND_ISEMPTY) != 0) {
+		/* An object's cast handler may throw, and NAN warns. */
 		truth = !zend_is_true(value);
-	} else {
-		truth = Z_TYPE_P(value) > IS_NULL
-			&& (!Z_ISREF_P(value)
-				|| Z_TYPE_P(Z_REFVAL_P(value)) > IS_NULL);
+		ZVAL_BOOL(result, truth);
+		return EG(exception) == NULL
+			? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
 	}
+	truth = Z_TYPE_P(value) > IS_NULL
+		&& (!Z_ISREF_P(value)
+			|| Z_TYPE_P(Z_REFVAL_P(value)) > IS_NULL);
 	ZVAL_BOOL(result, truth);
 	return ZEND_NATIVE_RETURNED;
 }
