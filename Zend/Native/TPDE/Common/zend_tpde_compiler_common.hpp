@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PHP-3.01
 #pragma once
 
+#include "Zend/Native/TPDE/Common/zend_tpde_direct_user_call.hpp"
 #include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
 
 #include <tpde/CompilerBase.hpp>
@@ -550,6 +551,131 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 						target_case.kind);
 			}
 		}
+		return true;
+	}
+
+	/*
+	 * The callee frame and operand layout of a CALL_DIRECT_USER node with a
+	 * direct call descriptor, compiled other than as a typed body's own call.
+	 */
+	struct DirectUserCallShape {
+		uint32_t callee_argument_count;
+		bool variadic_frame;
+		uint32_t fixed_argument_count;
+		uint32_t first_extra_argument_slot;
+		uint32_t compiled_variable_count;
+		uint32_t owned_argument_variable_count;
+		bool release_extra_arguments;
+		bool split_cold;
+		zend_tpde_direct_user_call_layout layout;
+		bool typed_body_call;
+	};
+
+	/*
+	 * The shape of node's direct user call. The fast node of a generated
+	 * frame then drops its references to the frame and context uses only
+	 * its slow path takes. False for a node the call cannot compile from.
+	 */
+	bool direct_user_call_shape(const typename Adaptor::InstNode &node,
+			const zend_tpde_instruction &call, bool generated_fast_path,
+			bool private_inline_body, uint32_t typed_body_function,
+			uint32_t argument_count, DirectUserCallShape &shape) {
+		const uint32_t callee_argument_count =
+			generated_fast_path
+				? call.direct_call->callee_argument_count
+				: argument_count;
+		const bool variadic_frame =
+			generated_fast_path
+			&& (call.direct_call->expected_function->common.fn_flags
+				& ZEND_ACC_VARIADIC) != 0;
+		const uint32_t fixed_argument_count =
+			callee_argument_count;
+		const uint32_t first_extra_argument_slot =
+			generated_fast_path
+				? call.direct_call->callee_compiled_variable_count
+					+ call.direct_call->callee_temporary_count
+				: argument_count;
+		const uint32_t compiled_variable_count =
+			generated_fast_path
+				? call.direct_call
+					->callee_compiled_variable_count
+				: argument_count;
+		const uint32_t owned_argument_variable_count =
+			fixed_argument_count + (variadic_frame ? 1 : 0);
+		if (generated_fast_path
+				&& call.direct_call->default_literal_count
+					!= callee_argument_count) {
+			return false;
+		}
+		bool release_extra_arguments = false;
+		for (uint32_t index = 0;
+				generated_fast_path && index < argument_count; ++index) {
+			if (call.direct_call->arguments[index].ordinal
+					>= fixed_argument_count) {
+				release_extra_arguments =
+					release_extra_arguments
+					|| !zend_mir_scalar_type_is_exact(
+						call.direct_call->arguments[index].exact_type);
+			}
+		}
+		const bool split_cold =
+			node.kind == Adaptor::InstKind::GuardedCold;
+		const zend_tpde_direct_user_call_layout layout =
+			zend_tpde_direct_user_call_layout_of(split_cold,
+				typed_body_function != UINT32_MAX, generated_fast_path,
+				private_inline_body, variadic_frame, node.has_result,
+				argument_count);
+		const bool typed_body_call =
+			typed_body_function != UINT32_MAX
+			&& (node.kind == Adaptor::InstKind::GuardedFast
+				|| node.kind == Adaptor::InstKind::MIR)
+			&& !node.inlined_user_body
+			&& this->adaptor->typed_body_return_type(
+				call.component_target_index).valid
+			&& this->adaptor->typed_body_arguments_match(
+				call.component_target_index, node.operands);
+		if (generated_fast_path
+				&& node.kind == Adaptor::InstKind::GuardedFast
+				&& !typed_body_call
+				&& !node.inlined_user_body) {
+			if (node.operands.size() < layout.context_operand) {
+				return false;
+			}
+			const uint32_t context_use_count =
+				static_cast<uint32_t>(node.operands.size())
+				- layout.context_operand;
+			auto discard_operand = [&](uint32_t index) {
+				auto discarded = this->val_ref(node.operands[index]);
+				(void) discarded;
+			};
+			if (private_inline_body) {
+				discard_operand(layout.frame_operand + 1);
+				discard_operand(layout.frame_operand + 2);
+				for (uint32_t use = 2;
+						use < context_use_count; ++use) {
+					discard_operand(layout.context_operand + use);
+				}
+			} else {
+				discard_operand(layout.frame_operand + 4);
+				discard_operand(layout.frame_operand + 5);
+				for (uint32_t use = 4;
+						use < context_use_count; ++use) {
+					discard_operand(layout.context_operand + use);
+				}
+			}
+		}
+		shape = {
+			.callee_argument_count = callee_argument_count,
+			.variadic_frame = variadic_frame,
+			.fixed_argument_count = fixed_argument_count,
+			.first_extra_argument_slot = first_extra_argument_slot,
+			.compiled_variable_count = compiled_variable_count,
+			.owned_argument_variable_count = owned_argument_variable_count,
+			.release_extra_arguments = release_extra_arguments,
+			.split_cold = split_cold,
+			.layout = layout,
+			.typed_body_call = typed_body_call,
+		};
 		return true;
 	}
 

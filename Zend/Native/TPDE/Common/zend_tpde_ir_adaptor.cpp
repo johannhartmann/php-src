@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PHP-3.01
 
 #include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
+#include "Zend/Native/TPDE/Common/zend_tpde_direct_user_call.hpp"
 
 namespace zend::native::tpde {
 
@@ -8914,15 +8915,14 @@ void ZendIRAdaptor::Builder::add_user_call_operands(
 				}
 				operands_.push_back(value);
 			}
-			frame_use_count =
+			const bool leaf_scalar_frame =
 				(instruction.direct_call->flags
-						& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME)
-					!= 0
-				? 3
-				: 6 + machine_result
-					+ (((instruction.direct_call->expected_function
-							->common.fn_flags & ZEND_ACC_VARIADIC) != 0)
-						? 2 : 0);
+					& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0;
+			frame_use_count = zend_tpde_direct_user_call_frame_uses(
+				leaf_scalar_frame, machine_result,
+				!leaf_scalar_frame
+					&& (instruction.direct_call->expected_function
+						->common.fn_flags & ZEND_ACC_VARIADIC) != 0);
 		} else {
 			frame_use_count = 2
 				+ (machine_result
@@ -8945,16 +8945,12 @@ void ZendIRAdaptor::Builder::add_user_call_operands(
 			static_cast<uint32_t>(operands_.size())
 				- operand_offset;
 		const uint32_t context_use_count =
-			(instruction.direct_call->flags
-				& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
-			? (instruction.direct_call->flags
-				& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME)
-					!= 0
-				? inlined_user_body.valid
-					? 5
-					: 5 + machine_result
-				: 7
-			: 3;
+			zend_tpde_direct_user_call_context_uses(
+				(instruction.direct_call->flags
+					& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0,
+				(instruction.direct_call->flags
+					& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0,
+				inlined_user_body.valid, machine_result);
 		for (uint32_t n = 0; n < context_use_count; ++n) {
 			operands_.push_back(
 				IRValueRef{EXECUTION_CONTEXT_ARGUMENT});

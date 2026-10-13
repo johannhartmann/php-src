@@ -9912,33 +9912,21 @@ bool ZendCompilerA64::compile_call_direct_user() {
 				call.direct_call->frame_size);
 			return true;
 		}
-		const uint32_t callee_argument_count =
-			generated_fast_path
-				? call.direct_call->callee_argument_count
-				: argument_count;
-		const bool variadic_frame =
-			generated_fast_path
-			&& (call.direct_call->expected_function->common.fn_flags
-				& ZEND_ACC_VARIADIC) != 0;
-		const uint32_t fixed_argument_count =
-			callee_argument_count;
-		const uint32_t first_extra_argument_slot =
-			generated_fast_path
-				? call.direct_call->callee_compiled_variable_count
-					+ call.direct_call->callee_temporary_count
-				: argument_count;
-		const uint32_t compiled_variable_count =
-			generated_fast_path
-				? call.direct_call
-					->callee_compiled_variable_count
-				: argument_count;
-		const uint32_t owned_argument_variable_count =
-			fixed_argument_count + (variadic_frame ? 1 : 0);
-		if (generated_fast_path
-				&& call.direct_call->default_literal_count
-					!= callee_argument_count) {
+		DirectUserCallShape shape;
+		if (!direct_user_call_shape(node, call, generated_fast_path,
+				private_inline_body, typed_body_function, argument_count,
+				shape)) {
 			return false;
 		}
+		const uint32_t callee_argument_count = shape.callee_argument_count;
+		const bool variadic_frame = shape.variadic_frame;
+		const uint32_t fixed_argument_count = shape.fixed_argument_count;
+		const uint32_t first_extra_argument_slot =
+			shape.first_extra_argument_slot;
+		const uint32_t compiled_variable_count =
+			shape.compiled_variable_count;
+		const uint32_t owned_argument_variable_count =
+			shape.owned_argument_variable_count;
 		auto compiled_variable_used =
 			[&](uint32_t variable_index) {
 				return variable_index < owned_argument_variable_count
@@ -9947,82 +9935,21 @@ bool ZendCompilerA64::compile_call_direct_user() {
 						call.component_target_index,
 						variable_index);
 			};
-		bool release_extra_arguments = false;
-		for (uint32_t index = 0;
-				generated_fast_path && index < argument_count; ++index) {
-			if (call.direct_call->arguments[index].ordinal
-					>= fixed_argument_count) {
-				release_extra_arguments =
-					release_extra_arguments
-					|| !zend_mir_scalar_type_is_exact(
-						call.direct_call->arguments[index].exact_type);
-			}
-		}
-		const bool split_cold =
-			node.kind == Adaptor::InstKind::GuardedCold;
-		const uint32_t frame_operand = split_cold
-			? 0
-			: typed_body_function != UINT32_MAX
-				? argument_count
-				: generated_fast_path ? argument_count : 0;
-		const uint32_t frame_use_count =
-				split_cold ? 1
-					: typed_body_function != UINT32_MAX ? 2
-					: generated_fast_path
-						? (private_inline_body ? 3 : 6 + node.has_result)
-							+ (!private_inline_body && variadic_frame ? 2 : 0)
-						: 2;
-		const uint32_t context_operand = frame_operand
-			+ frame_use_count;
+		const bool release_extra_arguments = shape.release_extra_arguments;
+		const bool split_cold = shape.split_cold;
+		const uint32_t frame_operand = shape.layout.frame_operand;
+		const uint32_t context_operand = shape.layout.context_operand;
 		const uint32_t slow_enter_frame_use =
-			generated_fast_path ? (private_inline_body ? 1 : 4) : 0;
+			shape.layout.slow_enter_frame_use;
 		const uint32_t slow_enter_context_use =
-			generated_fast_path ? (private_inline_body ? 2 : 4) : 0;
+			shape.layout.slow_enter_context_use;
 		const uint32_t slow_entry_context_use =
-			generated_fast_path ? (private_inline_body ? 3 : 5) : 1;
+			shape.layout.slow_entry_context_use;
 		const uint32_t slow_leave_frame_use =
-			generated_fast_path ? (private_inline_body ? 2 : 5) : 1;
+			shape.layout.slow_leave_frame_use;
 		const uint32_t slow_leave_context_use =
-			generated_fast_path ? (private_inline_body ? 4 : 6) : 2;
-		const bool typed_body_call =
-			typed_body_function != UINT32_MAX
-			&& (node.kind == Adaptor::InstKind::GuardedFast
-				|| node.kind == Adaptor::InstKind::MIR)
-			&& !node.inlined_user_body
-			&& adaptor->typed_body_return_type(
-				call.component_target_index).valid
-			&& adaptor->typed_body_arguments_match(
-				call.component_target_index, node.operands);
-		if (generated_fast_path
-				&& node.kind == Adaptor::InstKind::GuardedFast
-				&& !typed_body_call
-				&& !node.inlined_user_body) {
-			if (node.operands.size() < context_operand) {
-				return false;
-			}
-			const uint32_t context_use_count =
-				static_cast<uint32_t>(node.operands.size())
-				- context_operand;
-			auto discard_operand = [&](uint32_t index) {
-				auto discarded = val_ref(node.operands[index]);
-				(void) discarded;
-			};
-			if (private_inline_body) {
-				discard_operand(frame_operand + 1);
-				discard_operand(frame_operand + 2);
-				for (uint32_t use = 2;
-						use < context_use_count; ++use) {
-					discard_operand(context_operand + use);
-				}
-			} else {
-				discard_operand(frame_operand + 4);
-				discard_operand(frame_operand + 5);
-				for (uint32_t use = 4;
-						use < context_use_count; ++use) {
-					discard_operand(context_operand + use);
-				}
-			}
-		}
+			shape.layout.slow_leave_context_use;
+		const bool typed_body_call = shape.typed_body_call;
 		auto slow_path = text_writer.label_create();
 		auto successful = text_writer.label_create();
 		int32_t leaf_private_frame_slot = 0;
