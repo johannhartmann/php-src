@@ -527,8 +527,6 @@ static zend_native_compiler *zend_native_compiler_request_companion(
 		return NULL;
 	}
 	if (session->request_compiler != NULL) {
-		/* zend_native_compiler_compile_dynamic_component() refreshes its
-		 * borrowed tables. */
 		return session->request_compiler;
 	}
 	memset(&session->request_script, 0, sizeof(session->request_script));
@@ -4179,9 +4177,13 @@ static bool zend_native_compiler_compile_pending(
  * compilations. Refresh the views before each compilation so it never reads
  * released storage and declaration ids address buckets the view counts.
  */
-static void zend_native_compiler_refresh_request_tables(
-	zend_native_compiler *compiler)
+/* A compiler that borrows the request symbol tables holds struct copies of
+ * them. Runtime declarations and class_alias() grow the tables between
+ * compiles, which frees the copied bucket storage: every entry that reads
+ * the tables refreshes the copies under the mutation lock. */
+static void zend_native_compiler_lock_tables(zend_native_compiler *compiler)
 {
+	zend_native_compiler_mutation_lock(compiler);
 	if (compiler->borrows_request_tables) {
 		compiler->script->function_table = *EG(function_table);
 		compiler->script->class_table = *EG(class_table);
@@ -4209,7 +4211,6 @@ static zend_result zend_native_compiler_compile_locked_impl(
 			"invalid native compiler input");
 		return FAILURE;
 	}
-	zend_native_compiler_refresh_request_tables(compiler);
 	/* A published root needs no source indexing or registration. */
 	root_function = zend_native_compiler_find_function(compiler, root);
 	if (root_function != NULL
@@ -4374,7 +4375,7 @@ zend_result zend_native_compiler_compile(
 {
 	zend_result result;
 
-	zend_native_compiler_mutation_lock(compiler);
+	zend_native_compiler_lock_tables(compiler);
 	result = zend_native_compiler_compile_locked(
 		compiler, root, supplied_argument_types,
 		supplied_argument_count, diagnostic);
@@ -4415,7 +4416,7 @@ zend_native_entry_cell *zend_native_compiler_prepare_function(
 			|| !ZEND_USER_CODE(function->type)) {
 		return NULL;
 	}
-	zend_native_compiler_mutation_lock(compiler);
+	zend_native_compiler_lock_tables(compiler);
 	source_op_array = zend_native_compiler_canonical_reentry_op_array(
 		compiler, &function->op_array);
 	if (source_op_array != NULL) {
@@ -4598,7 +4599,7 @@ zend_native_tier2_result zend_native_compiler_recompile_tier2(
 	if (compiler == NULL || cell == NULL) {
 		return ZEND_NATIVE_TIER2_NOT_OWNED;
 	}
-	zend_native_compiler_mutation_lock(compiler);
+	zend_native_compiler_lock_tables(compiler);
 	for (index = 0; index < compiler->function_count; index++) {
 		if (&compiler->functions[index]->entry_cell == cell) {
 			function = compiler->functions[index];
@@ -4752,7 +4753,6 @@ zend_result zend_native_compiler_compile_dynamic_component(
 			first_class_bucket, component_compiler,
 			first_compiled_function, root_entry, diagnostic);
 	}
-	zend_native_compiler_refresh_request_tables(compiler);
 	if (component_compiler != NULL) {
 		*component_compiler = compiler;
 	}
@@ -4815,7 +4815,7 @@ static zend_native_entry_cell *zend_native_compiler_resolve_reentry(
 	diagnostic.source_opline = 0;
 	diagnostic.has_source_opline = false;
 	diagnostic.message[0] = '\0';
-	zend_native_compiler_mutation_lock(compiler);
+	zend_native_compiler_lock_tables(compiler);
 	first_compiled_function = compiler->function_count;
 	source_op_array = zend_native_compiler_canonical_reentry_op_array(
 		compiler, &resolved->op_array);
@@ -6573,7 +6573,7 @@ bool zend_native_compiler_retire_dynamic_component(
 	if (compiler == NULL || root == NULL || compiler->persistent) {
 		return false;
 	}
-	zend_native_compiler_mutation_lock(compiler);
+	zend_native_compiler_lock_tables(compiler);
 	if (first_function_index >= compiler->function_count) {
 		zend_native_compiler_mutation_unlock(compiler);
 		return false;
