@@ -23818,59 +23818,9 @@ bool ZendCompilerX64::compile_inst_impl(
 					&& call.user_call->do_opcode != ZEND_CALLABLE_CONVERT
 					&& call.user_call->do_opcode
 						!= ZEND_CALLABLE_CONVERT_PARTIAL) {
-				const uint32_t frame_operand = call.operand_count;
-				const uint32_t context_operand = frame_operand + 2;
-				ValuePart callee{tpde::x64::PlatformConfig::GP_BANK, 8};
-				ValuePart entry{tpde::x64::PlatformConfig::GP_BANK, 8};
-				{
-					tpde::x64::CCAssignerSysV assigner{false};
-					CallBuilder enter_builder{*this, assigner};
-					enter_builder.add_arg(
-						CallArg{node.operands[frame_operand]});
-					enter_builder.add_arg(image_symbol_value(
-						ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-						call.call_site->target_id, &assigner), tpde::CCAssignment{});
-					enter_builder.add_arg(image_symbol_value(
-						ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-						call.record.id, &assigner), tpde::CCAssignment{});
-					enter_builder.add_arg(CallArg{
-						node.operands[context_operand]});
-					enter_builder.call(runtime_symbol(
-						ZEND_NATIVE_HELPER_USER_CALL_RESOLVE));
-					enter_builder.add_ret(callee, tpde::CCAssignment{});
-					enter_builder.add_ret(entry, tpde::CCAssignment{});
-				}
-				ValuePart entry_status_argument = call_resolved_entry(
-					std::move(callee), std::move(entry),
-					[&](CallBuilder &builder, tpde::x64::CCAssignerSysV &) {
-						builder.add_arg(CallArg{
-							node.operands[context_operand + 1]});
-					});
-				tpde::x64::CCAssignerSysV assigner{false};
-				CallBuilder leave_builder{*this, assigner};
-				leave_builder.add_arg(
-					CallArg{node.operands[frame_operand + 1]});
-				leave_builder.add_arg(image_symbol_value(
-					ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR,
-					call.record.id, &assigner), tpde::CCAssignment{});
-				leave_builder.add_arg(CallArg{
-					node.operands[context_operand + 2]});
-				leave_builder.add_arg(
-					std::move(entry_status_argument), tpde::CCAssignment{});
-				leave_builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_USER_CALL_RELEASE_RESOLUTION));
-				ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 8};
-				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
-				leave_builder.add_ret(status, tpde::CCAssignment{});
-				leave_builder.add_ret(payload, tpde::CCAssignment{});
-				emit_status_tail(std::move(status),
-					call.exception_block_id);
-				if (node.has_result) {
-					set_payload_result(node.result, std::move(payload));
-				} else {
-					payload.reset(this);
-				}
-				return true;
+				/* The adaptor emits a call without a direct-call descriptor as
+				 * source-call fragments; it never reaches this node. */
+				return false;
 			}
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
