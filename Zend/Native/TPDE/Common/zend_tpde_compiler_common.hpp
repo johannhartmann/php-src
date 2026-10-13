@@ -461,6 +461,98 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 		return true;
 	}
 
+	/*
+	 * A ZEND_USER_OPCODE_DISPATCH_TO case of a user opcode gateway: the
+	 * handler of the opline at source asked to run it as target_opcode.
+	 */
+	struct UserOpcodeDispatchCase {
+		const zend_tpde_instruction *instruction;
+		const zend_mir_executable_value_ref *operation;
+		uint32_t source;
+		uint32_t target_opcode;
+		zend_tpde_user_opcode_target_kind kind;
+		zend_native_runtime_helper_id helper;
+		uint32_t frame_operand;
+		uint32_t slow_frame_operand;
+	};
+
+	/*
+	 * Checks the operands of a user opcode gateway node, whose function has
+	 * landing_count opline landings, and plans its dispatch cases: for each
+	 * dispatch source, one per user opcode target, in order. Operands 0 to 3
+	 * are the gateway's own; each case then uses the frame operands its
+	 * target kind takes (zend_tpde_user_opcode_target_frame_uses()), the
+	 * last for its slow path. False for a node the gateway cannot compile.
+	 */
+	bool plan_user_opcode_dispatch(const typename Adaptor::InstNode &node,
+			size_t landing_count,
+			std::vector<UserOpcodeDispatchCase> &dispatch_cases) const {
+		const zend_tpde_plan *plan = this->adaptor->plan();
+		const auto dispatch_sources =
+			this->adaptor->user_opcode_dispatch_to_sources();
+		const size_t dispatch_case_count =
+			dispatch_sources.size()
+				* plan->user_opcode_target_count;
+		size_t dispatch_operand_count = 0;
+		for (uint32_t target = 0;
+				target < plan->user_opcode_target_count; ++target) {
+			dispatch_operand_count += dispatch_sources.size()
+				* zend_tpde_user_opcode_target_frame_uses(
+					plan->user_opcode_targets[target].kind);
+		}
+		if (plan->source_opcodes == nullptr
+				|| node.operands.size() != 4 + dispatch_operand_count
+				|| node.argument_index >= plan->source_opcode_count
+				|| landing_count < plan->source_opcode_count) {
+			return false;
+		}
+		dispatch_cases.reserve(dispatch_case_count);
+		uint32_t frame_operand = 4;
+		for (size_t source_index = 0;
+				source_index < dispatch_sources.size(); ++source_index) {
+			const uint32_t source = dispatch_sources[source_index];
+			const zend_tpde_instruction *source_instruction = nullptr;
+			for (uint32_t instruction = 0;
+					instruction < plan->instruction_count; ++instruction) {
+				const zend_tpde_instruction &candidate =
+					plan->instructions[instruction];
+				if (candidate.has_value_operation
+						&& candidate.value_operation.source_position_id
+							== source) {
+					source_instruction = &candidate;
+					break;
+				}
+			}
+			if (source >= plan->user_opcode_source_operation_count) {
+				return false;
+			}
+			const zend_mir_executable_value_ref *source_operation =
+				&plan->user_opcode_source_operations[source];
+			for (size_t target_index = 0;
+					target_index < plan->user_opcode_target_count;
+					++target_index) {
+				const zend_tpde_user_opcode_target &target_case =
+					plan->user_opcode_targets[target_index];
+				dispatch_cases.push_back({
+					source_instruction,
+					source_operation,
+					source,
+					target_case.opcode,
+					target_case.kind,
+					target_case.helper,
+					frame_operand,
+					frame_operand
+						+ zend_tpde_user_opcode_target_frame_uses(
+							target_case.kind)
+						- 1});
+				frame_operand +=
+					zend_tpde_user_opcode_target_frame_uses(
+						target_case.kind);
+			}
+		}
+		return true;
+	}
+
 	bool try_force_fixed_assignment(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
 			this->adaptor->machine_kind(value);

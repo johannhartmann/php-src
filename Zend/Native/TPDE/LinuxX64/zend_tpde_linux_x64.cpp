@@ -7109,21 +7109,9 @@ bool ZendCompilerX64::compile_user_opcode_gateway(InstContext &ctx) {
 	const zend_tpde_plan *plan = adaptor->plan();
 	const auto dispatch_sources =
 		adaptor->user_opcode_dispatch_to_sources();
-	const size_t dispatch_case_count =
-		dispatch_sources.size()
-			* plan->user_opcode_target_count;
-	size_t dispatch_operand_count = 0;
-	for (uint32_t target = 0;
-			target < plan->user_opcode_target_count; ++target) {
-		dispatch_operand_count += dispatch_sources.size()
-			* zend_tpde_user_opcode_target_frame_uses(
-				plan->user_opcode_targets[target].kind);
-	}
-	if (plan->source_opcodes == nullptr
-			|| node.operands.size() != 4 + dispatch_operand_count
-			|| node.argument_index >= plan->source_opcode_count
-			|| user_opcode_labels_.size()
-				< plan->source_opcode_count) {
+	std::vector<UserOpcodeDispatchCase> dispatch_cases;
+	if (!plan_user_opcode_dispatch(
+			node, user_opcode_labels_.size(), dispatch_cases)) {
 		return false;
 	}
 	const uint32_t source_position = node.argument_index;
@@ -7207,43 +7195,15 @@ bool ZendCompilerX64::compile_user_opcode_gateway(InstContext &ctx) {
 			Jump::je, user_opcode_dispatch_labels_[source]);
 		label_place(next_candidate);
 	}
-	struct DispatchToCase {
-		tpde::Label label;
-		const zend_tpde_instruction *instruction;
-		const zend_mir_executable_value_ref *operation;
-		uint32_t source;
-		uint32_t target_opcode;
-		zend_tpde_user_opcode_target_kind kind;
-		zend_native_runtime_helper_id helper;
-		uint32_t frame_operand;
-		uint32_t slow_frame_operand;
-	};
-	std::vector<DispatchToCase> dispatch_cases;
-	dispatch_cases.reserve(dispatch_case_count);
-	uint32_t frame_operand = 4;
+	/* Per dispatch source, a label per target (plan_user_opcode_dispatch()). */
+	std::vector<tpde::Label> dispatch_labels;
+	dispatch_labels.reserve(dispatch_cases.size());
 	for (size_t source_index = 0;
 			source_index < dispatch_sources.size(); ++source_index) {
 		const uint32_t source = dispatch_sources[source_index];
 		auto next_candidate = text_writer.label_create();
 		ASM(CMP32ri, position_reg, source);
 		generate_raw_jump(Jump::jne, next_candidate);
-		const zend_tpde_instruction *source_instruction = nullptr;
-		for (uint32_t instruction = 0;
-				instruction < plan->instruction_count; ++instruction) {
-			const zend_tpde_instruction &candidate =
-				plan->instructions[instruction];
-			if (candidate.has_value_operation
-					&& candidate.value_operation.source_position_id
-						== source) {
-				source_instruction = &candidate;
-				break;
-			}
-		}
-		if (source >= plan->user_opcode_source_operation_count) {
-			return false;
-		}
-		const zend_mir_executable_value_ref *source_operation =
-			&plan->user_opcode_source_operations[source];
 		for (size_t target_index = 0;
 				target_index < plan->user_opcode_target_count;
 				++target_index) {
@@ -7252,30 +7212,18 @@ bool ZendCompilerX64::compile_user_opcode_gateway(InstContext &ctx) {
 			auto target = text_writer.label_create();
 			ASM(CMP32ri, selected_opcode_reg, target_case.opcode);
 			generate_raw_jump(Jump::je, target);
-			dispatch_cases.push_back({
-				target,
-				source_instruction,
-				source_operation,
-				source,
-				target_case.opcode,
-				target_case.kind,
-				target_case.helper,
-				frame_operand,
-				frame_operand
-					+ zend_tpde_user_opcode_target_frame_uses(
-						target_case.kind)
-					- 1});
-			frame_operand +=
-				zend_tpde_user_opcode_target_frame_uses(
-					target_case.kind);
+			dispatch_labels.push_back(target);
 		}
 		label_place(next_candidate);
 	}
 	generate_raw_jump(Jump::jmp, exception);
 	position.reset();
 	selected_opcode.reset();
-	for (const DispatchToCase &dispatch_case : dispatch_cases) {
-		label_place(dispatch_case.label);
+	for (size_t case_index = 0; case_index < dispatch_cases.size();
+			++case_index) {
+		const UserOpcodeDispatchCase &dispatch_case =
+			dispatch_cases[case_index];
+		label_place(dispatch_labels[case_index]);
 		const zend_mir_executable_value_ref &operation =
 			*dispatch_case.operation;
 		auto jump_to_source = [&](uint32_t source) {
