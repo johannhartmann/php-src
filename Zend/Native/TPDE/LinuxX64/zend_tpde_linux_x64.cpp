@@ -12457,8 +12457,8 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	if (access == ElementAccess::Read && node.has_result
 			&& ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
-		/* An integer result needs an integer element
-		 * (zend_native_zval_is_long()), tested in memory. */
+		/* An integer result needs an element whose type is exactly
+		 * IS_LONG, tested in memory. */
 		ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
 		generate_raw_jump(Jump::jne, slow);
@@ -12881,7 +12881,7 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 		&& result_offset <= INT32_MAX - sizeof(zval);
 	auto result = result_ref(node.result);
 	if (result_long) {
-		/* zend_native_zval_is_long(), tested in memory. */
+		/* The element's type is exactly IS_LONG, tested in memory. */
 		ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
 		generate_raw_jump(Jump::jne, slow);
@@ -13458,8 +13458,8 @@ int ZendCompilerX64::key_exists_inline(InstContext &ctx) {
 
 /*
  * FE_FREE of an array holder that another owner keeps alive drops one
- * reference (zend_native_iterator_shared, _release_shared), as the VM's
- * inlined zval_ptr_dtor_nogc does. Object iterators and a last reference
+ * reference, as zend_native_release_shared() and the VM's inlined
+ * zval_ptr_dtor_nogc do. Object iterators and a last reference
  * take the guarded cold block. Returns 1 when emitted, 0 when the form
  * does not apply and -1 on an encoding failure.
  */
@@ -13496,7 +13496,7 @@ int ZendCompilerX64::iterator_free_inline(InstContext &ctx) {
 		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 	auto frame_scratch = frame_register(std::move(frame));
 	auto frame_reg = frame_scratch.cur_reg();
-	/* zend_native_iterator_shared() and the release together. */
+	/* An array with another owner, and the release, together. */
 	ScratchReg decision{this};
 	decision.alloc_gp();
 	emit_consume_shared(frame_reg,
