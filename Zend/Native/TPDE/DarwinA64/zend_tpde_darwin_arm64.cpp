@@ -310,6 +310,19 @@ public:
 		store_off(base, offset, constant_reg, size);
 	}
 
+	/* destination = base + offset with the unshifted 12-bit immediate form
+	 * of ADD, or through a materialized constant above 4095. */
+	void add_imm12_offset(AsmReg destination, AsmReg base, uint64_t offset) {
+		if (offset <= UINT32_C(4095)) {
+			ASM(ADDxi, destination, base, static_cast<uint32_t>(offset));
+		} else {
+			ScratchReg amount{this};
+			auto amount_reg = amount.alloc_gp();
+			materialize_constant(offset, DarwinConfig::GP_BANK, 8, amount_reg);
+			ASM(ADDx, destination, base, amount_reg);
+		}
+	}
+
 	AsmReg canonical_value_register(IRValueRef value) {
 		const auto local_idx = adaptor->val_local_idx(value);
 		::tpde::ValueAssignment *assignment = val_assignment(local_idx);
@@ -327,6 +340,30 @@ public:
 	AsmReg canonical_frame_register() {
 		return canonical_value_register(
 			IRValueRef{Adaptor::FRAME_VALUE});
+	}
+	/* Stands for the canonical frame register, looked up again at each use:
+	 * a scratch allocation in between may have evicted it. */
+	struct CanonicalFrame {};
+	AsmReg frame_register(AsmReg frame) const { return frame; }
+	AsmReg frame_register(CanonicalFrame) { return canonical_frame_register(); }
+	/* EX(opline) = the opline byte_offset bytes into the opcodes of the
+	 * function frame executes, built in scratch. The offset is added with
+	 * add_imm12_offset(), or with add_offset() for shifted_immediate. */
+	template <typename Frame>
+	void emit_publish_opline(Frame frame, AsmReg scratch,
+			uint64_t byte_offset, bool shifted_immediate = false) {
+		load_off(scratch, frame_register(frame),
+			static_cast<uint32_t>(offsetof(zend_execute_data, func)), 8);
+		load_off(scratch, scratch,
+			static_cast<uint32_t>(offsetof(zend_op_array, opcodes)), 8);
+		if (shifted_immediate) {
+			add_offset(scratch, scratch, byte_offset);
+		} else {
+			add_imm12_offset(scratch, scratch, byte_offset);
+		}
+		store_off(frame_register(frame),
+			static_cast<uint32_t>(offsetof(zend_execute_data, opline)),
+			scratch, 8);
 	}
 	/* A helper wrote a scalar result to its frame slot. Zend writes a bool
 	 * as type_info only, so its value comes from IS_TRUE, not the payload. */
@@ -3480,15 +3517,9 @@ bool ZendCompilerA64::compile_inst_impl(
 		{
 			ScratchReg opline{this};
 			auto opline_reg = opline.alloc_gp();
-			load_off(opline_reg, canonical_frame_register(),
-				static_cast<uint32_t>(offsetof(zend_execute_data, func)), 8);
-			load_off(opline_reg, opline_reg,
-				static_cast<uint32_t>(offsetof(zend_op_array, opcodes)), 8);
-			add_offset(opline_reg, opline_reg,
-				static_cast<uint64_t>(node.source_position) * sizeof(zend_op));
-			store_off(canonical_frame_register(),
-				static_cast<uint32_t>(offsetof(zend_execute_data, opline)),
-				opline_reg, 8);
+			emit_publish_opline(CanonicalFrame{}, opline_reg,
+				static_cast<uint64_t>(node.source_position) * sizeof(zend_op),
+				true);
 		}
 
 		auto normalized = text_writer.label_create();
@@ -10974,28 +11005,6 @@ bool ZendCompilerA64::compile_inst_impl(
 				auto successful = text_writer.label_create();
 				int32_t leaf_private_frame_slot = 0;
 				int32_t leaf_caller_frame_slot = 0;
-				auto add_offset = [this](
-						AsmReg destination, AsmReg base, uint64_t offset) {
-					if (offset <= UINT32_C(4095)) {
-						ASM(ADDxi, destination, base,
-							static_cast<uint32_t>(offset));
-					} else {
-						ScratchReg amount{this};
-						auto amount_reg = amount.alloc_gp();
-						materialize_constant(offset, DarwinConfig::GP_BANK,
-							8, amount_reg);
-						ASM(ADDx, destination, base, amount_reg);
-					}
-				};
-				auto store_constant = [this](
-						AsmReg base, uint32_t offset, uint64_t value,
-						uint32_t size) {
-					ScratchReg constant{this};
-					auto constant_reg = constant.alloc_gp();
-					materialize_constant(value, DarwinConfig::GP_BANK,
-						size, constant_reg);
-					store_off(base, offset, constant_reg, size);
-				};
 				auto load_generated_result = [&](AsmReg result_frame_reg) {
 					if (node.has_result) {
 						ScratchReg result_slot{this};
@@ -11003,7 +11012,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						mov(result_slot_reg, result_frame_reg, 8);
 						if (call.direct_call->result_operand.slot_kind
 								== ZEND_MIR_SOURCE_SLOT_CV) {
-							add_offset(result_slot_reg, result_slot_reg,
+							add_imm12_offset(result_slot_reg, result_slot_reg,
 								static_cast<uint64_t>(
 									ZEND_CALL_FRAME_SLOT
 										+ call.direct_call->result_operand.index)
@@ -11564,7 +11573,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						emit_observer_exit(call_slow_target());
 						ScratchReg callee_address{this};
 						auto callee_reg = callee_address.alloc_gp();
-							add_offset(callee_reg, AsmReg{AsmReg::FP},
+							add_imm12_offset(callee_reg, AsmReg{AsmReg::FP},
 								static_cast<uint32_t>(
 									leaf_private_frame_slot));
 						load_off(second_reg, cell_reg,
@@ -11796,7 +11805,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							mov(second_reg, frame_reg, 8);
 							if (call.direct_call->result_operand.slot_kind
 									== ZEND_MIR_SOURCE_SLOT_CV) {
-								add_offset(second_reg, second_reg,
+								add_imm12_offset(second_reg, second_reg,
 									static_cast<uint64_t>(
 										ZEND_CALL_FRAME_SLOT
 											+ call.direct_call
@@ -11951,7 +11960,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							UINT64_C(0), DarwinConfig::GP_BANK, 8,
 							published_code_reg);
 					} else {
-						add_offset(published_code_reg, cell_reg,
+						add_imm12_offset(published_code_reg, cell_reg,
 							static_cast<uint32_t>(
 								offsetof(zend_native_entry_cell, code)));
 						ASM(LDARx, published_code_reg, published_code_reg);
@@ -12260,7 +12269,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					auto callee_reg = callee_address.alloc_gp();
 					mov(callee_reg, first_reg, 8);
 					mov(second_reg, callee_reg, 8);
-					add_offset(second_reg, second_reg, reservation_size);
+					add_imm12_offset(second_reg, second_reg, reservation_size);
 					{
 						ScratchReg address{this};
 						auto address_reg = address.alloc_gp();
@@ -12401,37 +12410,17 @@ bool ZendCompilerA64::compile_inst_impl(
 						call.direct_call->frame_argument_count, 4);
 
 					/* Publish caller and callee source positions. */
-					load_off(second_reg, frame_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, func)), 8);
-					load_off(second_reg, second_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_op_array, opcodes)), 8);
-					add_offset(second_reg, second_reg,
+					emit_publish_opline(frame_reg, second_reg,
 						static_cast<uint64_t>(
 							call.direct_call->source_position)
 							* sizeof(zend_op));
-					store_off(frame_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, opline)),
-						second_reg, 8);
-					load_off(second_reg, callee_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, func)), 8);
-					load_off(second_reg, second_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_op_array, opcodes)), 8);
-					add_offset(second_reg, second_reg,
+					emit_publish_opline(callee_reg, second_reg,
 						static_cast<uint64_t>(fixed_argument_count)
 							* sizeof(zend_op));
-					store_off(callee_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, opline)),
-						second_reg, 8);
 
 					/* Resolve the caller's canonical result zval. */
 					if (result_unused) {
-						add_offset(second_reg, callee_reg,
+						add_imm12_offset(second_reg, callee_reg,
 							static_cast<uint64_t>(call.direct_call->frame_size)
 								+ offsetof(zend_native_direct_activation,
 									discarded_return));
@@ -12439,7 +12428,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						mov(second_reg, frame_reg, 8);
 						if (call.direct_call->result_operand.slot_kind
 								== ZEND_MIR_SOURCE_SLOT_CV) {
-							add_offset(second_reg, second_reg,
+							add_imm12_offset(second_reg, second_reg,
 								static_cast<uint64_t>(
 									ZEND_CALL_FRAME_SLOT
 										+ call.direct_call->result_operand.index)
@@ -12621,7 +12610,8 @@ bool ZendCompilerA64::compile_inst_impl(
 								load_off(source_address_reg, source_address_reg,
 									static_cast<uint32_t>(offsetof(
 										zend_op_array, literals)), 8);
-								add_offset(source_address_reg, source_address_reg,
+								add_imm12_offset(source_address_reg,
+									source_address_reg,
 									static_cast<uint64_t>(
 										descriptor_argument.source_operand.index)
 										* sizeof(zval));
@@ -12747,7 +12737,8 @@ bool ZendCompilerA64::compile_inst_impl(
 							auto low_word_reg = low_word.alloc_gp();
 							auto high_word_reg = high_word.alloc_gp();
 							auto type_info_reg = type_info.alloc_gp();
-							add_offset(source_address_reg, source_frame_reg,
+							add_imm12_offset(source_address_reg,
+								source_frame_reg,
 								source_offset);
 							load_off(low_word_reg, source_address_reg, 0, 8);
 							load_off(high_word_reg, source_address_reg, 8, 8);
@@ -12801,7 +12792,8 @@ bool ZendCompilerA64::compile_inst_impl(
 						load_off(source_address_reg, source_address_reg,
 							static_cast<uint32_t>(
 								offsetof(zend_op_array, literals)), 8);
-						add_offset(source_address_reg, source_address_reg,
+						add_imm12_offset(source_address_reg,
+							source_address_reg,
 							static_cast<uint64_t>(literal_index)
 								* sizeof(zval));
 						load_off(low_word_reg, source_address_reg, 0, 8);
@@ -12835,7 +12827,7 @@ bool ZendCompilerA64::compile_inst_impl(
 
 					/* Complete and link the stable trailing activation. */
 					mov(second_reg, callee_reg, 8);
-					add_offset(second_reg, second_reg,
+					add_imm12_offset(second_reg, second_reg,
 						call.direct_call->frame_size);
 					store_off(second_reg,
 						static_cast<uint32_t>(offsetof(
@@ -13547,7 +13539,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					mov(result_slot_reg, result_frame_reg, 8);
 					if (call.direct_call->result_operand.slot_kind
 							== ZEND_MIR_SOURCE_SLOT_CV) {
-						add_offset(result_slot_reg, result_slot_reg,
+						add_imm12_offset(result_slot_reg, result_slot_reg,
 							static_cast<uint64_t>(
 								ZEND_CALL_FRAME_SLOT
 									+ call.direct_call
@@ -14221,29 +14213,8 @@ bool ZendCompilerA64::compile_inst_impl(
 			auto frame_reg = frame.load_to_reg();
 			ScratchReg source_position{this};
 			auto source_position_reg = source_position.alloc_gp();
-			load_off(source_position_reg, frame_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_execute_data, func)), 8);
-			load_off(source_position_reg, source_position_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_function, op_array.opcodes)), 8);
-			const uint64_t source_offset =
-				uint64_t{record.source_position_id} * sizeof(zend_op);
-			if (source_offset <= UINT32_C(4095)) {
-				ASM(ADDxi, source_position_reg, source_position_reg,
-					static_cast<uint32_t>(source_offset));
-			} else {
-				ScratchReg offset{this};
-				auto offset_reg = offset.alloc_gp();
-				materialize_constant(source_offset,
-					DarwinConfig::GP_BANK, 8, offset_reg);
-				ASM(ADDx, source_position_reg,
-					source_position_reg, offset_reg);
-			}
-			store_off(frame_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_execute_data, opline)),
-				source_position_reg, 8);
+			emit_publish_opline(frame_reg, source_position_reg,
+				uint64_t{record.source_position_id} * sizeof(zend_op));
 			ScratchReg pointer{this};
 			auto pointer_reg = pointer.alloc_gp();
 			load_off(pointer_reg, frame_reg,
@@ -14382,31 +14353,8 @@ bool ZendCompilerA64::compile_inst_impl(
 				auto frame_reg = frame.load_to_reg();
 				ScratchReg source_position{this};
 				auto source_position_reg = source_position.alloc_gp();
-				load_off(source_position_reg, frame_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_execute_data, func)), 8);
-				load_off(source_position_reg, source_position_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_function, op_array.opcodes)), 8);
-				const uint64_t source_offset =
-					uint64_t{record.source_position_id}
-						* sizeof(zend_op);
-				if (source_offset <= UINT32_C(4095)) {
-					ASM(ADDxi, source_position_reg,
-						source_position_reg,
-						static_cast<uint32_t>(source_offset));
-				} else {
-					ScratchReg offset{this};
-					auto offset_reg = offset.alloc_gp();
-					materialize_constant(source_offset,
-						DarwinConfig::GP_BANK, 8, offset_reg);
-					ASM(ADDx, source_position_reg,
-						source_position_reg, offset_reg);
-				}
-				store_off(frame_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_execute_data, opline)),
-					source_position_reg, 8);
+				emit_publish_opline(frame_reg, source_position_reg,
+					uint64_t{record.source_position_id} * sizeof(zend_op));
 				ScratchReg pointer{this};
 				auto pointer_reg = pointer.alloc_gp();
 				load_off(pointer_reg, frame_reg,
@@ -14567,31 +14515,8 @@ bool ZendCompilerA64::compile_inst_impl(
 					auto frame_reg = frame.load_to_reg();
 					ScratchReg source_position{this};
 					auto source_position_reg = source_position.alloc_gp();
-					load_off(source_position_reg, frame_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, func)), 8);
-					load_off(source_position_reg, source_position_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_function, op_array.opcodes)), 8);
-					const uint64_t source_offset =
-						uint64_t{record.source_position_id}
-							* sizeof(zend_op);
-					if (source_offset <= UINT32_C(4095)) {
-						ASM(ADDxi, source_position_reg,
-							source_position_reg,
-							static_cast<uint32_t>(source_offset));
-					} else {
-						ScratchReg offset{this};
-						auto offset_reg = offset.alloc_gp();
-						materialize_constant(source_offset,
-							DarwinConfig::GP_BANK, 8, offset_reg);
-						ASM(ADDx, source_position_reg,
-							source_position_reg, offset_reg);
-					}
-					store_off(frame_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_execute_data, opline)),
-						source_position_reg, 8);
+					emit_publish_opline(frame_reg, source_position_reg,
+						uint64_t{record.source_position_id} * sizeof(zend_op));
 					ScratchReg return_pointer{this};
 					auto return_reg = return_pointer.alloc_gp();
 					load_off(return_reg, frame_reg,
