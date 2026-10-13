@@ -14681,9 +14681,33 @@ struct MappedSection {
 	uint32_t flags = 0;
 };
 
+/* Without __unw_add_dynamic_eh_frame_section, Darwin's libunwind takes one
+ * FDE per __register_frame call: visit each FDE of the .eh_frame section. */
+template <typename Visit>
+void for_each_eh_frame_fde(void *section, size_t size, Visit visit) {
+	uint8_t *cursor = static_cast<uint8_t *>(section);
+	uint8_t *const end = cursor + size;
+
+	while (end - cursor >= 8) {
+		uint32_t length;
+		uint32_t cie_id;
+		std::memcpy(&length, cursor, sizeof(length));
+		if (length == 0 || length == UINT32_MAX
+				|| length > static_cast<size_t>(end - cursor) - 4) {
+			break;
+		}
+		std::memcpy(&cie_id, cursor + 4, sizeof(cie_id));
+		if (cie_id != 0) {
+			visit(cursor);
+		}
+		cursor += 4 + static_cast<size_t>(length);
+	}
+}
+
 struct A64PublishedState {
 	std::vector<MappedSection> sections;
 	void *unwind_section = nullptr;
+	size_t unwind_section_size = 0;
 	bool unwind_registered = false;
 
 	~A64PublishedState() {
@@ -14692,7 +14716,8 @@ struct A64PublishedState {
 				__unw_remove_dynamic_eh_frame_section(
 					reinterpret_cast<uintptr_t>(unwind_section));
 			} else {
-				__deregister_frame(unwind_section);
+				for_each_eh_frame_fde(unwind_section, unwind_section_size,
+					[](void *fde) { __deregister_frame(fde); });
 			}
 			unwind_registered = false;
 		}
@@ -15264,11 +15289,14 @@ zend_result zend_tpde_map_darwin_arm64(
 	}
 	published->unwind_section =
 		published->sections[unwind_section].mapping;
+	published->unwind_section_size = object.sections[unwind_section].size;
 	if (__unw_add_dynamic_eh_frame_section != nullptr) {
 		__unw_add_dynamic_eh_frame_section(
 			reinterpret_cast<uintptr_t>(published->unwind_section));
 	} else {
-		__register_frame(published->unwind_section);
+		for_each_eh_frame_fde(published->unwind_section,
+			published->unwind_section_size,
+			[](void *fde) { __register_frame(fde); });
 	}
 	published->unwind_registered = true;
 
