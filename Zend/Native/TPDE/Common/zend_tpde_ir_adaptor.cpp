@@ -1846,11 +1846,35 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 	return {true, inline_result};
 }
 
-ZendIRAdaptor::ZendIRAdaptor(const zend_tpde_plan *plan,
+ZendIRAdaptor::ZendIRAdaptor(Unbuilt, const zend_tpde_plan *plan,
 		std::span<const zend_tpde_plan *const> component_plans,
 		FunctionMode function_mode)
 	: plan_(plan), component_plans_(component_plans),
-	  function_mode_(function_mode) {
+	  function_mode_(function_mode) {}
+
+class ZendIRAdaptor::Builder : public ZendIRAdaptor {
+public:
+	Builder(const zend_tpde_plan *plan,
+			std::span<const zend_tpde_plan *const> component_plans,
+			FunctionMode function_mode)
+		: ZendIRAdaptor(Unbuilt{}, plan, component_plans, function_mode) {}
+
+	/* Builds the graph and hands over the adaptor part. */
+	ZendIRAdaptor &&build() {
+		run();
+		return std::move(*this);
+	}
+
+private:
+	void run();
+};
+
+ZendIRAdaptor::ZendIRAdaptor(const zend_tpde_plan *plan,
+		std::span<const zend_tpde_plan *const> component_plans,
+		FunctionMode function_mode)
+	: ZendIRAdaptor(Builder(plan, component_plans, function_mode).build()) {}
+
+void ZendIRAdaptor::Builder::run() {
 	value_overrides_.assign(plan_->value_count, INVALID_VALUE_REF);
 	source_ssa_overrides_.assign(
 		plan_->source_ssa_variable_count, INVALID_VALUE_REF);
@@ -9970,6 +9994,6 @@ ZendIRAdaptor::ZendIRAdaptor(const zend_tpde_plan *plan,
 	fused_instructions_.shrink_to_fit();
 	instructions_.shrink_to_fit();
 	phis_.shrink_to_fit();
-	}
+}
 
 } // namespace zend::native::tpde

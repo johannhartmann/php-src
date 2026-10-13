@@ -765,6 +765,17 @@ private:
 			uint32_t caller_block,
 			std::vector<BlockItem<IRInstRef>> &block_instructions);
 
+	/*
+	 * Construction runs in a Builder (zend_tpde_ir_adaptor.cpp): the adaptor
+	 * being built plus the state only its construction needs. It starts from
+	 * an unbuilt adaptor that holds just the plan and the mode.
+	 */
+	class Builder;
+	struct Unbuilt {};
+	ZendIRAdaptor(Unbuilt, const zend_tpde_plan *plan,
+			std::span<const zend_tpde_plan *const> component_plans,
+			FunctionMode function_mode);
+
 public:
 	static TypedBodyAbiType typed_body_value_abi(
 			const zend_tpde_plan *plan, uint32_t value_index) {
