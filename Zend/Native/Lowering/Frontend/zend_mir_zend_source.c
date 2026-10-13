@@ -1929,11 +1929,15 @@ static zend_function *zend_mir_zend_source_resolve_user_method_call_ex(
 			&& opline->op1_type == IS_UNUSED
 			&& op_array->scope != NULL
 			&& (((op_array->scope->ce_flags & ZEND_ACC_LINKED) == 0)
-				|| (op_array->scope->ce_flags & ZEND_ACC_TRAIT) != 0)) {
+				|| (op_array->scope->ce_flags & ZEND_ACC_TRAIT) != 0
+				|| (op_array->fn_flags
+					& (ZEND_ACC_CLOSURE | ZEND_ACC_TRAIT_CLONE)) != 0)) {
 		/* Before class linking, inheritance, trait flattening, prototypes and
 		 * visibility are not authoritative. A trait scope is likewise not the
-		 * eventual use-site scope. Keep parent/self/static targets open so the
-		 * native runtime resolver binds them after class linking. */
+		 * eventual use-site scope, and the code of a closure or of a method a
+		 * trait copied also runs in the scopes it is bound to or used by.
+		 * Keep parent/self/static targets open so the native runtime resolver
+		 * binds them in the caller's scope. */
 		return NULL;
 	}
 	function = zend_optimizer_get_called_func(

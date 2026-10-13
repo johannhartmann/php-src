@@ -5089,9 +5089,13 @@ void **zend_native_call_fast_run_time_cache(zend_execute_data *callee)
  * a named class or self::/parent:: names one class per request; static::
  * follows the caller's called scope, which the site compares with the class
  * it was published for; self::/parent:: of an instance method keeps $this.
+ * The code of a closure or of a method a trait copied runs in every scope it
+ * is bound to or used by, and the fast path does not compare the scope
+ * self::/parent:: name, so such callers keep the general path.
  * False for a site the fast path does not take.
  */
 static bool zend_native_call_fast_static_mode(
+	const zend_op_array *caller,
 	const zend_native_user_call_descriptor *descriptor,
 	const zend_function *function, uint32_t call_info,
 	uint32_t *static_mode)
@@ -5104,8 +5108,10 @@ static bool zend_native_call_fast_static_mode(
 		&& (fetch == ZEND_FETCH_CLASS_SELF || fetch == ZEND_FETCH_CLASS_PARENT);
 	const bool late = unused && fetch == ZEND_FETCH_CLASS_STATIC;
 
-	if (descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& !forwarding && !late) {
+	if ((descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& !forwarding && !late)
+			|| (forwarding && (caller->fn_flags
+				& (ZEND_ACC_CLOSURE | ZEND_ACC_TRAIT_CLONE)) != 0)) {
 		return false;
 	}
 	if ((function->common.fn_flags & ZEND_ACC_STATIC) == 0) {
@@ -5235,8 +5241,9 @@ static void zend_native_call_fast_publish_internal(
 			if ((descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 						&& !zend_native_call_static_constructor(
 							descriptor, function))
-					|| !zend_native_call_fast_static_mode(descriptor,
-						function, resolution->call_info, &static_mode)) {
+					|| !zend_native_call_fast_static_mode(
+						&caller->func->op_array, descriptor, function,
+						resolution->call_info, &static_mode)) {
 				return;
 			}
 			key = resolution->object_or_called_scope;
@@ -5373,8 +5380,8 @@ static void zend_native_call_fast_publish(
 			|| (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NONE
 				&& zend_native_call_static_constructor(
 					descriptor, function))) {
-		if (!zend_native_call_fast_static_mode(descriptor, function,
-				resolution->call_info, &static_mode)) {
+		if (!zend_native_call_fast_static_mode(&caller->func->op_array,
+				descriptor, function, resolution->call_info, &static_mode)) {
 			return;
 		}
 	} else if (entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD) {
