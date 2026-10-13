@@ -374,6 +374,24 @@ public:
 			static_cast<uint32_t>(offsetof(zend_execute_data, opline)),
 			scratch, 8);
 	}
+	/* GC_REFCOUNT(counted) += amount, through scratch. */
+	void emit_gc_addref(AsmReg counted, AsmReg scratch, uint32_t amount = 1) {
+		load_off(scratch, counted,
+			static_cast<uint32_t>(offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(ADDwi, scratch, scratch, amount);
+		store_off(counted,
+			static_cast<uint32_t>(offsetof(zend_refcounted_h, refcount)),
+			scratch, 4);
+	}
+	/* GC_REFCOUNT(counted) -= 1, through scratch. */
+	void emit_gc_delref(AsmReg counted, AsmReg scratch) {
+		load_off(scratch, counted,
+			static_cast<uint32_t>(offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(SUBwi, scratch, scratch, 1);
+		store_off(counted,
+			static_cast<uint32_t>(offsetof(zend_refcounted_h, refcount)),
+			scratch, 4);
+	}
 	/* Stores one part of a boxed value at part_offset from frame. With
 	 * reload_spilled, a part whose assignment is stack_valid() is reloaded
 	 * from the stack instead of trusting its register. */
@@ -887,27 +905,13 @@ bool ZendCompilerA64::emit_pointer_addref(
 		generate_raw_jump(Jump::Jne, copied);
 		ScratchReg count{this};
 		auto count_reg = count.alloc_gp();
-		load_off(count_reg, payload_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)), 4);
-		ASM(ADDwi, count_reg, count_reg, 1);
-		store_off(payload_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)),
-			count_reg, 4);
+		emit_gc_addref(payload_reg, count_reg);
 		label_place(copied);
 		return true;
 	}
 	ScratchReg count{this};
 	auto count_reg = count.alloc_gp();
-	load_off(count_reg, payload_reg,
-		static_cast<uint32_t>(
-			offsetof(zend_refcounted_h, refcount)), 4);
-	ASM(ADDwi, count_reg, count_reg, 1);
-	store_off(payload_reg,
-		static_cast<uint32_t>(
-			offsetof(zend_refcounted_h, refcount)),
-		count_reg, 4);
+	emit_gc_addref(payload_reg, count_reg);
 	return true;
 }
 
@@ -5517,14 +5521,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		generate_raw_jump(Jump::Jeq, target_released);
 		load_off(low_word_reg, frame_reg,
 			static_cast<uint32_t>(target_offset), 8);
-		load_off(probe_reg, low_word_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)), 4);
-		ASM(SUBwi, probe_reg, probe_reg, 1);
-		store_off(low_word_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)),
-			probe_reg, 4);
+		emit_gc_delref(low_word_reg, probe_reg);
 		label_place(target_released);
 		if (register_source) {
 			ASM(ORRx, low_word_reg, source_payload_reg,
@@ -5541,15 +5538,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			auto value_owned = text_writer.label_create();
 			generate_raw_jump(Jump::Jeq, value_owned);
-			load_off(probe_reg, low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)), 4);
-			ASM(ADDwi, probe_reg, probe_reg,
-				source_refcount_increments);
-			store_off(low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)),
-				probe_reg, 4);
+			emit_gc_addref(low_word_reg, probe_reg, source_refcount_increments);
 			label_place(value_owned);
 		}
 		store_off(frame_reg, static_cast<uint32_t>(target_offset),
@@ -5643,14 +5632,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto copied = text_writer.label_create();
 		generate_raw_jump(Jump::Jeq, copied);
-		load_off(probe_reg, value_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)), 4);
-		ASM(ADDwi, probe_reg, probe_reg, 1);
-		store_off(value_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)),
-			probe_reg, 4);
+		emit_gc_addref(value_reg, probe_reg);
 		label_place(copied);
 		store_off(frame_reg, static_cast<uint32_t>(result_offset),
 			value_reg, 8);
@@ -6047,14 +6029,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					generate_raw_jump(Jump::Jeq, owned);
 					ScratchReg count{this};
 					auto count_reg = count.alloc_gp();
-					load_off(count_reg, payload_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_refcounted_h, refcount)), 4);
-					ASM(ADDwi, count_reg, count_reg, 1);
-					store_off(payload_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_refcounted_h, refcount)),
-						count_reg, 4);
+					emit_gc_addref(payload_reg, count_reg);
 					label_place(owned);
 				} else {
 					ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
@@ -6314,15 +6289,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			ASM(TSTwi, type_reg,
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::Jeq, done);
-			load_off(limit_reg, low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)),
-				4);
-			ASM(ADDwi, limit_reg, limit_reg, 1);
-			store_off(low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)),
-				limit_reg, 4);
+			emit_gc_addref(low_word_reg, limit_reg);
 		}
 		generate_raw_jump(Jump::jmp, done);
 
@@ -6957,14 +6924,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			ASM(TSTwi, type_reg,
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::Jeq, copied);
-			load_off(limit_reg, low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)), 4);
-			ASM(ADDwi, limit_reg, limit_reg, 1);
-			store_off(low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)),
-				limit_reg, 4);
+			emit_gc_addref(low_word_reg, limit_reg);
 			label_place(copied);
 		}
 		ASM(ADDwi, count_reg, count_reg, 1);
@@ -6989,14 +6949,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				ASM(TSTwi, type_reg,
 					IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 				generate_raw_jump(Jump::Jeq, result_copied);
-				load_off(limit_reg, low_word_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_refcounted_h, refcount)), 4);
-				ASM(ADDwi, limit_reg, limit_reg, 1);
-				store_off(low_word_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_refcounted_h, refcount)),
-					limit_reg, 4);
+				emit_gc_addref(low_word_reg, limit_reg);
 				label_place(result_copied);
 			}
 		}
@@ -8521,14 +8474,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				generate_raw_jump(Jump::Jeq, owned);
 				ScratchReg count{this};
 				auto count_reg = count.alloc_gp();
-				load_off(count_reg, payload_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_refcounted_h, refcount)), 4);
-				ASM(ADDwi, count_reg, count_reg, 1);
-				store_off(payload_reg,
-					static_cast<uint32_t>(
-						offsetof(zend_refcounted_h, refcount)),
-					count_reg, 4);
+				emit_gc_addref(payload_reg, count_reg);
 				label_place(owned);
 			} else {
 				auto [result_ref, result] =
@@ -8579,14 +8525,7 @@ bool ZendCompilerA64::compile_inst_impl(
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::Jeq, copied);
 			load_off(offset_reg, property_reg, 0, 8);
-			load_off(property_reg, offset_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)), 4);
-			ASM(ADDwi, property_reg, property_reg, 1);
-			store_off(offset_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)),
-				property_reg, 4);
+			emit_gc_addref(offset_reg, property_reg);
 			label_place(copied);
 			generate_raw_jump(Jump::jmp, done);
 		}
@@ -8784,14 +8723,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			ASM(TSTwi, type_reg,
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::Jeq, value_owned);
-			load_off(offset_reg, low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)), 4);
-			ASM(ADDwi, offset_reg, offset_reg, 1);
-			store_off(low_word_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_refcounted_h, refcount)),
-				offset_reg, 4);
+			emit_gc_addref(low_word_reg, offset_reg);
 			label_place(value_owned);
 		}
 		store_off(property_reg, 0, low_word_reg, 8);
@@ -9096,14 +9028,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		ASM(TSTwi, type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::Jeq, done);
-		load_off(index_reg, low_word_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)), 4);
-		ASM(ADDwi, index_reg, index_reg, 1);
-		store_off(low_word_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_refcounted_h, refcount)),
-			index_reg, 4);
+		emit_gc_addref(low_word_reg, index_reg);
 		generate_raw_jump(Jump::jmp, done);
 
 		label_place(slow);
@@ -9869,14 +9794,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							zend_refcounted_h, u.type_info)), 4);
 					ASM(TSTwi, type_info_reg, GC_IMMUTABLE);
 					generate_raw_jump(Jump::Jne, slow);
-					load_off(refcount_reg, array_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_refcounted_h, refcount)), 4);
-					ASM(ADDwi, refcount_reg, refcount_reg, 1);
-					store_off(array_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_refcounted_h, refcount)),
-						refcount_reg, 4);
+					emit_gc_addref(array_reg, refcount_reg);
 					load_off(high_word_reg, frame_reg,
 						reset_layout.source_offset + 8, 8);
 					store_off(frame_reg, reset_layout.holder_offset,
@@ -10166,14 +10084,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					ASM(TSTwi, value_type_reg,
 						IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 					generate_raw_jump(Jump::Jeq, value_owned);
-					load_off(type_reg, value_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_refcounted_h, refcount)), 4);
-					ASM(ADDwi, type_reg, type_reg, 1);
-					store_off(value_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_refcounted_h, refcount)),
-						type_reg, 4);
+					emit_gc_addref(value_reg, type_reg);
 					label_place(value_owned);
 					if (layout.has_key) {
 						auto numeric_key = text_writer.label_create();
@@ -10196,14 +10107,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						generate_raw_jump(Jump::Jeq, destination_released);
 						load_off(array_reg, frame_reg,
 							layout.destination_offset, 8);
-						load_off(type_reg, array_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_refcounted_h, refcount)), 4);
-						ASM(SUBwi, type_reg, type_reg, 1);
-						store_off(array_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_refcounted_h, refcount)),
-							type_reg, 4);
+						emit_gc_delref(array_reg, type_reg);
 						label_place(destination_released);
 					}
 					/* Publish the fully validated iterator step. */
@@ -11374,14 +11278,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						generate_raw_jump(Jump::Jeq, released);
 						ScratchReg count{this};
 						auto count_reg = count.alloc_gp();
-						load_off(count_reg, payload_reg,
-							static_cast<uint32_t>(offsetof(
-								zend_refcounted_h, refcount)), 4);
-						ASM(SUBwi, count_reg, count_reg, 1);
-						store_off(payload_reg,
-							static_cast<uint32_t>(offsetof(
-								zend_refcounted_h, refcount)),
-							count_reg, 4);
+						emit_gc_delref(payload_reg, count_reg);
 						label_place(released);
 					}
 					adaptor->mark_typed_body_call(
@@ -11743,17 +11640,8 @@ bool ZendCompilerA64::compile_inst_impl(
 												text_writer.label_create();
 											generate_raw_jump(
 												Jump::Jeq, copied);
-											load_off(type_info_reg,
-												low_word.cur_reg(),
-												static_cast<uint32_t>(offsetof(
-													zend_refcounted_h, refcount)),
-												4);
-											ASM(ADDwi, type_info_reg,
-												type_info_reg, 1);
-											store_off(low_word.cur_reg(),
-												static_cast<uint32_t>(offsetof(
-													zend_refcounted_h, refcount)),
-												type_info_reg, 4);
+											emit_gc_addref(low_word.cur_reg(),
+												type_info_reg);
 											label_place(copied);
 										}
 									} else {
@@ -12353,14 +12241,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							call.direct_call->receiver_source_frame_offset, 8);
 						if ((call.direct_call->flags
 								& ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER) == 0) {
-							load_off(first_reg, second_reg,
-								static_cast<uint32_t>(offsetof(
-									zend_refcounted_h, refcount)), 4);
-							ASM(ADDwi, first_reg, first_reg, 1);
-							store_off(second_reg,
-								static_cast<uint32_t>(offsetof(
-									zend_refcounted_h, refcount)),
-								first_reg, 4);
+							emit_gc_addref(second_reg, first_reg);
 						}
 						store_off(callee_reg,
 							static_cast<uint32_t>(
@@ -12618,14 +12499,7 @@ bool ZendCompilerA64::compile_inst_impl(
 									IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 								auto copied = text_writer.label_create();
 								generate_raw_jump(Jump::Jeq, copied);
-								load_off(type_info_reg, low_word_reg,
-									static_cast<uint32_t>(offsetof(
-										zend_refcounted_h, refcount)), 4);
-								ASM(ADDwi, type_info_reg, type_info_reg, 1);
-								store_off(low_word_reg,
-									static_cast<uint32_t>(offsetof(
-										zend_refcounted_h, refcount)),
-									type_info_reg, 4);
+								emit_gc_addref(low_word_reg, type_info_reg);
 								label_place(copied);
 							} else if (register_pointer_argument) {
 								auto pointer =
@@ -12691,16 +12565,8 @@ bool ZendCompilerA64::compile_inst_impl(
 											<< Z_TYPE_FLAGS_SHIFT);
 									auto copied = text_writer.label_create();
 									generate_raw_jump(Jump::Jeq, copied);
-									load_off(type_info_reg,
-										low_word.cur_reg(),
-										static_cast<uint32_t>(offsetof(
-											zend_refcounted_h, refcount)), 4);
-									ASM(ADDwi, type_info_reg,
-										type_info_reg, 1);
-									store_off(low_word.cur_reg(),
-										static_cast<uint32_t>(offsetof(
-											zend_refcounted_h, refcount)),
-										type_info_reg, 4);
+									emit_gc_addref(low_word.cur_reg(),
+										type_info_reg);
 									label_place(copied);
 								} else {
 									if (descriptor_argument.source_frame_offset
@@ -12744,14 +12610,7 @@ bool ZendCompilerA64::compile_inst_impl(
 									IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 								auto copied = text_writer.label_create();
 								generate_raw_jump(Jump::Jeq, copied);
-								load_off(type_info_reg, low_word_reg,
-									static_cast<uint32_t>(offsetof(
-										zend_refcounted_h, refcount)), 4);
-								ASM(ADDwi, type_info_reg, type_info_reg, 1);
-								store_off(low_word_reg,
-									static_cast<uint32_t>(offsetof(
-										zend_refcounted_h, refcount)),
-									type_info_reg, 4);
+								emit_gc_addref(low_word_reg, type_info_reg);
 								label_place(copied);
 							} else {
 								store_constant(source_address_reg,
@@ -12799,14 +12658,7 @@ bool ZendCompilerA64::compile_inst_impl(
 							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 						auto copied = text_writer.label_create();
 						generate_raw_jump(Jump::Jeq, copied);
-						load_off(type_info_reg, low_word_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_refcounted_h, refcount)), 4);
-						ASM(ADDwi, type_info_reg, type_info_reg, 1);
-						store_off(low_word_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_refcounted_h, refcount)),
-							type_info_reg, 4);
+						emit_gc_addref(low_word_reg, type_info_reg);
 						label_place(copied);
 					}
 					for (uint32_t index = fixed_argument_count;
@@ -14251,14 +14103,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					generate_raw_jump(Jump::Jeq, copied);
 					ScratchReg count{this};
 					auto count_reg = count.alloc_gp();
-					load_off(count_reg, payload_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_refcounted_h, refcount)), 4);
-					ASM(ADDwi, count_reg, count_reg, 1);
-					store_off(payload_reg,
-						static_cast<uint32_t>(offsetof(
-							zend_refcounted_h, refcount)),
-						count_reg, 4);
+					emit_gc_addref(payload_reg, count_reg);
 					label_place(copied);
 					return_builder.add(
 						std::move(payload), ::tpde::CCAssignment{});
@@ -14382,15 +14227,7 @@ bool ZendCompilerA64::compile_inst_impl(
 						generate_raw_jump(Jump::Jeq, copied);
 						ScratchReg count{this};
 						auto count_reg = count.alloc_gp();
-						load_off(count_reg, payload_reg,
-							static_cast<uint32_t>(offsetof(
-								zend_refcounted_h, refcount)),
-							4);
-						ASM(ADDwi, count_reg, count_reg, 1);
-						store_off(payload_reg,
-							static_cast<uint32_t>(offsetof(
-								zend_refcounted_h, refcount)),
-							count_reg, 4);
+						emit_gc_addref(payload_reg, count_reg);
 						label_place(copied);
 					}
 					store_off(pointer_reg, 0, payload_reg, 8);
