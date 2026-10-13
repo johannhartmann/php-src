@@ -121,14 +121,23 @@ private:
 		const zend_mir_instruction_record *record = nullptr;
 	};
 	InstContext *inst_context_ = nullptr;
-	struct InstContextScope {
-		ZendCompilerA64 *compiler;
-		InstContext *outer;
-		InstContextScope(ZendCompilerA64 *owner, InstContext *context)
-			: compiler{owner}, outer{owner->inst_context_} {
-			owner->inst_context_ = context;
+	/* The phase compile_user_call() compiles, for its phase members. */
+	struct UserCallContext {
+		const zend_tpde_source_call_phase_entry *phase;
+		ValueRef &context_liveness;
+		const zend_tpde_instruction *call = nullptr;
+	};
+	UserCallContext *user_call_context_ = nullptr;
+	/* Points a context member at a context for its own scope. */
+	template <typename Context>
+	struct ContextScope {
+		Context *&current;
+		Context *outer;
+		ContextScope(Context *&slot, Context *context)
+			: current{slot}, outer{slot} {
+			slot = context;
 		}
-		~InstContextScope() { compiler->inst_context_ = outer; }
+		~ContextScope() { current = outer; }
 	};
 
 	struct DirectCallStackGuardLabelPatch {
@@ -827,6 +836,16 @@ public:
 	bool compile_user_opcode_dispatch();
 	bool compile_user_opcode_gateway();
 	bool compile_user_call();
+	auto context_register();
+	auto context_argument();
+	template <typename Reg>
+	void load_active_activation(Reg destination_reg);
+	void emit_phase_failure();
+	bool compile_user_call_init();
+	bool compile_user_call_send();
+	bool compile_user_call_check();
+	bool compile_user_call_expand();
+	bool compile_user_call_do();
 	bool compile_user_opcode_call_fragment();
 	bool compile_generator_gateway();
 	bool compile_generator_resume();
@@ -6926,491 +6945,11 @@ bool ZendCompilerA64::compile_user_call() {
 	 * canonical value on both paths.
 	 */
 	(void) spill_before_branch(true);
-	auto context_register = [&]() {
-		auto context = context_liveness.part_unowned(0);
-		auto reg = context.load_to_reg();
-		context.reset();
-		return reg;
-	};
-	auto context_argument = [&]() {
-		auto context = context_liveness.part_unowned(0);
-		auto argument = copy_fixed_argument(context.load_to_reg());
-		context.reset();
-		return argument;
-	};
+	UserCallContext user_call{phase, context_liveness};
+	const ContextScope<UserCallContext> user_call_scope{
+		user_call_context_, &user_call};
 	if (node.kind == Adaptor::InstKind::UserCallInit) {
-		const zend_tpde_instruction &call =
-			adaptor->plan()->instructions[node.mir_instruction_index];
-		if (call.user_call == nullptr) {
-			return false;
-		}
-		zend_tpde_user_call_setup setup;
-		if (!zend_tpde_user_call_setup_layout(adaptor->plan(),
-				call.user_call, UINT32_MAX, &setup)) {
-			return false;
-		}
-		const uint64_t argument_count = setup.argument_count;
-		const uint64_t frame_header_size = setup.frame_header_size;
-		const uint64_t activation_offset = setup.activation_offset;
-		const uint64_t placement_offset = setup.placement_offset;
-		const uint64_t setup_size = setup.setup_size;
-		const bool uses_discarded_return = setup.uses_discarded_return;
-		const uint64_t result_offset = setup.result_offset;
-
-		auto initialize_setup = [&](auto setup_reg) {
-			ScratchReg activation{this};
-			ScratchReg scratch{this};
-			auto activation_reg = activation.alloc_gp();
-			auto scratch_reg = scratch.alloc_gp();
-			mov(activation_reg, setup_reg, 8);
-			add_offset(activation_reg, activation_reg,
-				static_cast<uint32_t>(activation_offset));
-			for (uint32_t offset = 0;
-					offset < sizeof(zend_native_direct_activation);
-					offset += sizeof(uint64_t)) {
-				store_constant(activation_reg, offset, 0, 8);
-			}
-			store_off(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, setup_frame)),
-				setup_reg, 8);
-			store_off(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, caller)),
-				canonical_frame_register(), 8);
-			load_off(scratch_reg, canonical_frame_register(),
-				static_cast<uint32_t>(offsetof(zend_execute_data, call)), 8);
-			store_off(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, pending_call)),
-				scratch_reg, 8);
-			auto descriptor = image_symbol_value(
-				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.record.id);
-			auto descriptor_scratch =
-				std::move(descriptor).into_scratch(this);
-			store_off(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, descriptor)),
-				descriptor_scratch.cur_reg(), 8);
-			descriptor_scratch.reset();
-			store_constant(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, setup_size)),
-				setup_size, 4);
-			store_constant(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation,
-					placement_capacity)), argument_count, 4);
-			mov(scratch_reg, activation_reg, 8);
-			add_offset(scratch_reg, scratch_reg,
-				static_cast<uint32_t>(
-					placement_offset - activation_offset));
-			store_off(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						placements)), scratch_reg, 8);
-			store_constant(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, setup_record)), 1, 1);
-			load_off(scratch_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, active_direct_call)), 8);
-			ScratchReg previous{this};
-			auto previous_reg = previous.alloc_gp();
-			load_off(previous_reg, scratch_reg, 0, 8);
-			store_off(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, previous)),
-				previous_reg, 8);
-			store_off(scratch_reg, 0, activation_reg, 8);
-		};
-
-		/* The fast and growth paths are target-local control flow, so TPDE's
-		 * block allocator cannot reconcile their register assignments.  Give
-		 * every live value canonical backing before the split and discard the
-		 * emitted slow-path register state at the join. */
-		auto setup_spilled = spill_target_branch_state();
-		auto slow_setup = text_writer.label_create();
-		auto setup_ready = text_writer.label_create();
-		{
-			ScratchReg top_address{this};
-			ScratchReg setup{this};
-			ScratchReg available{this};
-			auto top_address_reg = top_address.alloc_gp();
-			auto setup_reg = setup.alloc_gp();
-			auto available_reg = available.alloc_gp();
-			load_off(top_address_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, vm_stack_top)), 8);
-			load_off(setup_reg, top_address_reg, 0, 8);
-			load_off(available_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, vm_stack_end)), 8);
-			load_off(available_reg, available_reg, 0, 8);
-			ASM(SUBx, available_reg, available_reg, setup_reg);
-			compare_unsigned_immediate(available_reg, setup_size);
-			generate_raw_jump(Jump::Jcc, slow_setup);
-			store_constant(setup_reg,
-				static_cast<uint32_t>(offsetof(zend_execute_data, This)
-					+ offsetof(zval, u1.type_info)), 0, 4);
-			add_offset(available_reg, setup_reg,
-				static_cast<uint32_t>(setup_size));
-			store_off(top_address_reg, 0, available_reg, 8);
-			initialize_setup(setup_reg);
-			generate_raw_jump(Jump::jmp, setup_ready);
-		}
-		label_place(slow_setup);
-		{
-			zend::native::tpde::CCAssignerAppleA64 assigner;
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(ValuePart{setup_size, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE));
-			ValuePart setup_value{DarwinConfig::GP_BANK, 8};
-			builder.add_ret(setup_value, ::tpde::CCAssignment{});
-			auto setup_scratch =
-				std::move(setup_value).into_scratch(this);
-			initialize_setup(setup_scratch.cur_reg());
-		}
-		label_place(setup_ready);
-		reconcile_target_branch_state(setup_spilled);
-		ValuePart resolution_status{DarwinConfig::GP_BANK, 4};
-		{
-			ScratchReg activation{this};
-			auto activation_reg = activation.alloc_gp();
-			load_off(activation_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, active_direct_call)), 8);
-			load_off(activation_reg, activation_reg, 0, 8);
-			zend::native::tpde::CCAssignerAppleA64 assigner;
-			CallBuilder builder{*this, assigner};
-			ValuePart activation_value{DarwinConfig::GP_BANK, 8};
-			activation_value.set_value(this, std::move(activation));
-			builder.add_arg(
-				std::move(activation_value), ::tpde::CCAssignment{});
-			builder.add_arg(image_symbol_value(
-				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
-				call.call_site->target_id), ::tpde::CCAssignment{});
-			builder.add_arg(ValuePart{
-				ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_USER_CALL_RESOLVE));
-			builder.add_ret(resolution_status, ::tpde::CCAssignment{});
-		}
-		auto resolution_spilled = spill_target_branch_state();
-		auto resolved = text_writer.label_create();
-		auto status_reg = resolution_status.cur_reg_or_load(this);
-		ASM(CMPwi, status_reg,
-			ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS);
-		generate_raw_jump(Jump::Jeq, resolved);
-		resolution_status.reset(this);
-		{
-			ScratchReg resolution{this};
-			auto resolution_reg = resolution.alloc_gp();
-			load_off(resolution_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, active_direct_call)), 8);
-			load_off(resolution_reg, resolution_reg, 0, 8);
-			add_offset(resolution_reg, resolution_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)));
-			ScratchReg ownership{this};
-			auto ownership_reg = ownership.alloc_gp();
-			load_off(ownership_reg, resolution_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_user_call_resolution, ownership)), 4);
-			auto ownership_free = text_writer.label_create();
-			ASM(CMPwi, ownership_reg, 0);
-			generate_raw_jump(Jump::Jeq, ownership_free);
-			ownership.reset();
-			{
-				zend::native::tpde::CCAssignerAppleA64 assigner;
-				CallBuilder builder{*this, assigner};
-				ValuePart resolution_value{DarwinConfig::GP_BANK, 8};
-				resolution_value.set_value(this, std::move(resolution));
-				builder.add_arg(
-					std::move(resolution_value), ::tpde::CCAssignment{});
-				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_USER_CALL_RELEASE_RESOLUTION));
-			}
-			label_place(ownership_free);
-		}
-		{
-			ScratchReg active_address{this};
-			ScratchReg activation{this};
-			ScratchReg previous{this};
-			auto active_address_reg = active_address.alloc_gp();
-			auto activation_reg = activation.alloc_gp();
-			auto previous_reg = previous.alloc_gp();
-			load_off(active_address_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, active_direct_call)), 8);
-			load_off(activation_reg, active_address_reg, 0, 8);
-			load_off(previous_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, previous)), 8);
-			store_off(active_address_reg, 0, previous_reg, 8);
-			previous.reset();
-			active_address.reset();
-			ScratchReg setup{this};
-			auto setup_reg = setup.alloc_gp();
-			load_off(setup_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, setup_frame)), 8);
-			load_off(setup_reg, setup_reg,
-				static_cast<uint32_t>(offsetof(zend_execute_data, This)
-					+ offsetof(zval, u1.type_info)), 4);
-			ASM(TSTwi, setup_reg, ZEND_CALL_ALLOCATED);
-			auto pop_allocated = text_writer.label_create();
-			auto popped = text_writer.label_create();
-			generate_raw_jump(Jump::Jne, pop_allocated);
-			setup.reset();
-			store_constant(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, setup_record)), 0, 1);
-			ScratchReg inline_setup{this};
-			ScratchReg top_address{this};
-			auto inline_setup_reg = inline_setup.alloc_gp();
-			auto top_address_reg = top_address.alloc_gp();
-			load_off(inline_setup_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, setup_frame)), 8);
-			load_off(top_address_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, vm_stack_top)), 8);
-			store_off(top_address_reg, 0, inline_setup_reg, 8);
-			inline_setup.reset();
-			top_address.reset();
-			generate_raw_jump(Jump::jmp, popped);
-			label_place(pop_allocated);
-			{
-				zend::native::tpde::CCAssignerAppleA64 assigner;
-				CallBuilder builder{*this, assigner};
-				ValuePart activation_value{DarwinConfig::GP_BANK, 8};
-				activation_value.set_value(this, std::move(activation));
-				builder.add_arg(
-					std::move(activation_value), ::tpde::CCAssignment{});
-				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_FRAME_ACTIVATION_POP));
-			}
-			label_place(popped);
-		}
-		if (zend_mir_id_is_valid(call.exception_block_id)) {
-			generate_exception_branch(
-				adaptor->block_ref(call.exception_block_id));
-		} else {
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(ValuePart{
-				ZEND_NATIVE_EXCEPTION, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			return_builder.ret();
-		}
-		label_place(resolved);
-		resolution_status.reset(this);
-		reconcile_target_branch_state(resolution_spilled);
-
-		auto initialize_callee = [&](auto callee_reg,
-				auto activation_reg, bool allocated) {
-			ScratchReg scratch{this};
-			auto scratch_reg = scratch.alloc_gp();
-			for (uint32_t offset = 0; offset < frame_header_size;
-					offset += sizeof(uint64_t)) {
-				store_constant(callee_reg, offset, 0, 8);
-			}
-			load_off(scratch_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						object_or_called_scope)), 8);
-			store_off(callee_reg,
-				static_cast<uint32_t>(offsetof(zend_execute_data, This)),
-				scratch_reg, 8);
-			load_off(scratch_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						call_info)), 4);
-			if (allocated) {
-				ASM(ORRwi, scratch_reg, scratch_reg, ZEND_CALL_ALLOCATED);
-			}
-			store_off(callee_reg,
-				static_cast<uint32_t>(offsetof(zend_execute_data, This)
-					+ offsetof(zval, u1.type_info)), scratch_reg, 4);
-			load_off(scratch_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						argument_count)), 4);
-			store_off(callee_reg,
-				static_cast<uint32_t>(offsetof(zend_execute_data, This)
-					+ offsetof(zval, u2.num_args)), scratch_reg, 4);
-			load_off(scratch_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						function)), 8);
-			store_off(callee_reg,
-				static_cast<uint32_t>(offsetof(zend_execute_data, func)),
-				scratch_reg, 8);
-			load_off(scratch_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, pending_call)), 8);
-			store_off(callee_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_execute_data, prev_execute_data)),
-				scratch_reg, 8);
-			if (uses_discarded_return) {
-				mov(scratch_reg, activation_reg, 8);
-				add_offset(scratch_reg, scratch_reg,
-					static_cast<uint32_t>(offsetof(
-						zend_native_direct_activation,
-						discarded_return)));
-			} else {
-				mov(scratch_reg, canonical_frame_register(), 8);
-				add_offset(scratch_reg, scratch_reg,
-					static_cast<uint32_t>(result_offset));
-			}
-			store_off(callee_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_execute_data, return_value)), scratch_reg, 8);
-			store_off(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, callee)), callee_reg, 8);
-			store_off(canonical_frame_register(),
-				static_cast<uint32_t>(offsetof(zend_execute_data, call)),
-				callee_reg, 8);
-			store_constant(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, raw_arguments_owned)),
-				1, 1);
-			store_constant(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation,
-					uses_discarded_return)),
-				uses_discarded_return ? 1 : 0, 1);
-			store_constant(activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, dynamic_target)), 1, 1);
-			ScratchReg argument_ptr{this};
-			ScratchReg remaining{this};
-			auto argument_ptr_reg = argument_ptr.alloc_gp();
-			auto remaining_reg = remaining.alloc_gp();
-			mov(argument_ptr_reg, callee_reg, 8);
-			add_offset(argument_ptr_reg, argument_ptr_reg,
-				static_cast<uint32_t>(frame_header_size));
-			load_off(remaining_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						argument_count)), 4);
-			auto arguments_done = text_writer.label_create();
-			auto argument_loop = text_writer.label_create();
-			ASM(CMPwi, remaining_reg, 0);
-			generate_raw_jump(Jump::Jeq, arguments_done);
-			label_place(argument_loop);
-			store_constant(argument_ptr_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)),
-				IS_UNDEF, 4);
-			add_offset(argument_ptr_reg, argument_ptr_reg, sizeof(zval));
-			ASM(SUBSwi, remaining_reg, remaining_reg, 1);
-			generate_raw_jump(Jump::Jne, argument_loop);
-			label_place(arguments_done);
-		};
-
-		auto callee_spilled = spill_target_branch_state();
-		auto slow_callee = text_writer.label_create();
-		auto callee_ready = text_writer.label_create();
-		{
-			ScratchReg active_address{this};
-			ScratchReg activation{this};
-			ScratchReg top_address{this};
-			ScratchReg callee{this};
-			ScratchReg available{this};
-			ScratchReg size{this};
-			auto active_address_reg = active_address.alloc_gp();
-			auto activation_reg = activation.alloc_gp();
-			auto top_address_reg = top_address.alloc_gp();
-			auto callee_reg = callee.alloc_gp();
-			auto available_reg = available.alloc_gp();
-			auto size_reg = size.alloc_gp();
-			load_off(active_address_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, active_direct_call)), 8);
-			load_off(activation_reg, active_address_reg, 0, 8);
-			load_off(top_address_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, vm_stack_top)), 8);
-			load_off(callee_reg, top_address_reg, 0, 8);
-			load_off(available_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, vm_stack_end)), 8);
-			load_off(available_reg, available_reg, 0, 8);
-			ASM(SUBx, available_reg, available_reg, callee_reg);
-			load_off(size_reg, activation_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						frame_size)), 4);
-			ASM(CMPx, available_reg, size_reg);
-			generate_raw_jump(Jump::Jlo, slow_callee);
-			ASM(ADDx, available_reg, callee_reg, size_reg);
-			store_off(top_address_reg, 0, available_reg, 8);
-			initialize_callee(callee_reg, activation_reg, false);
-			generate_raw_jump(Jump::jmp, callee_ready);
-		}
-		label_place(slow_callee);
-		{
-			zend::native::tpde::CCAssignerAppleA64 assigner;
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(copy_fixed_argument(
-				canonical_frame_register()), ::tpde::CCAssignment{});
-			ScratchReg size{this};
-			auto size_reg = size.alloc_gp();
-			load_off(size_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, active_direct_call)), 8);
-			load_off(size_reg, size_reg, 0, 8);
-			load_off(size_reg, size_reg,
-				static_cast<uint32_t>(offsetof(
-					zend_native_direct_activation, resolution)
-					+ offsetof(zend_native_user_call_resolution,
-						frame_size)), 4);
-			ValuePart size_value{DarwinConfig::GP_BANK, 4};
-			size_value.set_value(this, std::move(size));
-			builder.add_arg(std::move(size_value), ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_CALL_RESERVE_DYNAMIC_FRAME));
-			ValuePart callee_value{DarwinConfig::GP_BANK, 8};
-			builder.add_ret(callee_value, ::tpde::CCAssignment{});
-			auto callee_scratch =
-				std::move(callee_value).into_scratch(this);
-			ScratchReg activation{this};
-			auto activation_reg = activation.alloc_gp();
-			load_off(activation_reg,
-				context_register(),
-				static_cast<uint32_t>(offsetof(
-					zend_native_execution_context, active_direct_call)), 8);
-			load_off(activation_reg, activation_reg, 0, 8);
-			initialize_callee(
-				callee_scratch.cur_reg(), activation_reg, true);
-		}
-		label_place(callee_ready);
-		reconcile_target_branch_state(callee_spilled);
-		return true;
+		return compile_user_call_init();
 	}
 	const zend_tpde_instruction &call =
 		adaptor->plan()->instructions[node.mir_instruction_index];
@@ -7418,18 +6957,357 @@ bool ZendCompilerA64::compile_user_call() {
 			|| call.user_call->argument_count != call.call_argument_count) {
 		return false;
 	}
-	auto load_active_activation = [&](auto destination_reg) {
-		load_off(destination_reg,
+	user_call.call = &call;
+	if (node.kind == Adaptor::InstKind::UserCallSend) {
+		return compile_user_call_send();
+	}
+	if (node.kind == Adaptor::InstKind::UserCallCheck) {
+		return compile_user_call_check();
+	}
+	if (node.kind == Adaptor::InstKind::UserCallExpand) {
+		return compile_user_call_expand();
+	}
+	if (node.kind != Adaptor::InstKind::UserCallDo) {
+		return false;
+	}
+	return compile_user_call_do();
+}
+
+auto ZendCompilerA64::context_register() {
+	ValueRef &context_liveness = user_call_context_->context_liveness;
+	auto context = context_liveness.part_unowned(0);
+	auto reg = context.load_to_reg();
+	context.reset();
+	return reg;
+}
+
+auto ZendCompilerA64::context_argument() {
+	ValueRef &context_liveness = user_call_context_->context_liveness;
+	auto context = context_liveness.part_unowned(0);
+	auto argument = copy_fixed_argument(context.load_to_reg());
+	context.reset();
+	return argument;
+}
+
+template <typename Reg>
+void ZendCompilerA64::load_active_activation(Reg destination_reg) {
+	load_off(destination_reg,
+		context_register(),
+		static_cast<uint32_t>(offsetof(
+			zend_native_execution_context, active_direct_call)), 8);
+	load_off(destination_reg, destination_reg, 0, 8);
+}
+
+void ZendCompilerA64::emit_phase_failure() {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_instruction &call = *user_call_context_->call;
+	{
+		ScratchReg activation{this};
+		auto activation_reg = activation.alloc_gp();
+		load_active_activation(activation_reg);
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		ValuePart activation_value{DarwinConfig::GP_BANK, 8};
+		activation_value.set_value(this, std::move(activation));
+		builder.add_arg(
+			std::move(activation_value), ::tpde::CCAssignment{});
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RELEASE));
+	}
+	{
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(copy_fixed_argument(
+			canonical_frame_register()), ::tpde::CCAssignment{});
+		builder.add_arg(ValuePart{
+			node.source_position, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_PREPARE_FINALLY_EXCEPTION));
+		ValuePart status{DarwinConfig::GP_BANK, 4};
+		builder.add_ret(status, ::tpde::CCAssignment{});
+		auto status_reg = status.cur_reg_or_load(this);
+		auto prepared = text_writer.label_create();
+		ASM(CMPwi, status_reg, SUCCESS);
+		generate_raw_jump(Jump::Jeq, prepared);
+		status.reset(this);
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(ValuePart{
+			ZEND_NATIVE_BAILOUT, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		return_builder.ret();
+		label_place(prepared);
+		status.reset(this);
+	}
+	if (zend_mir_id_is_valid(call.exception_block_id)) {
+		generate_exception_branch(
+			adaptor->block_ref(call.exception_block_id));
+	} else {
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(ValuePart{
+			ZEND_NATIVE_EXCEPTION, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		return_builder.ret();
+	}
+}
+
+bool ZendCompilerA64::compile_user_call_init() {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_instruction &call =
+		adaptor->plan()->instructions[node.mir_instruction_index];
+	if (call.user_call == nullptr) {
+		return false;
+	}
+	zend_tpde_user_call_setup setup;
+	if (!zend_tpde_user_call_setup_layout(adaptor->plan(),
+			call.user_call, UINT32_MAX, &setup)) {
+		return false;
+	}
+	const uint64_t argument_count = setup.argument_count;
+	const uint64_t frame_header_size = setup.frame_header_size;
+	const uint64_t activation_offset = setup.activation_offset;
+	const uint64_t placement_offset = setup.placement_offset;
+	const uint64_t setup_size = setup.setup_size;
+	const bool uses_discarded_return = setup.uses_discarded_return;
+	const uint64_t result_offset = setup.result_offset;
+
+	auto initialize_setup = [&](auto setup_reg) {
+		ScratchReg activation{this};
+		ScratchReg scratch{this};
+		auto activation_reg = activation.alloc_gp();
+		auto scratch_reg = scratch.alloc_gp();
+		mov(activation_reg, setup_reg, 8);
+		add_offset(activation_reg, activation_reg,
+			static_cast<uint32_t>(activation_offset));
+		for (uint32_t offset = 0;
+				offset < sizeof(zend_native_direct_activation);
+				offset += sizeof(uint64_t)) {
+			store_constant(activation_reg, offset, 0, 8);
+		}
+		store_off(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, setup_frame)),
+			setup_reg, 8);
+		store_off(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, caller)),
+			canonical_frame_register(), 8);
+		load_off(scratch_reg, canonical_frame_register(),
+			static_cast<uint32_t>(offsetof(zend_execute_data, call)), 8);
+		store_off(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, pending_call)),
+			scratch_reg, 8);
+		auto descriptor = image_symbol_value(
+			ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.record.id);
+		auto descriptor_scratch =
+			std::move(descriptor).into_scratch(this);
+		store_off(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, descriptor)),
+			descriptor_scratch.cur_reg(), 8);
+		descriptor_scratch.reset();
+		store_constant(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, setup_size)),
+			setup_size, 4);
+		store_constant(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation,
+				placement_capacity)), argument_count, 4);
+		mov(scratch_reg, activation_reg, 8);
+		add_offset(scratch_reg, scratch_reg,
+			static_cast<uint32_t>(
+				placement_offset - activation_offset));
+		store_off(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, resolution)
+				+ offsetof(zend_native_user_call_resolution,
+					placements)), scratch_reg, 8);
+		store_constant(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, setup_record)), 1, 1);
+		load_off(scratch_reg,
 			context_register(),
 			static_cast<uint32_t>(offsetof(
 				zend_native_execution_context, active_direct_call)), 8);
-		load_off(destination_reg, destination_reg, 0, 8);
+		ScratchReg previous{this};
+		auto previous_reg = previous.alloc_gp();
+		load_off(previous_reg, scratch_reg, 0, 8);
+		store_off(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, previous)),
+			previous_reg, 8);
+		store_off(scratch_reg, 0, activation_reg, 8);
 	};
-	auto emit_phase_failure = [&]() {
+
+	/* The fast and growth paths are target-local control flow, so TPDE's
+	 * block allocator cannot reconcile their register assignments.  Give
+	 * every live value canonical backing before the split and discard the
+	 * emitted slow-path register state at the join. */
+	auto setup_spilled = spill_target_branch_state();
+	auto slow_setup = text_writer.label_create();
+	auto setup_ready = text_writer.label_create();
+	{
+		ScratchReg top_address{this};
+		ScratchReg setup{this};
+		ScratchReg available{this};
+		auto top_address_reg = top_address.alloc_gp();
+		auto setup_reg = setup.alloc_gp();
+		auto available_reg = available.alloc_gp();
+		load_off(top_address_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, vm_stack_top)), 8);
+		load_off(setup_reg, top_address_reg, 0, 8);
+		load_off(available_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, vm_stack_end)), 8);
+		load_off(available_reg, available_reg, 0, 8);
+		ASM(SUBx, available_reg, available_reg, setup_reg);
+		compare_unsigned_immediate(available_reg, setup_size);
+		generate_raw_jump(Jump::Jcc, slow_setup);
+		store_constant(setup_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, This)
+				+ offsetof(zval, u1.type_info)), 0, 4);
+		add_offset(available_reg, setup_reg,
+			static_cast<uint32_t>(setup_size));
+		store_off(top_address_reg, 0, available_reg, 8);
+		initialize_setup(setup_reg);
+		generate_raw_jump(Jump::jmp, setup_ready);
+	}
+	label_place(slow_setup);
+	{
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(ValuePart{setup_size, 4,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RESERVE));
+		ValuePart setup_value{DarwinConfig::GP_BANK, 8};
+		builder.add_ret(setup_value, ::tpde::CCAssignment{});
+		auto setup_scratch =
+			std::move(setup_value).into_scratch(this);
+		initialize_setup(setup_scratch.cur_reg());
+	}
+	label_place(setup_ready);
+	reconcile_target_branch_state(setup_spilled);
+	ValuePart resolution_status{DarwinConfig::GP_BANK, 4};
+	{
+		ScratchReg activation{this};
+		auto activation_reg = activation.alloc_gp();
+		load_off(activation_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, active_direct_call)), 8);
+		load_off(activation_reg, activation_reg, 0, 8);
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		ValuePart activation_value{DarwinConfig::GP_BANK, 8};
+		activation_value.set_value(this, std::move(activation));
+		builder.add_arg(
+			std::move(activation_value), ::tpde::CCAssignment{});
+		builder.add_arg(image_symbol_value(
+			ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+			call.call_site->target_id), ::tpde::CCAssignment{});
+		builder.add_arg(ValuePart{
+			ZEND_NATIVE_USER_CALL_ARGUMENT_COUNT_AUTO, 4,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_USER_CALL_RESOLVE));
+		builder.add_ret(resolution_status, ::tpde::CCAssignment{});
+	}
+	auto resolution_spilled = spill_target_branch_state();
+	auto resolved = text_writer.label_create();
+	auto status_reg = resolution_status.cur_reg_or_load(this);
+	ASM(CMPwi, status_reg,
+		ZEND_NATIVE_USER_CALL_RESOLUTION_SUCCESS);
+	generate_raw_jump(Jump::Jeq, resolved);
+	resolution_status.reset(this);
+	{
+		ScratchReg resolution{this};
+		auto resolution_reg = resolution.alloc_gp();
+		load_off(resolution_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, active_direct_call)), 8);
+		load_off(resolution_reg, resolution_reg, 0, 8);
+		add_offset(resolution_reg, resolution_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, resolution)));
+		ScratchReg ownership{this};
+		auto ownership_reg = ownership.alloc_gp();
+		load_off(ownership_reg, resolution_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_user_call_resolution, ownership)), 4);
+		auto ownership_free = text_writer.label_create();
+		ASM(CMPwi, ownership_reg, 0);
+		generate_raw_jump(Jump::Jeq, ownership_free);
+		ownership.reset();
 		{
-			ScratchReg activation{this};
-			auto activation_reg = activation.alloc_gp();
-			load_active_activation(activation_reg);
+			zend::native::tpde::CCAssignerAppleA64 assigner;
+			CallBuilder builder{*this, assigner};
+			ValuePart resolution_value{DarwinConfig::GP_BANK, 8};
+			resolution_value.set_value(this, std::move(resolution));
+			builder.add_arg(
+				std::move(resolution_value), ::tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_USER_CALL_RELEASE_RESOLUTION));
+		}
+		label_place(ownership_free);
+	}
+	{
+		ScratchReg active_address{this};
+		ScratchReg activation{this};
+		ScratchReg previous{this};
+		auto active_address_reg = active_address.alloc_gp();
+		auto activation_reg = activation.alloc_gp();
+		auto previous_reg = previous.alloc_gp();
+		load_off(active_address_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, active_direct_call)), 8);
+		load_off(activation_reg, active_address_reg, 0, 8);
+		load_off(previous_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, previous)), 8);
+		store_off(active_address_reg, 0, previous_reg, 8);
+		previous.reset();
+		active_address.reset();
+		ScratchReg setup{this};
+		auto setup_reg = setup.alloc_gp();
+		load_off(setup_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, setup_frame)), 8);
+		load_off(setup_reg, setup_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, This)
+				+ offsetof(zval, u1.type_info)), 4);
+		ASM(TSTwi, setup_reg, ZEND_CALL_ALLOCATED);
+		auto pop_allocated = text_writer.label_create();
+		auto popped = text_writer.label_create();
+		generate_raw_jump(Jump::Jne, pop_allocated);
+		setup.reset();
+		store_constant(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, setup_record)), 0, 1);
+		ScratchReg inline_setup{this};
+		ScratchReg top_address{this};
+		auto inline_setup_reg = inline_setup.alloc_gp();
+		auto top_address_reg = top_address.alloc_gp();
+		load_off(inline_setup_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, setup_frame)), 8);
+		load_off(top_address_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, vm_stack_top)), 8);
+		store_off(top_address_reg, 0, inline_setup_reg, 8);
+		inline_setup.reset();
+		top_address.reset();
+		generate_raw_jump(Jump::jmp, popped);
+		label_place(pop_allocated);
+		{
 			zend::native::tpde::CCAssignerAppleA64 assigner;
 			CallBuilder builder{*this, assigner};
 			ValuePart activation_value{DarwinConfig::GP_BANK, 8};
@@ -7437,275 +7315,458 @@ bool ZendCompilerA64::compile_user_call() {
 			builder.add_arg(
 				std::move(activation_value), ::tpde::CCAssignment{});
 			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_FRAME_ACTIVATION_RELEASE));
+				ZEND_NATIVE_HELPER_FRAME_ACTIVATION_POP));
 		}
-		{
-			zend::native::tpde::CCAssignerAppleA64 assigner;
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(copy_fixed_argument(
-				canonical_frame_register()), ::tpde::CCAssignment{});
-			builder.add_arg(ValuePart{
-				node.source_position, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_PREPARE_FINALLY_EXCEPTION));
-			ValuePart status{DarwinConfig::GP_BANK, 4};
-			builder.add_ret(status, ::tpde::CCAssignment{});
-			auto status_reg = status.cur_reg_or_load(this);
-			auto prepared = text_writer.label_create();
-			ASM(CMPwi, status_reg, SUCCESS);
-			generate_raw_jump(Jump::Jeq, prepared);
-			status.reset(this);
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(ValuePart{
-				ZEND_NATIVE_BAILOUT, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			return_builder.ret();
-			label_place(prepared);
-			status.reset(this);
+		label_place(popped);
+	}
+	if (zend_mir_id_is_valid(call.exception_block_id)) {
+		generate_exception_branch(
+			adaptor->block_ref(call.exception_block_id));
+	} else {
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(ValuePart{
+			ZEND_NATIVE_EXCEPTION, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		return_builder.ret();
+	}
+	label_place(resolved);
+	resolution_status.reset(this);
+	reconcile_target_branch_state(resolution_spilled);
+
+	auto initialize_callee = [&](auto callee_reg,
+			auto activation_reg, bool allocated) {
+		ScratchReg scratch{this};
+		auto scratch_reg = scratch.alloc_gp();
+		for (uint32_t offset = 0; offset < frame_header_size;
+				offset += sizeof(uint64_t)) {
+			store_constant(callee_reg, offset, 0, 8);
 		}
-		if (zend_mir_id_is_valid(call.exception_block_id)) {
-			generate_exception_branch(
-				adaptor->block_ref(call.exception_block_id));
-		} else {
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(ValuePart{
-				ZEND_NATIVE_EXCEPTION, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			return_builder.ret();
-		}
-	};
-	if (node.kind == Adaptor::InstKind::UserCallSend) {
-		if (node.argument_index >= call.user_call->argument_count) {
-			return false;
-		}
-		auto deferred = text_writer.label_create();
-		auto completed = text_writer.label_create();
-		ScratchReg activation{this};
-		ScratchReg placement{this};
-		ScratchReg flags{this};
-		auto activation_reg = activation.alloc_gp();
-		auto placement_reg = placement.alloc_gp();
-		auto flags_reg = flags.alloc_gp();
-		load_active_activation(activation_reg);
-		load_off(placement_reg, activation_reg,
+		load_off(scratch_reg, activation_reg,
 			static_cast<uint32_t>(offsetof(
 				zend_native_direct_activation, resolution)
 				+ offsetof(zend_native_user_call_resolution,
-					placements)), 8);
-		activation.reset();
-		add_offset(placement_reg, placement_reg,
-			node.argument_index
-				* static_cast<uint32_t>(
-					sizeof(zend_native_user_call_placement)));
-		load_off(flags_reg, placement_reg,
+					object_or_called_scope)), 8);
+		store_off(callee_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, This)),
+			scratch_reg, 8);
+		load_off(scratch_reg, activation_reg,
 			static_cast<uint32_t>(offsetof(
-				zend_native_user_call_placement, flags)), 4);
-		ASM(TSTwi, flags_reg,
-			ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION);
-		generate_raw_jump(Jump::Jne, deferred);
-		flags.reset();
-		ValuePart send_status{DarwinConfig::GP_BANK, 4};
-		if ((phase->operand_flags
-				& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0) {
-			if (node.operands.size() != 3) {
-				return false;
-			}
-			ScratchReg target{this};
-			auto target_reg = target.alloc_gp();
-			load_off(target_reg, placement_reg,
+				zend_native_direct_activation, resolution)
+				+ offsetof(zend_native_user_call_resolution,
+					call_info)), 4);
+		if (allocated) {
+			ASM(ORRwi, scratch_reg, scratch_reg, ZEND_CALL_ALLOCATED);
+		}
+		store_off(callee_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, This)
+				+ offsetof(zval, u1.type_info)), scratch_reg, 4);
+		load_off(scratch_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, resolution)
+				+ offsetof(zend_native_user_call_resolution,
+					argument_count)), 4);
+		store_off(callee_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, This)
+				+ offsetof(zval, u2.num_args)), scratch_reg, 4);
+		load_off(scratch_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, resolution)
+				+ offsetof(zend_native_user_call_resolution,
+					function)), 8);
+		store_off(callee_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, func)),
+			scratch_reg, 8);
+		load_off(scratch_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, pending_call)), 8);
+		store_off(callee_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_execute_data, prev_execute_data)),
+			scratch_reg, 8);
+		if (uses_discarded_return) {
+			mov(scratch_reg, activation_reg, 8);
+			add_offset(scratch_reg, scratch_reg,
 				static_cast<uint32_t>(offsetof(
-					zend_native_user_call_placement, target_index)), 4);
-			placement.reset();
-			if (target_reg == AsmReg{AsmReg::R0}) {
-				ScratchReg relocated{this};
-				auto relocated_reg = relocated.alloc_gp();
-				mov(relocated_reg, target_reg, 4);
-				target.reset();
-				target = std::move(relocated);
-				target_reg = relocated_reg;
-			}
-			zend::native::tpde::CCAssignerAppleA64 assigner;
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(copy_fixed_argument(
-				canonical_frame_register()), ::tpde::CCAssignment{});
-			ValuePart target_value{DarwinConfig::GP_BANK, 4};
-			target_value.set_value(this, std::move(target));
-			builder.add_arg(
-				std::move(target_value), ::tpde::CCAssignment{});
-			builder.add_arg(CallArg{node.operands[2]});
-			if (adaptor->exact_type(node.operands[2])
-					== ZEND_MIR_SCALAR_TYPE_F64) {
-				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE));
-			} else {
-				builder.add_arg(ValuePart{
-					static_cast<uint32_t>(
-						adaptor->exact_type(node.operands[2])),
-					4, DarwinConfig::GP_BANK},
-					::tpde::CCAssignment{});
-				builder.call(runtime_symbol(
-					ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER));
-			}
-			/* Scalar setters are infallible after resolved placement. */
-			generate_raw_jump(Jump::jmp, completed);
+					zend_native_direct_activation,
+					discarded_return)));
 		} else {
-			placement.reset();
-			zend::native::tpde::CCAssignerAppleA64 assigner;
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(copy_fixed_argument(
-				canonical_frame_register()), ::tpde::CCAssignment{});
-			builder.add_arg(image_symbol_value(
-				ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.record.id),
-				::tpde::CCAssignment{});
-			builder.add_arg(ValuePart{node.argument_index, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT));
-			builder.add_ret(send_status, ::tpde::CCAssignment{});
-			auto status_reg = send_status.cur_reg_or_load(this);
-			ASM(CMPwi, status_reg, SUCCESS);
-			generate_raw_jump(Jump::Jeq, completed);
-			send_status.reset(this);
-			emit_phase_failure();
+			mov(scratch_reg, canonical_frame_register(), 8);
+			add_offset(scratch_reg, scratch_reg,
+				static_cast<uint32_t>(result_offset));
 		}
-		label_place(deferred);
-		{
-			ScratchReg runtime_activation{this};
-			auto runtime_activation_reg =
-				runtime_activation.alloc_gp();
-			load_active_activation(runtime_activation_reg);
-			zend::native::tpde::CCAssignerAppleA64 assigner;
-			CallBuilder builder{*this, assigner};
-			ValuePart activation_value{DarwinConfig::GP_BANK, 8};
-			activation_value.set_value(
-				this, std::move(runtime_activation));
-			builder.add_arg(
-				std::move(activation_value), ::tpde::CCAssignment{});
-			builder.add_arg(ValuePart{node.argument_index, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_USER_CALL_SEND_RESOLVED_ARGUMENT));
-			ValuePart runtime_status{DarwinConfig::GP_BANK, 4};
-			builder.add_ret(runtime_status, ::tpde::CCAssignment{});
-			auto runtime_status_reg =
-				runtime_status.cur_reg_or_load(this);
-			ASM(CMPwi, runtime_status_reg, SUCCESS);
-			generate_raw_jump(Jump::Jeq, completed);
-			runtime_status.reset(this);
-			emit_phase_failure();
-		}
-		label_place(completed);
-		return true;
+		store_off(callee_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_execute_data, return_value)), scratch_reg, 8);
+		store_off(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, callee)), callee_reg, 8);
+		store_off(canonical_frame_register(),
+			static_cast<uint32_t>(offsetof(zend_execute_data, call)),
+			callee_reg, 8);
+		store_constant(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, raw_arguments_owned)),
+			1, 1);
+		store_constant(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation,
+				uses_discarded_return)),
+			uses_discarded_return ? 1 : 0, 1);
+		store_constant(activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, dynamic_target)), 1, 1);
+		ScratchReg argument_ptr{this};
+		ScratchReg remaining{this};
+		auto argument_ptr_reg = argument_ptr.alloc_gp();
+		auto remaining_reg = remaining.alloc_gp();
+		mov(argument_ptr_reg, callee_reg, 8);
+		add_offset(argument_ptr_reg, argument_ptr_reg,
+			static_cast<uint32_t>(frame_header_size));
+		load_off(remaining_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, resolution)
+				+ offsetof(zend_native_user_call_resolution,
+					argument_count)), 4);
+		auto arguments_done = text_writer.label_create();
+		auto argument_loop = text_writer.label_create();
+		ASM(CMPwi, remaining_reg, 0);
+		generate_raw_jump(Jump::Jeq, arguments_done);
+		label_place(argument_loop);
+		store_constant(argument_ptr_reg,
+			static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			IS_UNDEF, 4);
+		add_offset(argument_ptr_reg, argument_ptr_reg, sizeof(zval));
+		ASM(SUBSwi, remaining_reg, remaining_reg, 1);
+		generate_raw_jump(Jump::Jne, argument_loop);
+		label_place(arguments_done);
+	};
+
+	auto callee_spilled = spill_target_branch_state();
+	auto slow_callee = text_writer.label_create();
+	auto callee_ready = text_writer.label_create();
+	{
+		ScratchReg active_address{this};
+		ScratchReg activation{this};
+		ScratchReg top_address{this};
+		ScratchReg callee{this};
+		ScratchReg available{this};
+		ScratchReg size{this};
+		auto active_address_reg = active_address.alloc_gp();
+		auto activation_reg = activation.alloc_gp();
+		auto top_address_reg = top_address.alloc_gp();
+		auto callee_reg = callee.alloc_gp();
+		auto available_reg = available.alloc_gp();
+		auto size_reg = size.alloc_gp();
+		load_off(active_address_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, active_direct_call)), 8);
+		load_off(activation_reg, active_address_reg, 0, 8);
+		load_off(top_address_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, vm_stack_top)), 8);
+		load_off(callee_reg, top_address_reg, 0, 8);
+		load_off(available_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, vm_stack_end)), 8);
+		load_off(available_reg, available_reg, 0, 8);
+		ASM(SUBx, available_reg, available_reg, callee_reg);
+		load_off(size_reg, activation_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, resolution)
+				+ offsetof(zend_native_user_call_resolution,
+					frame_size)), 4);
+		ASM(CMPx, available_reg, size_reg);
+		generate_raw_jump(Jump::Jlo, slow_callee);
+		ASM(ADDx, available_reg, callee_reg, size_reg);
+		store_off(top_address_reg, 0, available_reg, 8);
+		initialize_callee(callee_reg, activation_reg, false);
+		generate_raw_jump(Jump::jmp, callee_ready);
 	}
-	if (node.kind == Adaptor::InstKind::UserCallCheck) {
-		if (node.source_position >= adaptor->plan()->source_opcode_count) {
-			return false;
-		}
-		const uint8_t source_opcode =
-			adaptor->plan()->source_opcodes[node.source_position].opcode;
-		if (source_opcode == ZEND_CHECK_UNDEF_ARGS) {
-			return node.argument_index == UINT32_MAX;
-		}
-		if (source_opcode != ZEND_CHECK_FUNC_ARG
-				|| node.argument_index >= call.user_call->argument_count) {
-			return false;
-		}
+	label_place(slow_callee);
+	{
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(copy_fixed_argument(
+			canonical_frame_register()), ::tpde::CCAssignment{});
+		ScratchReg size{this};
+		auto size_reg = size.alloc_gp();
+		load_off(size_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, active_direct_call)), 8);
+		load_off(size_reg, size_reg, 0, 8);
+		load_off(size_reg, size_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_direct_activation, resolution)
+				+ offsetof(zend_native_user_call_resolution,
+					frame_size)), 4);
+		ValuePart size_value{DarwinConfig::GP_BANK, 4};
+		size_value.set_value(this, std::move(size));
+		builder.add_arg(std::move(size_value), ::tpde::CCAssignment{});
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_CALL_RESERVE_DYNAMIC_FRAME));
+		ValuePart callee_value{DarwinConfig::GP_BANK, 8};
+		builder.add_ret(callee_value, ::tpde::CCAssignment{});
+		auto callee_scratch =
+			std::move(callee_value).into_scratch(this);
 		ScratchReg activation{this};
 		auto activation_reg = activation.alloc_gp();
-		load_active_activation(activation_reg);
+		load_off(activation_reg,
+			context_register(),
+			static_cast<uint32_t>(offsetof(
+				zend_native_execution_context, active_direct_call)), 8);
+		load_off(activation_reg, activation_reg, 0, 8);
+		initialize_callee(
+			callee_scratch.cur_reg(), activation_reg, true);
+	}
+	label_place(callee_ready);
+	reconcile_target_branch_state(callee_spilled);
+	return true;
+}
+
+bool ZendCompilerA64::compile_user_call_send() {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_source_call_phase_entry *&phase =
+		user_call_context_->phase;
+	const zend_tpde_instruction &call = *user_call_context_->call;
+	if (node.argument_index >= call.user_call->argument_count) {
+		return false;
+	}
+	auto deferred = text_writer.label_create();
+	auto completed = text_writer.label_create();
+	ScratchReg activation{this};
+	ScratchReg placement{this};
+	ScratchReg flags{this};
+	auto activation_reg = activation.alloc_gp();
+	auto placement_reg = placement.alloc_gp();
+	auto flags_reg = flags.alloc_gp();
+	load_active_activation(activation_reg);
+	load_off(placement_reg, activation_reg,
+		static_cast<uint32_t>(offsetof(
+			zend_native_direct_activation, resolution)
+			+ offsetof(zend_native_user_call_resolution,
+				placements)), 8);
+	activation.reset();
+	add_offset(placement_reg, placement_reg,
+		node.argument_index
+			* static_cast<uint32_t>(
+				sizeof(zend_native_user_call_placement)));
+	load_off(flags_reg, placement_reg,
+		static_cast<uint32_t>(offsetof(
+			zend_native_user_call_placement, flags)), 4);
+	ASM(TSTwi, flags_reg,
+		ZEND_NATIVE_USER_CALL_PLACEMENT_RUNTIME_EXPANSION);
+	generate_raw_jump(Jump::Jne, deferred);
+	flags.reset();
+	ValuePart send_status{DarwinConfig::GP_BANK, 4};
+	if ((phase->operand_flags
+			& ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE) != 0) {
+		if (node.operands.size() != 3) {
+			return false;
+		}
+		ScratchReg target{this};
+		auto target_reg = target.alloc_gp();
+		load_off(target_reg, placement_reg,
+			static_cast<uint32_t>(offsetof(
+				zend_native_user_call_placement, target_index)), 4);
+		placement.reset();
+		if (target_reg == AsmReg{AsmReg::R0}) {
+			ScratchReg relocated{this};
+			auto relocated_reg = relocated.alloc_gp();
+			mov(relocated_reg, target_reg, 4);
+			target.reset();
+			target = std::move(relocated);
+			target_reg = relocated_reg;
+		}
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(copy_fixed_argument(
+			canonical_frame_register()), ::tpde::CCAssignment{});
+		ValuePart target_value{DarwinConfig::GP_BANK, 4};
+		target_value.set_value(this, std::move(target));
+		builder.add_arg(
+			std::move(target_value), ::tpde::CCAssignment{});
+		builder.add_arg(CallArg{node.operands[2]});
+		if (adaptor->exact_type(node.operands[2])
+				== ZEND_MIR_SCALAR_TYPE_F64) {
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_USER_CALL_SET_DOUBLE));
+		} else {
+			builder.add_arg(ValuePart{
+				static_cast<uint32_t>(
+					adaptor->exact_type(node.operands[2])),
+				4, DarwinConfig::GP_BANK},
+				::tpde::CCAssignment{});
+			builder.call(runtime_symbol(
+				ZEND_NATIVE_HELPER_USER_CALL_SET_INTEGER));
+		}
+		/* Scalar setters are infallible after resolved placement. */
+		generate_raw_jump(Jump::jmp, completed);
+	} else {
+		placement.reset();
+		zend::native::tpde::CCAssignerAppleA64 assigner;
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(copy_fixed_argument(
+			canonical_frame_register()), ::tpde::CCAssignment{});
+		builder.add_arg(image_symbol_value(
+			ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR, call.record.id),
+			::tpde::CCAssignment{});
+		builder.add_arg(ValuePart{node.argument_index, 4,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_CALL_SET_SOURCE_ARGUMENT));
+		builder.add_ret(send_status, ::tpde::CCAssignment{});
+		auto status_reg = send_status.cur_reg_or_load(this);
+		ASM(CMPwi, status_reg, SUCCESS);
+		generate_raw_jump(Jump::Jeq, completed);
+		send_status.reset(this);
+		emit_phase_failure();
+	}
+	label_place(deferred);
+	{
+		ScratchReg runtime_activation{this};
+		auto runtime_activation_reg =
+			runtime_activation.alloc_gp();
+		load_active_activation(runtime_activation_reg);
 		zend::native::tpde::CCAssignerAppleA64 assigner;
 		CallBuilder builder{*this, assigner};
 		ValuePart activation_value{DarwinConfig::GP_BANK, 8};
-		activation_value.set_value(this, std::move(activation));
+		activation_value.set_value(
+			this, std::move(runtime_activation));
 		builder.add_arg(
 			std::move(activation_value), ::tpde::CCAssignment{});
 		builder.add_arg(ValuePart{node.argument_index, 4,
 			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
 		builder.call(runtime_symbol(
-			ZEND_NATIVE_HELPER_CHECK_FUNC_ARG_RESOLVED));
-		ValuePart checked{DarwinConfig::GP_BANK, 4};
-		builder.add_ret(checked, ::tpde::CCAssignment{});
-		auto checked_reg = checked.cur_reg_or_load(this);
-		auto by_value = text_writer.label_create();
-		auto updated = text_writer.label_create();
-		ASM(CMPwi, checked_reg, ZEND_NATIVE_CHECK_FUNC_ARG_EXCEPTION);
-		auto valid = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, valid);
-		checked.reset(this);
+			ZEND_NATIVE_HELPER_USER_CALL_SEND_RESOLVED_ARGUMENT));
+		ValuePart runtime_status{DarwinConfig::GP_BANK, 4};
+		builder.add_ret(runtime_status, ::tpde::CCAssignment{});
+		auto runtime_status_reg =
+			runtime_status.cur_reg_or_load(this);
+		ASM(CMPwi, runtime_status_reg, SUCCESS);
+		generate_raw_jump(Jump::Jeq, completed);
+		runtime_status.reset(this);
 		emit_phase_failure();
-		label_place(valid);
-		/* The failure path freed checked_reg: keep the decision in a
-		 * register the scratch registers below cannot reuse. */
-		ScratchReg decision{this};
-		auto decision_reg = decision.alloc_gp();
-		if (decision_reg != checked_reg) {
-			ASM(MOVw, decision_reg, checked_reg);
-		}
-		ScratchReg active{this};
-		ScratchReg callee{this};
-		ScratchReg call_info{this};
-		auto active_reg = active.alloc_gp();
-		auto callee_reg = callee.alloc_gp();
-		auto call_info_reg = call_info.alloc_gp();
-		load_active_activation(active_reg);
-		load_off(callee_reg, active_reg,
-			static_cast<uint32_t>(offsetof(
-				zend_native_direct_activation, callee)), 8);
-		load_off(call_info_reg, callee_reg,
-			static_cast<uint32_t>(offsetof(zend_execute_data, This)
-				+ offsetof(zval, u1.type_info)), 4);
-		ASM(CMPwi, decision_reg, ZEND_NATIVE_CHECK_FUNC_ARG_BY_VALUE);
-		generate_raw_jump(Jump::Jeq, by_value);
-		ASM(ORRwi, call_info_reg, call_info_reg,
-			ZEND_CALL_SEND_ARG_BY_REF);
-		generate_raw_jump(Jump::jmp, updated);
-		label_place(by_value);
-		ASM(ANDwi, call_info_reg, call_info_reg,
-			~ZEND_CALL_SEND_ARG_BY_REF);
-		label_place(updated);
-		store_off(callee_reg,
-			static_cast<uint32_t>(offsetof(zend_execute_data, This)
-				+ offsetof(zval, u1.type_info)), call_info_reg, 4);
-		return true;
 	}
-	if (node.kind == Adaptor::InstKind::UserCallExpand) {
-		ScratchReg activation{this};
-		ScratchReg placement_flags{this};
-		auto activation_reg = activation.alloc_gp();
-		auto placement_flags_reg = placement_flags.alloc_gp();
-		load_active_activation(activation_reg);
-		load_off(placement_flags_reg, activation_reg,
-			static_cast<uint32_t>(offsetof(
-				zend_native_direct_activation, resolution)
-				+ offsetof(zend_native_user_call_resolution,
-					placement_flags)), 4);
-		ASM(TSTwi, placement_flags_reg,
-			ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_EXPANSION);
-		auto complete = text_writer.label_create();
-		generate_raw_jump(Jump::Jeq, complete);
-		placement_flags.reset();
-		zend::native::tpde::CCAssignerAppleA64 assigner;
-		CallBuilder builder{*this, assigner};
-		ValuePart activation_value{DarwinConfig::GP_BANK, 8};
-		activation_value.set_value(this, std::move(activation));
-		builder.add_arg(
-			std::move(activation_value), ::tpde::CCAssignment{});
-		builder.call(runtime_symbol(
-			ZEND_NATIVE_HELPER_USER_CALL_EXPAND_ARGUMENTS));
-		ValuePart expanded{DarwinConfig::GP_BANK, 8};
-		builder.add_ret(expanded, ::tpde::CCAssignment{});
-		auto expanded_reg = expanded.cur_reg_or_load(this);
-		ASM(CMPxi, expanded_reg, 0);
-		generate_raw_jump(Jump::Jne, complete);
-		expanded.reset(this);
-		emit_phase_failure();
-		label_place(complete);
-		return true;
-	}
-	if (node.kind != Adaptor::InstKind::UserCallDo) {
+	label_place(completed);
+	return true;
+}
+
+bool ZendCompilerA64::compile_user_call_check() {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_instruction &call = *user_call_context_->call;
+	if (node.source_position >= adaptor->plan()->source_opcode_count) {
 		return false;
 	}
+	const uint8_t source_opcode =
+		adaptor->plan()->source_opcodes[node.source_position].opcode;
+	if (source_opcode == ZEND_CHECK_UNDEF_ARGS) {
+		return node.argument_index == UINT32_MAX;
+	}
+	if (source_opcode != ZEND_CHECK_FUNC_ARG
+			|| node.argument_index >= call.user_call->argument_count) {
+		return false;
+	}
+	ScratchReg activation{this};
+	auto activation_reg = activation.alloc_gp();
+	load_active_activation(activation_reg);
+	zend::native::tpde::CCAssignerAppleA64 assigner;
+	CallBuilder builder{*this, assigner};
+	ValuePart activation_value{DarwinConfig::GP_BANK, 8};
+	activation_value.set_value(this, std::move(activation));
+	builder.add_arg(
+		std::move(activation_value), ::tpde::CCAssignment{});
+	builder.add_arg(ValuePart{node.argument_index, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	builder.call(runtime_symbol(
+		ZEND_NATIVE_HELPER_CHECK_FUNC_ARG_RESOLVED));
+	ValuePart checked{DarwinConfig::GP_BANK, 4};
+	builder.add_ret(checked, ::tpde::CCAssignment{});
+	auto checked_reg = checked.cur_reg_or_load(this);
+	auto by_value = text_writer.label_create();
+	auto updated = text_writer.label_create();
+	ASM(CMPwi, checked_reg, ZEND_NATIVE_CHECK_FUNC_ARG_EXCEPTION);
+	auto valid = text_writer.label_create();
+	generate_raw_jump(Jump::Jne, valid);
+	checked.reset(this);
+	emit_phase_failure();
+	label_place(valid);
+	/* The failure path freed checked_reg: keep the decision in a
+	 * register the scratch registers below cannot reuse. */
+	ScratchReg decision{this};
+	auto decision_reg = decision.alloc_gp();
+	if (decision_reg != checked_reg) {
+		ASM(MOVw, decision_reg, checked_reg);
+	}
+	ScratchReg active{this};
+	ScratchReg callee{this};
+	ScratchReg call_info{this};
+	auto active_reg = active.alloc_gp();
+	auto callee_reg = callee.alloc_gp();
+	auto call_info_reg = call_info.alloc_gp();
+	load_active_activation(active_reg);
+	load_off(callee_reg, active_reg,
+		static_cast<uint32_t>(offsetof(
+			zend_native_direct_activation, callee)), 8);
+	load_off(call_info_reg, callee_reg,
+		static_cast<uint32_t>(offsetof(zend_execute_data, This)
+			+ offsetof(zval, u1.type_info)), 4);
+	ASM(CMPwi, decision_reg, ZEND_NATIVE_CHECK_FUNC_ARG_BY_VALUE);
+	generate_raw_jump(Jump::Jeq, by_value);
+	ASM(ORRwi, call_info_reg, call_info_reg,
+		ZEND_CALL_SEND_ARG_BY_REF);
+	generate_raw_jump(Jump::jmp, updated);
+	label_place(by_value);
+	ASM(ANDwi, call_info_reg, call_info_reg,
+		~ZEND_CALL_SEND_ARG_BY_REF);
+	label_place(updated);
+	store_off(callee_reg,
+		static_cast<uint32_t>(offsetof(zend_execute_data, This)
+			+ offsetof(zval, u1.type_info)), call_info_reg, 4);
+	return true;
+}
+
+bool ZendCompilerA64::compile_user_call_expand() {
+	ScratchReg activation{this};
+	ScratchReg placement_flags{this};
+	auto activation_reg = activation.alloc_gp();
+	auto placement_flags_reg = placement_flags.alloc_gp();
+	load_active_activation(activation_reg);
+	load_off(placement_flags_reg, activation_reg,
+		static_cast<uint32_t>(offsetof(
+			zend_native_direct_activation, resolution)
+			+ offsetof(zend_native_user_call_resolution,
+				placement_flags)), 4);
+	ASM(TSTwi, placement_flags_reg,
+		ZEND_NATIVE_USER_CALL_PLACEMENTS_RUNTIME_EXPANSION);
+	auto complete = text_writer.label_create();
+	generate_raw_jump(Jump::Jeq, complete);
+	placement_flags.reset();
+	zend::native::tpde::CCAssignerAppleA64 assigner;
+	CallBuilder builder{*this, assigner};
+	ValuePart activation_value{DarwinConfig::GP_BANK, 8};
+	activation_value.set_value(this, std::move(activation));
+	builder.add_arg(
+		std::move(activation_value), ::tpde::CCAssignment{});
+	builder.call(runtime_symbol(
+		ZEND_NATIVE_HELPER_USER_CALL_EXPAND_ARGUMENTS));
+	ValuePart expanded{DarwinConfig::GP_BANK, 8};
+	builder.add_ret(expanded, ::tpde::CCAssignment{});
+	auto expanded_reg = expanded.cur_reg_or_load(this);
+	ASM(CMPxi, expanded_reg, 0);
+	generate_raw_jump(Jump::Jne, complete);
+	expanded.reset(this);
+	emit_phase_failure();
+	label_place(complete);
+	return true;
+}
+
+bool ZendCompilerA64::compile_user_call_do() {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_instruction &call = *user_call_context_->call;
 	auto release_active = [&]() {
 		ScratchReg activation{this};
 		auto activation_reg = activation.alloc_gp();
@@ -14511,7 +14572,8 @@ bool ZendCompilerA64::compile_inst_impl(
 	const Adaptor::InstNode &node = adaptor->node(instruction);
 	std::vector<ValueRef> generator_reload_locks;
 	InstContext context{instruction, remaining_instructions, node};
-	const InstContextScope context_scope{this, &context};
+	const ContextScope<InstContext> context_scope{
+		inst_context_, &context};
 	if (!emit_materializations(instruction)) {
 		return false;
 	}
