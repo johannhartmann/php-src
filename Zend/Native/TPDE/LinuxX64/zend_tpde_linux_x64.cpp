@@ -5922,6 +5922,13 @@ public:
 	bool compile_boxed_cond_cold_branch(IRInstRef instruction);
 	bool reload_generator_values(
 		IRInstRef instruction, std::vector<ValueRef> &locked_values);
+	/* Coalesce is FETCH_DIM_IS: a read whose missing key or scalar
+	 * container yields null without a diagnostic. Write is FETCH_DIM_W, RW
+	 * and UNSET, which return the INDIRECT of an existing element of an
+	 * unshared array. */
+	enum class ElementAccess : uint8_t {
+		Read, Coalesce, Write, Isset, Empty, Assign
+	};
 	/*
 	 * The instruction compile_inst_impl() lowers, for the lowerings it
 	 * dispatches to.
@@ -5930,6 +5937,11 @@ public:
 		IRInstRef instruction;
 		InstRange remaining_instructions;
 		const Adaptor::InstNode &node;
+		/* From the MIR instruction on: it and its record. */
+		const zend_tpde_instruction *mir = nullptr;
+		zend_mir_instruction_record record{};
+		/* The read of an isset's element (lookup_reuse_consumer()). */
+		IRInstRef reuse_read{UINT32_MAX};
 	};
 	bool compile_scalar_select(InstContext &ctx);
 	bool compile_unbox_pointer(InstContext &ctx);
@@ -5949,6 +5961,65 @@ public:
 	bool compile_zval_reference_resolve(InstContext &ctx);
 	bool compile_zval_boxed_store(InstContext &ctx);
 	bool compile_zval_payload_load(InstContext &ctx);
+	bool compile_zval_store(InstContext &ctx);
+	bool compile_echo_scalar(InstContext &ctx);
+	auto unary(InstContext &ctx);
+	auto binary(InstContext &ctx);
+	bool copy_result(InstContext &ctx);
+	auto encode_binary(InstContext &ctx, auto encode);
+	bool can_fuse_compare_branch(InstContext &ctx);
+	bool fuse_compare_branch(InstContext &ctx, Jump condition);
+	bool integer_compare(InstContext &ctx, Jump condition);
+	bool floating_compare(InstContext &ctx, zend_mir_opcode opcode);
+	bool materialize_boxed_boundary_operand(
+		InstContext &ctx, uint32_t operand_index,
+		zend_mir_storage_id storage);
+	bool execute_value_operation_with(
+		InstContext &ctx, ValuePart *frame_argument,
+		zend_native_runtime_helper_id helper, uint32_t source_opcode);
+	bool rope_literal_inline(InstContext &ctx);
+	bool execute_value_operation(InstContext &ctx);
+	bool materialize_cold_operand(
+		InstContext &ctx, IRValueRef operand, zend_mir_storage_id storage);
+	bool compile_guarded_cold(InstContext &ctx);
+	bool branch_to_guarded_cold(InstContext &ctx);
+	const zend_tpde_machine_reference *operation_machine_reference(
+		InstContext &ctx, zend_tpde_machine_reference_kind expected);
+	bool copy_slot(
+		InstContext &ctx, const zend_mir_source_operand_ref &source_operand,
+		zend_mir_storage_id source_storage,
+		zend_mir_storage_id target_storage,
+		zend_mir_storage_id result_storage, bool move_source,
+		bool fresh_target = false);
+	bool copy_temporary_slot(InstContext &ctx);
+	bool free_temporary_slot(InstContext &ctx);
+	int array_element(InstContext &ctx, ElementAccess access);
+	int array_element_register(InstContext &ctx);
+	bool read_array(InstContext &ctx);
+	bool fused_into_branch_placeholder(InstContext &ctx);
+	int type_check_inline(InstContext &ctx);
+	int identical_literal(InstContext &ctx);
+	int key_exists_inline(InstContext &ctx);
+	int iterator_free_inline(InstContext &ctx);
+	int copy_literal(InstContext &ctx);
+	int count_inline(InstContext &ctx);
+	bool write_array(InstContext &ctx);
+	bool coalesce_array(InstContext &ctx);
+	bool isset_array(InstContext &ctx);
+	bool append_packed_array(InstContext &ctx);
+	bool string_length(InstContext &ctx);
+	bool long_binary(InstContext &ctx);
+	bool long_assign_op(InstContext &ctx);
+	bool long_incdec(InstContext &ctx);
+	bool slot_isset_empty(InstContext &ctx);
+	bool object_property_read(InstContext &ctx);
+	bool object_property_address(InstContext &ctx);
+	bool object_property_write(InstContext &ctx);
+	bool fetch_constant_inline(InstContext &ctx);
+	bool bind_global_inline(InstContext &ctx);
+	bool class_constant_inline(InstContext &ctx);
+	bool instanceof_inline(InstContext &ctx);
+	bool dynamic_fetch_read(InstContext &ctx);
 	bool compile_inst_impl(IRInstRef instruction, InstRange);
 	bool compile_inst(IRInstRef instruction, InstRange);
 	/*
@@ -10720,6 +10791,7632 @@ bool ZendCompilerX64::compile_zval_payload_load(InstContext &ctx) {
 	return emit(address.load_to_reg(), 0);
 }
 
+bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	if (mir.zval_store_lazy_scalar
+			&& node.kind == Adaptor::InstKind::MIR) {
+		if (node.operands.size() != 1
+				|| node.operands[0]
+					!= IRValueRef{Adaptor::FRAME_VALUE}) {
+			return false;
+		}
+		auto frame_value = val_ref(node.operands[0]);
+		(void) frame_value;
+		return true;
+	}
+	/* A lazy store the adaptor kept eager overwrites a non-counted
+	 * value, as a plain store does. */
+	if (mir.zval_store_plain || mir.zval_store_lazy_scalar) {
+		const zend_mir_storage_id storage = mir.zval_store_storage_id;
+		const uint64_t offset =
+			frame_slot_offset(storage);
+		if (node.operands.size() != 2
+				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
+				|| !zend_mir_id_is_valid(storage)
+				|| offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		const IRValueRef input = node.operands[0];
+		const zend_mir_scalar_type_mask exact_type =
+			adaptor->exact_type(input);
+		auto frame_value = val_ref(node.operands[1]);
+		(void) frame_value;
+		const int32_t payload_offset = static_cast<int32_t>(offset);
+		const int32_t type_offset = static_cast<int32_t>(
+			offset + offsetof(zval, u1.type_info));
+		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+			ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+				type_offset), IS_NULL);
+			return true;
+		}
+		if (!zend_mir_scalar_type_is_exact(exact_type)) {
+			return false;
+		}
+		auto [value_ref, value] = val_ref_single(input);
+		auto value_reg = value.load_to_reg();
+		if (val_parts(input).bank == tpde::x64::PlatformConfig::FP_BANK) {
+			ASM(SSE_MOVSDmr, FE_MEM(canonical_frame_register(), 0,
+				FE_NOREG, payload_offset), value_reg);
+		} else {
+			ASM(MOV64mr, FE_MEM(canonical_frame_register(), 0,
+				FE_NOREG, payload_offset), value_reg);
+		}
+		if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			ScratchReg kind{this};
+			auto kind_reg = kind.alloc_gp();
+			ASM(LEA32rm, kind_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
+			ASM(MOV32mr, FE_MEM(canonical_frame_register(), 0,
+				FE_NOREG, type_offset), kind_reg);
+		} else {
+			ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0,
+				FE_NOREG, type_offset),
+				static_cast<int32_t>(zval_type(exact_type)));
+		}
+		return true;
+	}
+	if (node.operands.size() != 2
+			|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
+			|| node.continuation_block == UINT32_MAX) {
+		return false;
+	}
+	const IRValueRef input = node.operands[0];
+	const zend_mir_storage_id storage = mir.zval_store_storage_id;
+	const zend_mir_scalar_type_mask exact_type =
+		adaptor->exact_type(input);
+	const uint64_t offset =
+		frame_slot_offset(storage);
+	if (!zend_mir_id_is_valid(storage)
+			|| !zend_mir_scalar_type_is_exact(exact_type)
+			|| mir.runtime_helper
+				!= ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW
+			|| offset > INT32_MAX
+			|| offset + offsetof(zval, u1.type_info) > INT32_MAX) {
+		return false;
+	}
+	if (node.kind == Adaptor::InstKind::GuardedCold) {
+		auto input_value = val_ref(node.operands[0]);
+		auto frame_value = val_ref(node.operands[1]);
+		ScratchReg slot_argument{this};
+		auto slot_argument_reg = slot_argument.alloc_gp();
+		ASM(MOV64rr, slot_argument_reg, canonical_frame_register());
+		ASM(ADD64ri, slot_argument_reg, static_cast<int32_t>(offset));
+		ValuePart slot_pointer{
+			tpde::x64::PlatformConfig::GP_BANK, 8};
+		slot_pointer.set_value(this, std::move(slot_argument));
+		tpde::x64::CCAssignerSysV assigner{false};
+		CallBuilder builder{*this, assigner};
+		builder.add_arg(
+			std::move(slot_pointer), tpde::CCAssignment{});
+		builder.call(runtime_symbol(mir.runtime_helper));
+		ScratchReg store_slot{this};
+		ScratchReg store_type{this};
+		auto store_slot_reg = store_slot.alloc_gp();
+		auto store_type_reg = store_type.alloc_gp();
+		ASM(MOV64rr, store_slot_reg, canonical_frame_register());
+		ASM(ADD64ri, store_slot_reg, static_cast<int32_t>(offset));
+		ASM(MOV32rm, store_type_reg,
+			FE_MEM(store_slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		auto store_slot_resolved = text_writer.label_create();
+		ASM(CMP32ri, store_type_reg, IS_REFERENCE_EX);
+		generate_raw_jump(Jump::jne, store_slot_resolved);
+		emit_deref_address(store_slot_reg);
+		label_place(store_slot_resolved);
+		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+			ASM(MOV64mi,
+				FE_MEM(store_slot_reg, 0, FE_NOREG, 0), 0);
+			ASM(MOV32mi,
+				FE_MEM(store_slot_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				IS_NULL);
+		} else {
+			auto input = input_value.part(0);
+			auto input_reg = input.load_to_reg();
+			if (val_parts(node.operands[0]).bank
+					== tpde::x64::PlatformConfig::FP_BANK) {
+				ASM(SSE_MOVSDmr,
+					FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
+					input_reg);
+			} else {
+				ASM(MOV64mr,
+					FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
+					input_reg);
+			}
+			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+				ASM(LEA32rm, store_type_reg, FE_MEM(input_reg, 0, FE_NOREG, IS_FALSE));
+				ASM(MOV32mr,
+					FE_MEM(store_slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))),
+					store_type_reg);
+			} else {
+				ASM(MOV32mi,
+					FE_MEM(store_slot_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))),
+					static_cast<int32_t>(zval_type(exact_type)));
+			}
+		}
+		generate_uncond_branch(
+			IRBlockRef{node.continuation_block});
+		return true;
+	}
+	if (node.kind != Adaptor::InstKind::GuardedFast) {
+		return false;
+	}
+	if (node.control_block == UINT32_MAX) {
+		return false;
+	}
+	const auto successors = guarded_successors_of(node);
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_reg = frame.load_to_reg();
+	auto slow_release = text_writer.label_create();
+	auto store_value = text_writer.label_create();
+	auto slot_resolved = text_writer.label_create();
+	auto finished = text_writer.label_create();
+	ScratchReg old_type{this};
+	ScratchReg slot{this};
+	ScratchReg counted{this};
+	ScratchReg decision{this};
+	auto slot_reg = slot.alloc_gp();
+	auto old_type_reg = old_type.alloc_gp();
+	auto counted_reg = counted.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+	/* The old value is released first (no destructor runs here: a
+	 * last reference or a collectable one takes the cold path), then
+	 * the scalar is stored into the resolved slot. */
+	ASM(LEA64rm, slot_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(offset)));
+	ASM(MOV32rm, old_type_reg,
+		FE_MEM(slot_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+	ASM(CMP32ri, old_type_reg, IS_REFERENCE_EX);
+	generate_raw_jump(Jump::jne, slot_resolved);
+	emit_deref_address(slot_reg);
+	ASM(MOV32rm, old_type_reg,
+		FE_MEM(slot_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+	label_place(slot_resolved);
+	ASM(TEST32ri, old_type_reg,
+		IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+	generate_raw_jump(Jump::je, store_value);
+	ASM(TEST32ri, old_type_reg,
+		IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
+	generate_raw_jump(Jump::jne, slow_release);
+	ASM(MOV64rm, counted_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+	ASM(CMP32mi,
+		FE_MEM(counted_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+		1);
+	generate_raw_jump(Jump::jbe, slow_release);
+	ASM(SUB32mi,
+		FE_MEM(counted_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+		1);
+
+	label_place(store_value);
+	if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+		ASM(MOV64mi, FE_MEM(slot_reg, 0, FE_NOREG, 0), 0);
+		ASM(MOV32mi,
+			FE_MEM(slot_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			IS_NULL);
+	} else {
+		auto [value_ref, value] = val_ref_single(input);
+		auto value_reg = value.load_to_reg();
+		if (val_parts(input).bank
+				== tpde::x64::PlatformConfig::FP_BANK) {
+			ASM(SSE_MOVSDmr, FE_MEM(slot_reg, 0, FE_NOREG, 0),
+				value_reg);
+		} else {
+			ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), value_reg);
+		}
+		if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			ASM(LEA32rm, old_type_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
+			ASM(MOV32mr,
+				FE_MEM(slot_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				old_type_reg);
+		} else {
+			ASM(MOV32mi,
+				FE_MEM(slot_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				static_cast<int32_t>(zval_type(exact_type)));
+		}
+	}
+	old_type.reset();
+	slot.reset();
+	counted.reset();
+	/* The slow path jumps before any release: the cold block may
+	 * take it directly. */
+	finish_guarded(slow_release, finished, std::move(decision), frame,
+		successors);
+	return true;
+}
+
+bool ZendCompilerX64::compile_echo_scalar(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
+	if (!zend_mir_scalar_type_is_exact(exact_type)
+			|| node.operands.empty()) {
+		return false;
+	}
+	tpde::x64::CCAssignerSysV assigner;
+	CallBuilder builder{*this, assigner};
+	builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
+	if (exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
+		builder.add_arg(CallArg{node.operands[0]});
+		builder.call(runtime_symbol(mir.runtime_helper));
+	} else {
+		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+			builder.add_arg(ValuePart{uint64_t{0}, 8,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		} else {
+			builder.add_arg(CallArg{node.operands[0]});
+		}
+		add_const_arg(builder, static_cast<uint32_t>(exact_type), 4);
+		builder.call(runtime_symbol(mir.runtime_helper));
+	}
+	return true;
+}
+
+auto ZendCompilerX64::unary(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	return val_ref_single(node.operands[0]);
+}
+
+auto ZendCompilerX64::binary(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	return std::pair{val_ref_single(node.operands[0]),
+		val_ref_single(node.operands[1])};
+}
+
+bool ZendCompilerX64::copy_result(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	if (adaptor->machine_kind(node.result)
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		auto source_value = val_ref(node.operands[0]);
+		auto result_value = result_ref(node.result);
+		const ValueParts parts = val_parts(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			auto source = source_value.part(part);
+			auto result = result_value.part(part);
+			auto source_reg = source.load_to_reg();
+			auto result_reg = result.alloc_try_reuse(source);
+			if (source_reg != result_reg) {
+				mov(result_reg, source_reg, parts.size_bytes(part));
+			}
+			result.set_modified();
+		}
+		return true;
+	}
+	auto [source_ref, source] = unary(ctx);
+	auto [result_ref, result] = result_ref_single(node.result);
+	auto source_reg = source.load_to_reg();
+	auto result_reg = result.alloc_try_reuse(source);
+	if (source_reg != result_reg) {
+		mov(result_reg, source_reg, 8);
+	}
+	result.set_modified();
+	return true;
+}
+
+auto ZendCompilerX64::encode_binary(InstContext &ctx, auto encode) {
+	const Adaptor::InstNode &node = ctx.node;
+	auto left = val_ref(node.operands[0]);
+	auto right = val_ref(node.operands[1]);
+	auto result = result_ref(node.result);
+	return encode(left.part(0), right.part(0), result.part(0));
+}
+
+bool ZendCompilerX64::can_fuse_compare_branch(InstContext &ctx) {
+	const InstRange &remaining_instructions = ctx.remaining_instructions;
+	const Adaptor::InstNode &node = ctx.node;
+	if (remaining_instructions.from == remaining_instructions.to) {
+		return false;
+	}
+	const IRInstRef next = *remaining_instructions.from;
+	const Adaptor::InstNode &consumer = adaptor->node(next);
+	/* A generator continuation's terminal reloads its resume values;
+	 * a fused branch would never run that reload. */
+	return consumer.kind == Adaptor::InstKind::MIR
+		&& consumer.operands.size() == 1
+		&& consumer.operands[0] == node.result
+		&& adaptor->instruction_record(next).opcode
+			== ZEND_MIR_OPCODE_COND_BRANCH
+		&& adaptor->generator_resume_values(next).empty()
+		&& this->analyzer.liveness_info(
+			adaptor->val_local_idx(node.result)).ref_count == 2;
+}
+
+bool ZendCompilerX64::fuse_compare_branch(InstContext &ctx, Jump condition) {
+	const InstRange &remaining_instructions = ctx.remaining_instructions;
+	if (!can_fuse_compare_branch(ctx)) {
+		return false;
+	}
+	const IRInstRef next = *remaining_instructions.from;
+	const Adaptor::InstNode &consumer = adaptor->node(next);
+	const auto &successors = adaptor->block_succs(
+		IRBlockRef{consumer.control_block});
+	if (successors.size() != 2) {
+		return false;
+	}
+	generate_cond_branch(condition, successors[0], successors[1]);
+	adaptor->mark_fused(next);
+	return true;
+}
+
+bool ZendCompilerX64::integer_compare(InstContext &ctx, Jump condition) {
+	const Adaptor::InstNode &node = ctx.node;
+	auto [left_pair, right_pair] = binary(ctx);
+	auto &[left_ref, left] = left_pair;
+	auto &[right_ref, right] = right_pair;
+	uint64_t immediate_bits;
+	auto left_reg = left.load_to_reg();
+	if (adaptor->constant(node.operands[1], &immediate_bits)
+			&& static_cast<int64_t>(immediate_bits) >= INT32_MIN
+			&& static_cast<int64_t>(immediate_bits) <= INT32_MAX) {
+		ASM(CMP64ri, left_reg,
+			static_cast<int32_t>(
+				static_cast<int64_t>(immediate_bits)));
+	} else {
+		ASM(CMP64rr, left_reg, right.load_to_reg());
+	}
+	if (fuse_compare_branch(ctx, condition)) {
+		return true;
+	}
+	auto [result_ref, result] = result_ref_single(node.result);
+	auto result_reg = result.alloc_reg();
+	generate_raw_set(condition, result_reg);
+	result.set_modified();
+	return true;
+}
+
+/*
+ * PHP compares doubles with IEEE semantics: an unordered (NaN) operand
+ * makes <, <= and == false. UCOMISD sets ZF, PF and CF when unordered,
+ * so order the operands to test "above" and check parity for equality.
+ */
+bool ZendCompilerX64::floating_compare(
+		InstContext &ctx, zend_mir_opcode opcode) {
+	const Adaptor::InstNode &node = ctx.node;
+	auto [left_pair, right_pair] = binary(ctx);
+	auto &[left_ref, left] = left_pair;
+	auto &[right_ref, right] = right_pair;
+	if (opcode == ZEND_MIR_OPCODE_F64_EQ) {
+		ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		ScratchReg ordered{this};
+		auto ordered_reg = ordered.alloc_gp();
+		generate_raw_set(Jump::je, result_reg);
+		generate_raw_set(Jump::jnp, ordered_reg);
+		ASM(AND32rr, result_reg, ordered_reg);
+		result.set_modified();
+		return true;
+	}
+	const Jump condition = opcode == ZEND_MIR_OPCODE_F64_LT
+		? Jump::ja : Jump::jae;
+	auto left_reg = left.load_to_reg();
+	auto right_reg = right.load_to_reg();
+	ASM(SSE_UCOMISDrr, right_reg, left_reg);
+	if (fuse_compare_branch(ctx, condition)) {
+		return true;
+	}
+	auto [result_ref, result] = result_ref_single(node.result);
+	auto result_reg = result.alloc_reg();
+	generate_raw_set(condition, result_reg);
+	result.set_modified();
+	return true;
+}
+
+bool ZendCompilerX64::materialize_boxed_boundary_operand(
+		InstContext &ctx, uint32_t operand_index, zend_mir_storage_id storage) {
+	const Adaptor::InstNode &node = ctx.node;
+	if (operand_index == UINT32_MAX) {
+		return true;
+	}
+	if (!zend_mir_id_is_valid(storage)
+			|| operand_index >= node.liveness_operands.size()) {
+		return false;
+	}
+	const uint64_t offset =
+		frame_slot_offset(storage);
+	if (offset > INT32_MAX - sizeof(zval)) {
+		return false;
+	}
+	const IRValueRef operand = node.liveness_operands[operand_index];
+	if (adaptor->machine_kind(operand)
+			!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		return false;
+	}
+	auto boxed = val_ref(operand);
+	auto payload = boxed.part(0);
+	auto type_info = boxed.part(1);
+	const bool cold = node.kind == Adaptor::InstKind::GuardedCold;
+	store_boxed_part(payload, AsmReg{}, static_cast<int32_t>(offset), 8,
+		cold);
+	store_boxed_part(type_info, AsmReg{},
+		static_cast<int32_t>(offset + offsetof(zval, u1.type_info)),
+		4, cold);
+	return true;
+}
+
+bool ZendCompilerX64::execute_value_operation_with(
+		InstContext &ctx, ValuePart *frame_argument,
+		zend_native_runtime_helper_id helper, uint32_t source_opcode) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	/*
+	 * A guarded fast node must never execute the generic helper itself.
+	 * The adaptor exposes that call as a distinct allocator-visible cold
+	 * block. Executing it here would consume temporary operands once and
+	 * then execute the same operation again in GuardedCold.
+	 */
+	if (node.kind == Adaptor::InstKind::GuardedFast) {
+		if (frame_argument != nullptr
+				|| node.argument_index == UINT32_MAX) {
+			return false;
+		}
+		consume_operands(node);
+		if (node.has_result) {
+			auto unreachable_definition = result_ref(node.result);
+			unreachable_definition.reset();
+		}
+		if (node.continuation_block != UINT32_MAX
+				&& node.control_block != UINT32_MAX) {
+			for (IRValueRef phi : adaptor->block_phis(
+					IRBlockRef{node.continuation_block})) {
+				const IRValueRef incoming = adaptor->val_as_phi(phi)
+					.incoming_val_for_block(IRBlockRef{node.control_block});
+				auto unreachable_phi_definition = result_ref(phi);
+				auto unreachable_phi_input = val_ref(incoming);
+				unreachable_phi_definition.reset();
+				unreachable_phi_input.reset();
+			}
+		}
+		generate_branch_to_block(Jump::jmp,
+			IRBlockRef{node.argument_index}, false, true);
+		continuation_edge_emitted_ = true;
+		return true;
+	}
+	const bool explicit_object_operands =
+		zend_tpde_helper_has_unused_operand_payloads(helper);
+	const bool explicit_auxiliary =
+		zend_tpde_helper_has_explicit_auxiliary(helper);
+	if (node.operands.empty()
+			|| node.operands.back()
+				!= IRValueRef{Adaptor::FRAME_VALUE}
+			|| !zend_tpde_helper_has_explicit_operands(helper)
+			|| !mir.has_value_operation) {
+		return false;
+	}
+	const zend_mir_executable_value_ref &operation =
+		mir.value_operation;
+	if (!materialize_boxed_boundary_operand(ctx,
+			node.boxed_op1_boundary_operand_index,
+			operation.op1_storage_id)
+			|| !materialize_boxed_boundary_operand(ctx,
+				node.boxed_op2_boundary_operand_index,
+				operation.op2_storage_id)) {
+		return false;
+	}
+	const bool const_include_once =
+		helper == ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL
+		&& operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& operation.result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+		&& (operation.extended_value == ZEND_INCLUDE_ONCE
+			|| operation.extended_value == ZEND_REQUIRE_ONCE);
+	/* CHECK_FUNC_ARG of a positional argument among the first
+	 * MAX_ARG_FLAG_NUM: the VM's quick test of the pending call's
+	 * function, which cannot fail. */
+	if (helper == ZEND_NATIVE_HELPER_VALUE_CHECK_FUNC_ARG
+			&& frame_argument == nullptr && !node.has_result
+			&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& operation.op2_unused_payload >= 1
+			&& operation.op2_unused_payload <= MAX_ARG_FLAG_NUM) {
+		static_assert(ZEND_CALL_SEND_ARG_BY_REF == UINT32_C(1) << 31);
+		auto frame_use = val_ref(node.operands.back());
+		(void) frame_use;
+		const uint32_t mask = uint32_t{ZEND_SEND_BY_REF
+			| ZEND_SEND_PREFER_REF}
+			<< ((operation.op2_unused_payload + 3) * 2);
+		const int32_t call_info = static_cast<int32_t>(
+			offsetof(zend_execute_data, This)
+				+ offsetof(zval, u1.type_info));
+		ScratchReg call{this};
+		ScratchReg by_reference{this};
+		ScratchReg info{this};
+		auto call_reg = call.alloc_gp();
+		auto by_reference_reg = by_reference.alloc_gp();
+		auto info_reg = info.alloc_gp();
+		ASM(MOV64rm, call_reg, FE_MEM(canonical_frame_register(), 0,
+			FE_NOREG, static_cast<int32_t>(
+				offsetof(zend_execute_data, call))));
+		ASM(MOV64rm, by_reference_reg, FE_MEM(call_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, func))));
+		ASM(TEST32mi, FE_MEM(by_reference_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_function, quick_arg_flags))),
+			static_cast<int32_t>(mask));
+		generate_raw_set(Jump::jne, by_reference_reg);
+		ASM(SHL32ri, by_reference_reg, 31);
+		ASM(MOV32rm, info_reg, FE_MEM(call_reg, 0, FE_NOREG, call_info));
+		ASM(AND32ri, info_reg, INT32_MAX);
+		ASM(OR32rr, info_reg, by_reference_reg);
+		ASM(MOV32mr, FE_MEM(call_reg, 0, FE_NOREG, call_info), info_reg);
+		return true;
+	}
+	if (!emit_deopt_stress_transfer(node.mir_instruction_index)) {
+		return false;
+	}
+	/* CHECK_UNDEF_ARGS: only a pending frame flagged as possibly
+	 * holding undefined arguments needs the helper. */
+	if (helper == ZEND_NATIVE_HELPER_VALUE_CHECK_UNDEF_ARGS
+			&& frame_argument == nullptr && !node.has_result) {
+		{
+			auto frame_use = val_ref(node.operands.back());
+			(void) frame_use;
+		}
+		const AsmReg frame_reg = canonical_frame_register();
+		ScratchReg status_scratch{this};
+		ScratchReg pending{this};
+		const AsmReg status_reg = status_scratch.alloc_gp();
+		const AsmReg pending_reg = pending.alloc_gp();
+		auto undefined = text_writer.label_create();
+		auto checked = text_writer.label_create();
+		ASM(MOV64rm, pending_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, call))));
+		ASM(TEST32mi, FE_MEM(pending_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, This)
+				+ offsetof(zval, u1.type_info))),
+			static_cast<int32_t>(ZEND_CALL_MAY_HAVE_UNDEF));
+		generate_raw_jump(Jump::jne, undefined);
+		cold_begin();
+		label_place(undefined);
+		emit_preserving_call(register_file.used
+				& ~(uint64_t{1} << status_reg.id()),
+			ZEND_NATIVE_HELPER_CALL_CHECK_UNDEF_FRAME,
+			[&] { ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG, 0)); },
+			[&] { ASM(MOV32rr, status_reg, FE_AX); });
+		/* Only the helper reports a status. */
+		emit_inline_status_check(status_reg, mir.exception_block_id,
+			checked);
+		cold_end();
+		label_place(checked);
+		pending.reset();
+		return true;
+	}
+	if ((helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
+				|| helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT)
+			&& frame_argument == nullptr && !node.has_result
+			&& node.operands.size() == 1) {
+		bool handled = false;
+		if (!emit_array_element_primitive(node, mir, operation,
+				helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY,
+				&handled)) {
+			return false;
+		}
+		if (handled) {
+			return true;
+		}
+	}
+	if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
+				|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
+			&& frame_argument == nullptr && !node.has_result
+			&& node.operands.size() == 1) {
+		zend_tpde_concat_direct strings{};
+		if (zend_tpde_concat_direct_at(mir, &strings)) {
+			bool handled = false;
+			if (!emit_concat_strings_primitive(node, mir, operation,
+					helper, strings, &handled)) {
+				return false;
+			}
+			if (handled) {
+				return true;
+			}
+		}
+	}
+	tpde::x64::CCAssignerSysV assigner{false};
+	CallBuilder builder{*this, assigner};
+	zend_tpde_frameless_direct frameless_direct{};
+	const bool frameless_direct_form =
+		helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
+		&& zend_tpde_frameless_direct_at(mir, &frameless_direct);
+	const bool frameless_inline = frameless_direct_form
+		&& frame_argument == nullptr
+		&& frameless_inline_allowed(operation, frameless_direct);
+	std::optional<ScratchReg> frameless_status;
+	zend_tpde_concat_assign_direct concat_assign_direct{};
+	zend_tpde_concat_direct concat_direct{};
+	zend_tpde_dim_direct dim_direct{};
+	/* An inline frameless call stores null into the same slot. */
+	if (!frameless_inline
+			&& zend_tpde_helper_requires_undef_result(helper, operation)) {
+		const uint64_t result_offset =
+			frame_slot_offset(operation.result_storage_id)
+			+ offsetof(zval, u1.type_info);
+		if (result_offset > INT32_MAX - sizeof(uint32_t)) {
+			return false;
+		}
+		ASM(MOV32mi,
+			FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+				static_cast<int32_t>(result_offset)),
+			IS_UNDEF);
+	}
+	if (frameless_inline) {
+		/* The handler takes no frame. */
+		auto frame_use = val_ref(node.operands.back());
+		(void) frame_use;
+	} else if (frame_argument != nullptr) {
+		builder.add_arg(
+			std::move(*frame_argument), tpde::CCAssignment{});
+	} else {
+		builder.add_arg(CallArg{node.operands.back()});
+	}
+	auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
+			uint32_t unused_payload) {
+		return explicit_object_operands
+			? encode_source_operand(operand, unused_payload)
+			: encode_source_operand(operand);
+	};
+	/* ASSIGN_DIM takes the addresses of its container slot, key and
+	 * value: the helper decodes nothing. */
+	const bool assign_dim_address =
+		helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
+		&& zend_tpde_dim_direct_at(mir, &dim_direct);
+	/* So does a two- or three-argument frameless call. */
+	const bool frameless_address = frameless_direct_form
+		&& (source_opcode == ZEND_FRAMELESS_ICALL_2
+			|| source_opcode == ZEND_FRAMELESS_ICALL_3);
+	/* INIT_ARRAY and ADD_ARRAY_ELEMENT of literal, CV and temporary
+	 * operands take addresses too. */
+	struct ValueAddress {
+		uint32_t kind;
+		uint64_t value;
+	};
+	auto value_address = [&](const zend_mir_source_operand_ref &operand,
+			zend_mir_storage_id storage, ValueAddress *out) {
+		if (operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+			*out = {ZEND_NATIVE_DIM_DIRECT_UNUSED, 0};
+			return true;
+		}
+		if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			*out = {ZEND_NATIVE_DIM_DIRECT_CONST, operand.index};
+			return uint64_t{operand.index} * sizeof(zval) <= INT32_MAX;
+		}
+		if ((operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| !zend_mir_id_is_valid(storage)
+				|| (operand.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					&& operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)) {
+			return false;
+		}
+		const uint64_t offset =
+			frame_slot_offset(storage);
+		*out = {operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				? uint32_t{ZEND_NATIVE_DIM_DIRECT_CV}
+				: uint32_t{ZEND_NATIVE_DIM_DIRECT_TMP},
+			offset};
+		return offset <= INT32_MAX - sizeof(zval);
+	};
+	ValueAddress address_op1{}, address_op2{}, address_result{};
+	const zend_native_runtime_helper_id address_helper =
+		helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
+			? ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS
+		: helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT
+			? ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS
+		: ZEND_NATIVE_HELPER_COUNT;
+	const bool array_address =
+		address_helper != ZEND_NATIVE_HELPER_COUNT
+		&& value_address(operation.op1, operation.op1_storage_id,
+			&address_op1)
+		&& value_address(operation.op2, operation.op2_storage_id,
+			&address_op2)
+		&& value_address(operation.result, operation.result_storage_id,
+			&address_result)
+		&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_UNUSED
+		&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_CONST;
+	/* The generic form takes the encoded operands; the direct and
+	 * address forms below take offsets or addresses instead. */
+	auto add_encoded_op1 = [&] {
+		add_const_arg(builder,
+			encode_operand( operation.op1, operation.op1_unused_payload), 8);
+	};
+	if (frameless_inline) {
+		/*
+		 * zend_native_call_frameless_*(): the opline for warnings, a
+		 * null result, then the handler from the context's table on the
+		 * result and each argument's (dereferenced) address.
+		 */
+		const uint64_t descriptor = frameless_direct.descriptor;
+		const uint32_t count =
+			operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
+		const uint32_t handler = static_cast<uint32_t>(descriptor & 0xffff);
+		const AsmReg frame_reg = canonical_frame_register();
+		const AsmReg context_reg = canonical_value_register(
+			IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+		const uint32_t result_offset =
+			static_cast<uint32_t>(frameless_direct.slots);
+		/*
+		 * The literal table of literal arguments, from the EX(func) the
+		 * opline publication loads: held in a free register that no
+		 * argument takes (none of RAX, R10, R11 is one), until the last
+		 * argument. Without one free, each literal loads it.
+		 */
+		std::optional<ScratchReg> literals;
+		AsmReg literals_reg = AsmReg::make_invalid();
+		if (((descriptor >> ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT)
+				& ((uint64_t{1} << count) - 1)) != 0) {
+			for (const AsmReg candidate :
+					{AsmReg{AsmReg::AX}, AsmReg{AsmReg::R10},
+						AsmReg{AsmReg::R11}}) {
+				if (!register_file.is_used(candidate)
+						&& ((register_file.allocatable
+							>> candidate.id()) & 1) != 0) {
+					literals.emplace(this);
+					literals_reg = literals->alloc_specific(candidate);
+					break;
+				}
+			}
+		}
+		{
+			ScratchReg opline{this};
+			const AsmReg opline_reg = opline.alloc_gp();
+			const uint64_t opline_offset =
+				uint64_t{operation.source_position_id} * sizeof(zend_op);
+			if (literals_reg.valid()) {
+				ASM(MOV64rm, literals_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, func))));
+				ASM(MOV64rm, opline_reg, FE_MEM(literals_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_op_array, opcodes))));
+				if (opline_offset != 0) {
+					ASM(ADD64ri, opline_reg,
+						static_cast<int32_t>(opline_offset));
+				}
+				ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, opline))), opline_reg);
+				ASM(MOV64rm, literals_reg, FE_MEM(literals_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_op_array, literals))));
+			} else {
+				emit_publish_opline(frame_reg, opline_reg,
+					static_cast<int32_t>(opline_offset));
+			}
+			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))), IS_NULL);
+		}
+		auto address_arg = [&](uint32_t offset, bool literal,
+				bool may_be_reference) {
+			/* Built in its argument register when that is free: the
+			 * call then moves nothing. */
+			ScratchReg address{this};
+			const AsmReg argument = next_gp_argument(&assigner);
+			const AsmReg address_reg = argument.valid()
+					&& !register_file.is_used(argument)
+					&& ((register_file.allocatable >> argument.id()) & 1)
+						!= 0
+				? address.alloc_specific(argument) : address.alloc_gp();
+			if (literal && literals_reg.valid()) {
+				ASM(LEA64rm, address_reg, FE_MEM(literals_reg, 0,
+					FE_NOREG, static_cast<int32_t>(
+						offset * sizeof(zval))));
+			} else if (literal) {
+				emit_literal_base(address_reg, frame_reg);
+				ASM(LEA64rm, address_reg, FE_MEM(address_reg, 0,
+					FE_NOREG, static_cast<int32_t>(
+						offset * sizeof(zval))));
+			} else {
+				ASM(LEA64rm, address_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offset)));
+				if (may_be_reference) {
+					auto direct = text_writer.label_create();
+					ASM(CMP8mi, FE_MEM(address_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.v.type))), IS_REFERENCE);
+					emit_cold_branch(Jump::je, direct, [&] {
+						emit_deref_address(address_reg);
+					});
+				}
+			}
+			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+			value.set_value(this, std::move(address));
+			builder.add_arg(std::move(value), tpde::CCAssignment{});
+		};
+		address_arg(result_offset, false, false);
+		const uint32_t offsets[3] = {
+			static_cast<uint32_t>(frameless_direct.slots >> 32),
+			static_cast<uint32_t>(frameless_direct.more_slots),
+			static_cast<uint32_t>(frameless_direct.more_slots >> 32)};
+		for (uint32_t index = 0; index < count; ++index) {
+			const bool literal = ((descriptor
+				>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
+				!= 0;
+			const zend_tpde_source_opcode &source =
+				adaptor->plan()->source_opcodes[
+					operation.source_position_id + (index == 2 ? 1 : 0)];
+			const uint32_t may_be = index == 1
+				? source.op2_may_be : source.op1_may_be;
+			if (!literal && offsets[index] > INT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			address_arg(offsets[index], literal,
+				!literal && (may_be & MAY_BE_REF) != 0);
+		}
+		if (literals.has_value()) {
+			literals->reset();
+		}
+		/* After the arguments, which hold the argument registers. */
+		ScratchReg target{this};
+		const AsmReg target_reg = target.alloc_gp();
+		ASM(MOV64rm, target_reg, FE_MEM(context_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(
+				zend_native_execution_context, frameless_handlers))));
+		ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG,
+			static_cast<int32_t>(handler * sizeof(void *))));
+		ValuePart target_part{tpde::x64::PlatformConfig::GP_BANK, 8};
+		target_part.set_value(this, std::move(target));
+		builder.call(std::move(target_part));
+		/* The handler returns nothing: an exception leaves from the
+		 * cold area. The context stays in its callee-saved register. */
+		frameless_status.emplace(this);
+		const AsmReg exception_reg = frameless_status->alloc_gp();
+		ASM(MOV64rm, exception_reg, FE_MEM(context_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(
+				zend_native_execution_context, exception))));
+		ASM(CMP64mi, FE_MEM(exception_reg, 0, FE_NOREG, 0), 0);
+		frameless_status->reset();
+		auto thrown = text_writer.label_create();
+		generate_raw_jump(Jump::jne, thrown);
+		cold_begin();
+		label_place(thrown);
+		if (zend_mir_id_is_valid(mir.exception_block_id)) {
+			generate_exception_branch(
+				adaptor->block_ref(mir.exception_block_id));
+		} else {
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(ValuePart{
+				static_cast<uint32_t>(ZEND_NATIVE_EXCEPTION), 4,
+				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+			return_builder.ret_local_path();
+		}
+		cold_end();
+	} else if (array_address) {
+		for (const ValueAddress *operand :
+				{&address_op1, &address_op2, &address_result}) {
+			ScratchReg address{this};
+			const AsmReg address_reg = address.alloc_gp();
+			if (operand->kind == ZEND_NATIVE_DIM_DIRECT_UNUSED) {
+				ASM(XOR32rr, address_reg, address_reg);
+			} else if (operand->kind == ZEND_NATIVE_DIM_DIRECT_CONST) {
+				emit_literal_base(address_reg, canonical_frame_register());
+				ASM(LEA64rm, address_reg,
+					FE_MEM(address_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							operand->value * sizeof(zval))));
+			} else {
+				ASM(LEA64rm, address_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(operand->value)));
+			}
+			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+			value.set_value(this, std::move(address));
+			builder.add_arg(std::move(value), tpde::CCAssignment{});
+		}
+		add_const_arg(builder, operation.extended_value, 4);
+		builder.add_arg(ValuePart{
+			uint64_t{address_op1.kind} | (uint64_t{address_op2.kind} << 2)
+				| (uint64_t{address_result.kind} << 4)
+				| (uint64_t{source_opcode & 0xff} << 8)
+				| (uint64_t{operation.source_position_id} << 32),
+			8, tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
+		builder.call(runtime_symbol(address_helper));
+	} else if (frameless_address) {
+		/* The result slot, then each argument from its literal or
+		 * frame slot (the descriptor's CONST bits). */
+		auto slot_arg = [&](bool literal, uint32_t offset) {
+			ScratchReg address{this};
+			const AsmReg address_reg = address.alloc_gp();
+			if (literal) {
+				emit_literal_base(address_reg, canonical_frame_register());
+				ASM(LEA64rm, address_reg,
+					FE_MEM(address_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offset * sizeof(zval))));
+			} else {
+				ASM(LEA64rm, address_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(offset)));
+			}
+			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+			value.set_value(this, std::move(address));
+			builder.add_arg(std::move(value), tpde::CCAssignment{});
+		};
+		const uint64_t descriptor = frameless_direct.descriptor;
+		auto literal_argument = [&](uint32_t index) {
+			return ((descriptor
+				>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
+				!= 0;
+		};
+		slot_arg(false, static_cast<uint32_t>(frameless_direct.slots));
+		slot_arg(literal_argument(0),
+			static_cast<uint32_t>(frameless_direct.slots >> 32));
+		slot_arg(literal_argument(1),
+			static_cast<uint32_t>(frameless_direct.more_slots));
+		if (source_opcode == ZEND_FRAMELESS_ICALL_3) {
+			slot_arg(literal_argument(2),
+				static_cast<uint32_t>(frameless_direct.more_slots >> 32));
+		}
+		add_const_arg(builder, descriptor, 8);
+		builder.call(runtime_symbol(
+			source_opcode == ZEND_FRAMELESS_ICALL_3
+				? ZEND_NATIVE_HELPER_CALL_FRAMELESS_3_ADDRESS
+				: ZEND_NATIVE_HELPER_CALL_FRAMELESS_2_ADDRESS));
+	} else if (assign_dim_address) {
+		auto address_arg = [&](uint32_t kind, uint32_t offset) {
+			ScratchReg address{this};
+			const AsmReg address_reg = address.alloc_gp();
+			if (kind == ZEND_NATIVE_DIM_DIRECT_CONST) {
+				emit_literal_base(address_reg, canonical_frame_register());
+				ASM(LEA64rm, address_reg,
+					FE_MEM(address_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offset * sizeof(zval))));
+			} else if (kind == ZEND_NATIVE_DIM_DIRECT_UNUSED) {
+				ASM(XOR32rr, address_reg, address_reg);
+			} else {
+				ASM(LEA64rm, address_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(offset)));
+			}
+			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+			value.set_value(this, std::move(address));
+			builder.add_arg(std::move(value), tpde::CCAssignment{});
+		};
+		address_arg(ZEND_NATIVE_DIM_DIRECT_CV,
+			static_cast<uint32_t>(dim_direct.slots));
+		address_arg(static_cast<uint32_t>(dim_direct.descriptor & 3),
+			static_cast<uint32_t>(dim_direct.slots >> 32));
+		address_arg(static_cast<uint32_t>((dim_direct.descriptor >> 2) & 3),
+			static_cast<uint32_t>(dim_direct.more_slots));
+		add_const_arg(builder, dim_direct.descriptor, 8);
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS));
+	} else if (const_include_once) {
+		add_encoded_op1();
+		add_const_arg(builder, operation.extended_value, 4);
+		add_const_arg(builder, operation.source_position_id, 4);
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_CONST_INCLUDE_ONCE));
+	} else if (frameless_direct_form) {
+		/* Only ICALL_0 and ICALL_1 get here; ICALL_2 and ICALL_3 take
+		 * the address form above. */
+		add_const_arg(builder, frameless_direct.descriptor, 8);
+		add_const_arg(builder, frameless_direct.slots, 8);
+		add_const_arg(builder, frameless_direct.more_slots, 8);
+		builder.call(runtime_symbol(
+			source_opcode == ZEND_FRAMELESS_ICALL_1
+				? ZEND_NATIVE_HELPER_CALL_FRAMELESS_1
+				: ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT));
+	} else if ((helper == ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
+				|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM)
+			&& zend_tpde_dim_direct_at(mir, &dim_direct)) {
+		add_const_arg(builder, dim_direct.descriptor, 8);
+		add_const_arg(builder, dim_direct.slots, 8);
+		add_const_arg(builder, dim_direct.more_slots, 8);
+		builder.call(runtime_symbol(
+			helper == ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
+				? ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R_DIRECT
+				: ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT));
+	} else if (helper == ZEND_NATIVE_HELPER_VALUE_BINARY_OP
+			&& zend_tpde_identical_direct_at(mir, &concat_direct)) {
+		add_const_arg(builder, concat_direct.descriptor, 8);
+		add_const_arg(builder, concat_direct.slots, 8);
+		add_const_arg(builder, concat_direct.result_offset, 8);
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_VALUE_IDENTICAL_DIRECT));
+	} else if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
+				|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
+			&& zend_tpde_concat_direct_at(mir, &concat_direct)) {
+		add_const_arg(builder, concat_direct.descriptor, 8);
+		add_const_arg(builder, concat_direct.slots, 8);
+		add_const_arg(builder, concat_direct.result_offset, 8);
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_VALUE_CONCAT_DIRECT));
+	} else if (helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
+			&& zend_tpde_concat_assign_direct_at(
+				mir, &concat_assign_direct)) {
+		add_const_arg(builder, concat_assign_direct.descriptor, 8);
+		add_const_arg(builder, concat_assign_direct.slots, 8);
+		builder.call(runtime_symbol(
+			ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT));
+	} else if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
+		add_encoded_op1();
+		add_const_arg(builder, source_opcode, 4);
+		add_const_arg(builder, operation.source_position_id, 4);
+		builder.call(runtime_symbol(helper));
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		builder.add_ret(status, tpde::CCAssignment{});
+		if (zend_mir_id_is_valid(mir.exception_block_id)) {
+			generate_exception_branch(
+				adaptor->block_ref(mir.exception_block_id));
+			status.reset(this);
+			return true;
+		}
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(std::move(status), tpde::CCAssignment{});
+		return_builder.ret();
+		return true;
+	} else {
+		add_encoded_op1();
+		add_const_arg(builder,
+			encode_operand( operation.op2, operation.op2_unused_payload), 8);
+		add_const_arg(builder,
+			encode_operand( operation.result, operation.result_unused_payload), 8);
+		if (explicit_auxiliary) {
+			add_const_arg(builder,
+				encode_operand(operation.auxiliary, operation.auxiliary_unused_payload)
+					| zend_tpde_auxiliary_cache_bits(helper, operation), 8);
+		}
+		add_const_arg(builder, operation.extended_value, 4);
+		add_const_arg(builder, source_opcode, 4);
+		add_const_arg(builder, operation.source_position_id, 4);
+		builder.call(runtime_symbol(helper));
+	}
+	if (!frameless_inline) {
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		builder.add_ret(status, tpde::CCAssignment{});
+		emit_status_tail(std::move(status),
+			mir.exception_block_id, true);
+	}
+	/*
+	 * Some canonical value operations, such as COUNT, execute only
+	 * through this helper path. When the adaptor selected a boxed machine
+	 * result for an optimized direct-call argument, snapshot the complete
+	 * result before OPcache reuses the temporary frame slot.
+	 */
+	if (node.kind != Adaptor::InstKind::GuardedCold && node.has_result
+			&& adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		const zend_mir_storage_id storage = node.mutation_result
+			? operation.op1_storage_id : operation.result_storage_id;
+		const uint64_t frame_offset =
+			frame_slot_offset(storage);
+		if (!zend_mir_id_is_valid(storage)
+				|| frame_offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		auto result = result_ref(node.result);
+		const ValueParts parts = val_parts(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			auto value = result.part(part);
+			auto value_reg = value.alloc_reg();
+			const zend_tpde_machine_part_role role =
+				parts.representation.parts[part].semantic_role;
+			if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+				ASM(MOV64rm, value_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(frame_offset)));
+			} else if (role == ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+				ASM(MOV32rm, value_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(frame_offset
+							+ offsetof(zval, u1.type_info))));
+			} else {
+				return false;
+			}
+			value.set_modified();
+		}
+	}
+	return true;
+}
+
+/*
+ * ROPE_INIT/ROPE_ADD of a literal piece, which is a string: the piece,
+ * copied unless interned, goes into the rope's slot as the VM stores
+ * it. The literal comes from the executing op array.
+ */
+bool ZendCompilerX64::rope_literal_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	const zend_tpde_plan *plan = adaptor->plan();
+	if (!mir.has_value_operation || node.has_result
+			|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| plan->source_literals == nullptr
+			|| Z_TYPE(plan->source_literals[operation.op2.index])
+				!= IS_STRING
+			|| (operation.source_opcode != ZEND_ROPE_INIT
+				&& operation.source_opcode != ZEND_ROPE_ADD)) {
+		return false;
+	}
+	const bool initialize = operation.source_opcode == ZEND_ROPE_INIT;
+	const zend_mir_storage_id rope_storage = initialize
+		? operation.result_storage_id : operation.op1_storage_id;
+	if (!zend_mir_id_is_valid(rope_storage)) {
+		return false;
+	}
+	if (!frame_only_operands(node)) {
+		return false;
+	}
+	const uint64_t piece_offset =
+		frame_slot_offset(rope_storage)
+		+ (initialize ? 0 : uint64_t{operation.extended_value})
+			* sizeof(zend_string *);
+	const uint64_t literal_offset =
+		uint64_t{operation.op2.index} * sizeof(zval);
+	if (piece_offset > INT32_MAX - sizeof(void *)
+			|| literal_offset > INT32_MAX - sizeof(zval)) {
+		return false;
+	}
+	consume_operands(node);
+	const AsmReg frame_reg = canonical_frame_register();
+	ScratchReg piece{this};
+	const AsmReg piece_reg = piece.alloc_gp();
+	auto interned = text_writer.label_create();
+	emit_literal_base(piece_reg, frame_reg);
+	ASM(MOV64rm, piece_reg, FE_MEM(piece_reg, 0, FE_NOREG,
+		static_cast<int32_t>(literal_offset)));
+	ASM(TEST32mi, FE_MEM(piece_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(zend_refcounted_h, u.type_info))),
+		static_cast<int32_t>(IS_STR_INTERNED << GC_FLAGS_SHIFT));
+	generate_raw_jump(Jump::jne, interned);
+	ASM(ADD32mi, FE_MEM(piece_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))), 1);
+	label_place(interned);
+	ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
+		static_cast<int32_t>(piece_offset)), piece_reg);
+	return true;
+}
+
+bool ZendCompilerX64::execute_value_operation(InstContext &ctx) {
+	const zend_tpde_instruction &mir = *ctx.mir;
+	return execute_value_operation_with(ctx,
+		nullptr, mir.runtime_helper,
+		mir.has_value_operation
+			? mir.value_operation.source_opcode : UINT32_MAX);
+}
+
+/*
+ * Publish a machine value to its canonical frame slot for a helper that
+ * reads the slot, consuming the value. A cold block reloads parts whose
+ * stack copy is valid instead of trusting the register.
+ */
+bool ZendCompilerX64::materialize_cold_operand(
+		InstContext &ctx, IRValueRef operand, zend_mir_storage_id storage) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	if (!zend_mir_id_is_valid(storage)
+			|| zend_tpde_reference_cv_operand_slot(mir, storage)) {
+		auto consumed = val_ref(operand);
+		(void) consumed;
+		return true;
+	}
+	const uint64_t offset =
+		frame_slot_offset(storage);
+	if (offset > INT32_MAX - sizeof(zval)) {
+		return false;
+	}
+	const zend_tpde_machine_value_kind kind =
+		adaptor->machine_kind(operand);
+	auto value = val_ref(operand);
+	const ValueParts parts = val_parts(operand);
+	std::vector<ValuePartRef> locked_parts;
+	locked_parts.reserve(parts.count());
+	AsmReg payload_reg{};
+	bool have_payload = false;
+	for (uint32_t part = 0; part < parts.count(); ++part) {
+		locked_parts.emplace_back(value.part(part));
+		auto &part_value = locked_parts.back();
+		AsmReg part_reg;
+		ScratchReg stack_reload{this};
+		if (node.kind == Adaptor::InstKind::GuardedCold
+				&& part_value.has_assignment()
+				&& part_value.assignment().stack_valid()) {
+			auto assignment = part_value.assignment();
+			part_reg = stack_reload.alloc_gp();
+			load_from_stack(part_reg, assignment.frame_off(),
+				assignment.part_size());
+		} else {
+			part_reg = part_value.load_to_reg();
+		}
+		const zend_tpde_machine_part_role role =
+			parts.representation.parts[part].semantic_role;
+		if (role == ZEND_TPDE_MACHINE_PART_VALUE
+				|| role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+			payload_reg = part_reg;
+			have_payload = true;
+			if (kind == ZEND_TPDE_MACHINE_VALUE_F64) {
+				ASM(SSE_MOVSDmr,
+					FE_MEM(canonical_frame_register(), 0,
+						FE_NOREG, static_cast<int32_t>(offset)),
+					part_reg);
+			} else {
+				ASM(MOV64mr,
+					FE_MEM(canonical_frame_register(), 0,
+						FE_NOREG, static_cast<int32_t>(offset)),
+					part_reg);
+			}
+		} else if (role
+				== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+			ASM(MOV32mr,
+				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+					static_cast<int32_t>(
+						offset + offsetof(zval, u1.type_info))),
+				part_reg);
+		} else {
+			return false;
+		}
+	}
+	if (!have_payload) {
+		return false;
+	}
+	if (kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+			ScratchReg type_info{this};
+			auto type_info_reg = type_info.alloc_gp();
+			ASM(LEA32rm, type_info_reg, FE_MEM(payload_reg, 0, FE_NOREG, IS_FALSE));
+			ASM(MOV32mr,
+				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+					static_cast<int32_t>(
+						offset + offsetof(zval, u1.type_info))),
+				type_info_reg);
+		} else {
+			ScratchReg type_info{this};
+			auto type_info_reg = type_info.alloc_gp();
+			if (!emit_machine_zval_type_info(
+					kind, payload_reg, type_info_reg)) {
+				return false;
+			}
+			ASM(MOV32mr,
+				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+					static_cast<int32_t>(
+						offset + offsetof(zval, u1.type_info))),
+				type_info_reg);
+		}
+	}
+	return true;
+}
+
+bool ZendCompilerX64::compile_guarded_cold(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_instruction_record &record = ctx.record;
+	/* Boundary operands are published by execute_value_operation. */
+	auto materialize_cold_operand_unless_boundary = [&](
+			IRValueRef operand, zend_mir_storage_id storage,
+			uint32_t boundary_operand_index) {
+		return boundary_operand_index != UINT32_MAX
+			|| materialize_cold_operand(ctx, operand, storage);
+	};
+	if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
+			&& node.operands.size() >= 2
+			&& (!materialize_cold_operand_unless_boundary(node.operands[0],
+					mir.value_operation.op1_storage_id,
+					node.boxed_op1_boundary_operand_index)
+				|| !materialize_cold_operand_unless_boundary(node.operands[1],
+					mir.value_operation.op2_storage_id,
+					node.boxed_op2_boundary_operand_index))) {
+		return false;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
+			&& node.assign_op_right_operand_index
+				< node.operands.size()
+			&& node.operands[node.assign_op_right_operand_index]
+				!= IRValueRef{Adaptor::FRAME_VALUE}
+			&& !materialize_cold_operand_unless_boundary(
+				node.operands[node.assign_op_right_operand_index],
+				mir.value_operation.op2_storage_id,
+				node.boxed_op2_boundary_operand_index)) {
+		return false;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
+			&& node.assign_op_left_operand_index
+				< node.operands.size()
+			&& node.operands[node.assign_op_left_operand_index]
+				!= IRValueRef{Adaptor::FRAME_VALUE}
+			&& !materialize_cold_operand_unless_boundary(
+				node.operands[node.assign_op_left_operand_index],
+				mir.value_operation.op1_storage_id,
+				node.boxed_op1_boundary_operand_index)) {
+		return false;
+	}
+	if (node.continuation_block == UINT32_MAX
+			|| !execute_value_operation(ctx)) {
+		return false;
+	}
+	if (record.source_position_id
+				< user_opcode_result_reload_labels_.size()
+			&& adaptor->user_opcode_result_reload_source(
+				record.source_position_id)) {
+		label_place(user_opcode_result_reload_labels_[
+			record.source_position_id]);
+	}
+	if (node.has_result) {
+		const zend_mir_storage_id storage =
+			node.mutation_result
+				? mir.value_operation.op1_storage_id
+				: mir.value_operation.result_storage_id;
+		const uint64_t frame_offset =
+			frame_slot_offset(storage);
+		if (!zend_mir_id_is_valid(storage)
+				|| frame_offset > INT32_MAX - sizeof(zval)
+				|| (node.mutation_result
+					? !((adaptor->representation(node.result)
+								== ZEND_MIR_REPRESENTATION_I64
+							&& adaptor->exact_type(node.result)
+								== ZEND_MIR_SCALAR_TYPE_I64
+							&& adaptor->machine_kind(node.result)
+								== ZEND_TPDE_MACHINE_VALUE_I64)
+						|| (adaptor->representation(node.result)
+								== ZEND_MIR_REPRESENTATION_ZVAL
+							&& adaptor->machine_kind(node.result)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
+					: !((adaptor->representation(node.result)
+									== ZEND_MIR_REPRESENTATION_I64
+								&& adaptor->exact_type(node.result)
+									== ZEND_MIR_SCALAR_TYPE_I64
+								&& adaptor->machine_kind(node.result)
+									== ZEND_TPDE_MACHINE_VALUE_I64)
+							|| (adaptor->representation(node.result)
+									== ZEND_MIR_REPRESENTATION_I1
+								&& adaptor->exact_type(node.result)
+									== ZEND_MIR_SCALAR_TYPE_I1
+								&& adaptor->machine_kind(node.result)
+									== ZEND_TPDE_MACHINE_VALUE_BOOL)
+							|| adaptor->machine_kind(node.result)
+								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))) {
+			return false;
+		}
+		if (adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_I64
+				|| adaptor->machine_kind(node.result)
+					== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+			auto [result_ref, result] =
+				result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			load_slot_scalar(result_reg, adaptor->machine_kind(node.result),
+				frame_offset);
+			result.set_modified();
+			generate_branch_to_block(Jump::jmp,
+				IRBlockRef{node.continuation_block}, false, true);
+			return true;
+		}
+		auto result = result_ref(node.result);
+		const ValueParts parts = val_parts(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			auto value = result.part(part);
+			auto value_reg = value.alloc_reg();
+			const zend_tpde_machine_part_role role =
+				parts.representation.parts[part].semantic_role;
+			if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+				ASM(MOV64rm, value_reg,
+					FE_MEM(canonical_frame_register(), 0,
+						FE_NOREG,
+						static_cast<int32_t>(frame_offset)));
+			} else if (role
+					== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+				ASM(MOV32rm, value_reg,
+					FE_MEM(canonical_frame_register(), 0,
+						FE_NOREG,
+						static_cast<int32_t>(
+							frame_offset
+								+ offsetof(zval, u1.type_info))));
+			} else {
+				return false;
+			}
+			value.set_modified();
+		}
+	}
+	generate_branch_to_block(Jump::jmp,
+		IRBlockRef{node.continuation_block}, false, true);
+	return true;
+}
+
+bool ZendCompilerX64::branch_to_guarded_cold(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| node.argument_index == UINT32_MAX) {
+		return false;
+	}
+	for (IRValueRef operand : node.operands) {
+		if (adaptor->machine_reference(operand, nullptr)) {
+			continue;
+		}
+		auto consumed = val_ref(operand);
+		(void) consumed;
+	}
+	if (node.has_result && mir.deopt_exit_resume_plus_one != 0
+			&& !adaptor->typed_body()) {
+		/*
+		 * A deoptimization exit's continuation copies the fast result
+		 * (no PHI). The fast path always exits here; define the
+		 * unreachable result so the continuation compiles.
+		 */
+		auto result = result_ref(node.result);
+		const ValueParts parts = val_parts(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			auto value = result.part(part);
+			const AsmReg value_reg = value.alloc_reg();
+			if (value.bank() == tpde::x64::PlatformConfig::FP_BANK) {
+				ASM(SSE_XORPDrr, value_reg, value_reg);
+			} else {
+				ASM(XOR32rr, value_reg, value_reg);
+			}
+			value.set_modified();
+		}
+	} else if (node.has_result) {
+		/*
+		 * Selection rejected the nominal fast implementation, so this
+		 * block has no executable edge to the continuation PHI. Retire
+		 * the unreachable fast definition in TPDE's compile-time
+		 * liveness without emitting a value.
+		 */
+		auto unreachable_definition = result_ref(node.result);
+		unreachable_definition.reset();
+	}
+	if (node.continuation_block != UINT32_MAX
+			&& node.control_block != UINT32_MAX) {
+		for (IRValueRef phi : adaptor->block_phis(
+				IRBlockRef{node.continuation_block})) {
+			auto unreachable_phi_definition = result_ref(phi);
+			auto unreachable_phi_input = val_ref(
+				adaptor->val_as_phi(phi).incoming_val_for_block(
+					IRBlockRef{node.control_block}));
+			unreachable_phi_definition.reset();
+			unreachable_phi_input.reset();
+		}
+	}
+	generate_branch_to_block(Jump::jmp,
+		IRBlockRef{node.argument_index}, false, true);
+	continuation_edge_emitted_ = true;
+	return true;
+}
+
+const zend_tpde_machine_reference *ZendCompilerX64::operation_machine_reference(
+		InstContext &ctx, zend_tpde_machine_reference_kind expected) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_machine_reference *reference = nullptr;
+	return adaptor->operation_machine_reference(
+				node.mir_instruction_index, &reference)
+			&& reference->kind == expected
+		? reference : nullptr;
+}
+
+bool ZendCompilerX64::copy_slot(
+		InstContext &ctx, const zend_mir_source_operand_ref &source_operand,
+		zend_mir_storage_id source_storage, zend_mir_storage_id target_storage,
+		zend_mir_storage_id result_storage, bool move_source,
+		bool fresh_target) {
+	const Adaptor::InstNode &node = ctx.node;
+	/* A literal source is copied from the literal table, as
+	 * ZEND_ASSIGN copies a CONST operand. A fresh target, the result
+	 * temporary of QM_ASSIGN, holds nothing to release, as the VM's
+	 * QM_ASSIGN overwrites it. */
+	const bool literal_source =
+		source_operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	const uint64_t literal_offset =
+		uint64_t{source_operand.index} * sizeof(zval);
+	if (literal_source) {
+		move_source = false;
+	}
+	if ((literal_source
+			? literal_offset > INT32_MAX - sizeof(zval)
+			: source_storage == ZEND_MIR_ID_INVALID)
+			|| target_storage == ZEND_MIR_ID_INVALID
+			|| source_storage == target_storage
+			|| (result_storage != ZEND_MIR_ID_INVALID
+				&& (result_storage == source_storage
+					|| result_storage == target_storage))) {
+		return branch_to_guarded_cold(ctx);
+	}
+	const uint64_t source_offset = literal_source ? 0
+		: frame_slot_offset(source_storage);
+	const uint64_t target_offset =
+		frame_slot_offset(target_storage);
+	const uint64_t result_offset = result_storage == ZEND_MIR_ID_INVALID
+		? 0 : frame_slot_offset(result_storage);
+	if (source_offset > INT32_MAX - sizeof(zval)
+			|| target_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX) {
+		return false;
+	}
+	const auto successors = guarded_successors_of(node);
+
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg source_type{this};
+	ScratchReg target_type{this};
+	ScratchReg source_payload{this};
+	ScratchReg low_word{this};
+	ScratchReg probe{this};
+	ScratchReg decision{this};
+	ScratchReg target_address{this};
+	auto source_type_reg = source_type.alloc_gp();
+	auto target_type_reg = target_type.alloc_gp();
+	auto source_payload_reg = source_payload.alloc_gp();
+	auto low_word_reg = low_word.alloc_gp();
+	auto probe_reg = probe.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+	auto target_reg = target_address.alloc_gp();
+
+	const bool register_source = !literal_source
+		&& !node.operands.empty()
+		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+		&& adaptor->machine_value_is_register_authoritative(
+			node.operands[0]);
+	/* A register long, double or boolean is defined, no reference
+	 * and owns nothing: its type tests are decided here. */
+	const bool scalar_source = register_source
+		&& (adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_I64
+			|| adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_F64
+			|| adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_BOOL);
+
+	if (register_source) {
+		const zend_tpde_machine_value_kind source_kind =
+			adaptor->machine_kind(node.operands[0]);
+		if (source_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto source = val_ref(node.operands[0]);
+			const ValueParts parts = val_parts(node.operands[0]);
+			if (parts.count() != 2) {
+				return false;
+			}
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto value = source.part(part);
+				auto value_reg = value.load_to_reg();
+				switch (parts.representation.parts[part].semantic_role) {
+					case ZEND_TPDE_MACHINE_PART_PAYLOAD:
+						ASM(MOV64rr, source_payload_reg,
+							value_reg);
+						break;
+					case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
+						ASM(MOV32rr, source_type_reg,
+							value_reg);
+						break;
+					default:
+						return false;
+				}
+			}
+		} else {
+			auto [source_ref, source] =
+				val_ref_single(node.operands[0]);
+			if (source_kind == ZEND_TPDE_MACHINE_VALUE_F64) {
+				ASM(SSE_MOVQ_X2Grr, source_payload_reg,
+					source.load_to_reg());
+			} else {
+				ASM(MOV64rr, source_payload_reg,
+					source.load_to_reg());
+			}
+			if (source_kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
+				ASM(LEA32rm, source_type_reg, FE_MEM(source_payload_reg, 0, FE_NOREG, IS_FALSE));
+			} else {
+				if (!emit_machine_zval_type_info(
+						source_kind, source_payload_reg,
+						source_type_reg)) {
+					return false;
+				}
+			}
+		}
+	} else if (literal_source) {
+		emit_literal_base(probe_reg, frame_reg);
+		ASM(MOV64rm, source_payload_reg,
+			FE_MEM(probe_reg, 0, FE_NOREG,
+				static_cast<int32_t>(literal_offset)));
+		ASM(MOV32rm, source_type_reg,
+			FE_MEM(probe_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					literal_offset + offsetof(zval, u1.type_info))));
+	} else {
+		ASM(MOV32rm, source_type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					source_offset + offsetof(zval, u1.type_info))));
+		ASM(MOV64rm, source_payload_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(source_offset)));
+	}
+	if (!literal_source && !scalar_source
+			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		ASM(CMP32ri, source_type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::je, slow);
+	}
+	if (!literal_source && !register_source && !move_source
+			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		/* A CV bound by global, static or & is read through its
+		 * reference and copied, as ZEND_ASSIGN dereferences it. */
+		ASM(CMP8ri, source_type_reg, IS_REFERENCE);
+		emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
+			emit_deref_value(source_type_reg, source_payload_reg, false);
+			ASM(CMP8ri, source_type_reg, IS_UNDEF);
+			generate_raw_jump(Jump::je, slow);
+			/* The target may be the same reference, whose release must
+			 * not free the value copied: the helper handles that. */
+			if (!fresh_target) {
+				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(target_offset
+						+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+				generate_raw_jump(Jump::je, slow);
+			}
+		});
+	} else if (!literal_source && !scalar_source
+			&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+				|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
+		ASM(CMP8ri, source_type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::je, slow);
+	}
+	/*
+	 * An immutable counted value must not get a refcount write and is
+	 * duplicated as the VM does it: the cold path copies it.
+	 */
+	if (!scalar_source) {
+		ASM(TEST32ri, source_type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		auto source_mutable = text_writer.label_create();
+		generate_raw_jump(Jump::je, source_mutable);
+		ASM(TEST32mi,
+			FE_MEM(source_payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, u.type_info))),
+			GC_IMMUTABLE);
+		generate_raw_jump(Jump::jne, slow);
+		label_place(source_mutable);
+	}
+	if (result_storage != ZEND_MIR_ID_INVALID) {
+		ASM(CMP32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					result_offset + offsetof(zval, u1.type_info))),
+			IS_DOUBLE);
+		generate_raw_jump(Jump::ja, slow);
+	}
+	ASM(LEA64rm, target_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(target_offset)));
+	auto target_released = text_writer.label_create();
+	if (!fresh_target) {
+		/* A CV bound by global, static or & is written through its
+		 * reference, like zend_assign_to_variable(); a reference with
+		 * typed property sources needs the helper's coercion. */
+		ASM(MOV32rm, target_type_reg,
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP8ri, target_type_reg, IS_REFERENCE);
+		auto target_plain = text_writer.label_create();
+		auto target_reference = text_writer.label_create();
+		generate_raw_jump(Jump::je, target_reference);
+		/* The reference is followed out of the hot code. */
+		const bool cold_reference = !text_writer.in_cold_area();
+		if (cold_reference) {
+			cold_begin();
+		} else {
+			generate_raw_jump(Jump::jmp, target_plain);
+		}
+		label_place(target_reference);
+		ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+		ASM(CMP64mi,
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_reference, sources.ptr))),
+			0);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(ADD64ri, target_reg,
+			static_cast<int32_t>(offsetof(zend_reference, val)));
+		ASM(MOV32rm, target_type_reg,
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		if (cold_reference) {
+			generate_raw_jump(Jump::jmp, target_plain);
+			cold_end();
+		}
+		label_place(target_plain);
+		ASM(TEST32ri, target_type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::je, target_released);
+		/*
+		 * The old value keeps another owner, so only its refcount
+		 * drops. GC_DTOR_NO_REF() must still purple a shared
+		 * collectable value that may leak; one already buffered or not
+		 * collectable needs nothing more. The helper does the rest.
+		 * This is the last check: the release follows directly.
+		 * A string's last owner frees it out of line, which runs no
+		 * code and raises nothing, before the store.
+		 */
+		auto release = text_writer.label_create();
+		ASM(MOV64rm, low_word_reg,
+			FE_MEM(target_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rm, probe_reg,
+			FE_MEM(low_word_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))));
+		ASM(CMP32ri, probe_reg, 1);
+		{
+			auto last_owner = text_writer.label_create();
+			generate_raw_jump(Jump::jle, last_owner);
+			const bool cold_free = !text_writer.in_cold_area();
+			auto freed_join = text_writer.label_create();
+			if (cold_free) {
+				cold_begin();
+			} else {
+				generate_raw_jump(Jump::jmp, freed_join);
+			}
+			label_place(last_owner);
+			ASM(CMP8ri, target_type_reg, IS_STRING);
+			generate_raw_jump(Jump::jne, slow);
+			emit_preserving_call(static_cast<uint64_t>(
+					register_file.used),
+				ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW, [&] {
+					ASM(MOV64rr, FE_DI, target_reg);
+				}, [] {});
+			generate_raw_jump(Jump::jmp, target_released);
+			if (cold_free) {
+				cold_end();
+			}
+			label_place(freed_join);
+		}
+		ASM(TEST32ri, target_type_reg,
+			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::je, release);
+		ASM(TEST32mi,
+			FE_MEM(low_word_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, u.type_info))),
+			static_cast<int32_t>(
+				GC_INFO_MASK | (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+		generate_raw_jump(Jump::je, slow);
+		label_place(release);
+		ASM(SUB32mi,
+			FE_MEM(low_word_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))),
+			1);
+	}
+	label_place(target_released);
+	const uint32_t source_refcount_increments =
+		(!move_source ? 1 : 0)
+		+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
+	if (source_refcount_increments != 0 && !scalar_source) {
+		emit_try_addref(source_type_reg, source_payload_reg,
+			static_cast<int32_t>(source_refcount_increments));
+	}
+	ASM(MOV64mr,
+		FE_MEM(target_reg, 0, FE_NOREG, 0),
+		source_payload_reg);
+	ASM(MOV32mr,
+		FE_MEM(target_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))),
+		source_type_reg);
+	if (result_storage != ZEND_MIR_ID_INVALID) {
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset)),
+			source_payload_reg);
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					result_offset + offsetof(zval, u1.type_info))),
+			source_type_reg);
+	}
+	if (move_source) {
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+				source_offset + offsetof(zval, u1.type_info))),
+			IS_UNDEF);
+	}
+	if (!register_source) {
+		/* Nothing to publish on the cold edge: leave directly. */
+		source_type.reset();
+		target_type.reset();
+		source_payload.reset();
+		low_word.reset();
+		probe.reset();
+		target_address.reset();
+		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+			decision.reset();
+			frame_scratch.reset();
+			generate_guarded_direct_exit(
+				slow, successors[1], successors[0]);
+			return true;
+		}
+	}
+	ASM(MOV32ri, decision_reg, 0);
+	cold_begin();
+	label_place(slow);
+	if (register_source) {
+		/*
+		 * The helper consumes canonical Zend slots.  Keep the source
+		 * register-authoritative on the hot edge and materialize it only
+		 * when the generated guard actually selects the cold edge.
+		 */
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(source_offset)),
+			source_payload_reg);
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					source_offset + offsetof(zval, u1.type_info))),
+			source_type_reg);
+	}
+	ASM(MOV32ri, decision_reg, 1);
+	generate_raw_jump(Jump::jmp, done);
+	cold_end();
+	label_place(done);
+	source_type.reset();
+	target_type.reset();
+	source_payload.reset();
+	low_word.reset();
+	probe.reset();
+	target_address.reset();
+	frame_scratch.reset();
+	generate_guarded_decision_branch(
+		std::move(decision), successors[1], successors[0]);
+	return true;
+}
+
+bool ZendCompilerX64::copy_temporary_slot(InstContext &ctx) {
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_storage_id source_storage =
+		mir.value_operation.op1_storage_id;
+	const zend_mir_storage_id result_storage =
+		mir.value_operation.result_storage_id;
+	if (source_storage == ZEND_MIR_ID_INVALID
+			|| result_storage == ZEND_MIR_ID_INVALID
+			|| source_storage == result_storage) {
+		return branch_to_guarded_cold(ctx);
+	}
+	const uint64_t source_offset =
+		frame_slot_offset(source_storage);
+	const uint64_t result_offset =
+		frame_slot_offset(result_storage);
+	if (source_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)) {
+		return branch_to_guarded_cold(ctx);
+	}
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_reg = frame.load_to_reg();
+	ScratchReg type{this};
+	ScratchReg value{this};
+	ScratchReg probe{this};
+	auto type_reg = type.alloc_gp();
+	auto value_reg = value.alloc_gp();
+	auto probe_reg = probe.alloc_gp();
+
+	ASM(MOV32rm, type_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				source_offset + offsetof(zval, u1.type_info))));
+	ASM(MOV64rm, value_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(source_offset)));
+	emit_try_addref(type_reg, value_reg);
+	ASM(MOV64mr,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(result_offset)),
+		value_reg);
+	ASM(MOV32mr,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				result_offset + offsetof(zval, u1.type_info))),
+		type_reg);
+	return true;
+}
+
+bool ZendCompilerX64::free_temporary_slot(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_storage_id source_storage =
+		mir.value_operation.op1_storage_id;
+	if (source_storage == ZEND_MIR_ID_INVALID) {
+		return branch_to_guarded_cold(ctx);
+	}
+	const uint64_t source_offset =
+		frame_slot_offset(source_storage);
+	if (source_offset > INT32_MAX - sizeof(zval)) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX) {
+		return false;
+	}
+	const auto successors = guarded_successors_of(node);
+	auto slow = text_writer.label_create();
+	auto released = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg type{this};
+	ScratchReg value{this};
+	ScratchReg probe{this};
+	ScratchReg decision{this};
+	auto type_reg = type.alloc_gp();
+	auto value_reg = value.alloc_gp();
+	auto probe_reg = probe.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+
+	ASM(MOV32rm, type_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				source_offset + offsetof(zval, u1.type_info))));
+	ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+	generate_raw_jump(Jump::je, released);
+	ASM(MOV64rm, value_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(source_offset)));
+	ASM(CMP32mi,
+		FE_MEM(value_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_refcounted_h, refcount))),
+		1);
+	generate_raw_jump(Jump::jle, slow);
+	ASM(SUB32mi,
+		FE_MEM(value_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_refcounted_h, refcount))),
+		1);
+	label_place(released);
+	ASM(MOV32mi,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				source_offset + offsetof(zval, u1.type_info))),
+		IS_UNDEF);
+	auto done = text_writer.label_create();
+	type.reset();
+	value.reset();
+	probe.reset();
+	/* The slow path jumps before any release: the cold block may
+	 * take it directly. */
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return true;
+}
+
+/*
+ * FETCH_DIM_R, FETCH_DIM_IS (??), isset() and empty() of an array
+ * element whose container, key and result live in frame slots or
+ * literals, composed of EncodeGen snippets:
+ * zend_native_array_find_literal() or _find_key() probe the element
+ * without changing anything, a temporary container is consumed only
+ * when another owner keeps it alive, and every undecided probe takes
+ * the guarded cold block, whose helper repeats the whole operation.
+ * Returns 1 when emitted, 0 when the form does not apply and -1 on an
+ * encoding failure.
+ */
+int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
+	const IRInstRef instruction = ctx.instruction;
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	IRInstRef &reuse_read = ctx.reuse_read;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| !mir.has_value_operation
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX) {
+		return 0;
+	}
+	/* A read's integer key may be a register value that its frame
+	 * slot does not canonically hold: the first operand, an exact
+	 * integer, used from its register. */
+	const bool register_key = (access == ElementAccess::Read
+			|| access == ElementAccess::Coalesce
+			|| access == ElementAccess::Write)
+		&& operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& !node.operands.empty()
+		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+		&& !zend_mir_id_is_valid(
+			adaptor->canonical_storage(node.operands[0]))
+		&& adaptor->machine_kind(node.operands[0])
+			== ZEND_TPDE_MACHINE_VALUE_I64
+		&& adaptor->exact_type(node.operands[0])
+			== ZEND_MIR_SCALAR_TYPE_I64
+		&& adaptor->representation(node.operands[0])
+			== ZEND_MIR_REPRESENTATION_I64;
+	/* A container or key held as a machine value is published to its
+	 * frame slot first, as the helper of the cold block reads it. */
+	std::vector<std::pair<IRValueRef, zend_mir_storage_id>> published;
+	for (IRValueRef operand : node.operands) {
+		if (operand == IRValueRef{Adaptor::FRAME_VALUE}
+				|| operand == IRValueRef{
+					Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+			continue;
+		}
+		/* An element reference only describes the packed form; the
+		 * constant of a literal integer key is read from the literal
+		 * table. */
+		uint64_t constant_bits = 0;
+		if ((register_key && operand == node.operands[0])
+				|| adaptor->machine_reference(operand, nullptr)
+				|| (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& adaptor->constant(operand, &constant_bits)
+					&& adaptor->plan()->source_literals != nullptr
+					&& operation.op2.index
+						< adaptor->plan()->source_literal_count
+					&& Z_TYPE(adaptor->plan()->source_literals[
+						operation.op2.index]) == IS_LONG
+					&& static_cast<zend_long>(constant_bits)
+						== Z_LVAL(adaptor->plan()->source_literals[
+							operation.op2.index]))) {
+			continue;
+		}
+		const zend_mir_storage_id storage =
+			adaptor->canonical_storage(operand);
+		const zend_tpde_machine_value_kind kind =
+			adaptor->machine_kind(operand);
+		if (!zend_mir_id_is_valid(storage)
+				|| (storage != operation.op1_storage_id
+					&& storage != operation.op2_storage_id
+					&& !(access == ElementAccess::Assign
+						&& storage == operation.auxiliary_storage_id))
+				|| (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					? val_parts(operand).count() != 2
+					: kind != ZEND_TPDE_MACHINE_VALUE_BOOL
+						&& kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+						&& kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+						&& zend_tpde_machine_value_zval_type_info(kind)
+							== IS_UNDEF)) {
+			return 0;
+		}
+		for (const auto &[other, other_storage] : published) {
+			if (other_storage == storage) {
+				return 0;
+			}
+		}
+		published.emplace_back(operand, storage);
+	}
+	const auto successors = guarded_successors_of(node);
+	auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
+		return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+			? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+	};
+	const bool reads = access == ElementAccess::Read
+		|| access == ElementAccess::Coalesce;
+	const bool tests = access == ElementAccess::Isset
+		|| access == ElementAccess::Empty;
+	/* An assignment replaces an existing element in place: the write
+	 * fetch's lookup, then the value. */
+	const bool assigns = access == ElementAccess::Assign;
+	const bool writes = access == ElementAccess::Write || assigns;
+	const bool container_literal =
+		operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	const bool container_temporary =
+		slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_TMP;
+	/* The VAR of a write fetch holds a previous fetch's INDIRECT. */
+	const bool container_var = writes
+		&& slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_VAR;
+	const bool key_literal =
+		operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	if ((!container_literal && !container_temporary && !container_var
+				&& slot_kind(operation.op1) != ZEND_MIR_SOURCE_SLOT_CV)
+			|| (writes && (container_literal || container_temporary
+				|| node.has_result))
+			|| (!key_literal
+				&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_CV
+				&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_TMP)
+			|| (!assigns
+				&& slot_kind(operation.result) != ZEND_MIR_SOURCE_SLOT_TMP
+				&& slot_kind(operation.result)
+					!= ZEND_MIR_SOURCE_SLOT_VAR)
+			|| (assigns
+				&& (operation.result.kind
+						!= ZEND_MIR_SOURCE_OPERAND_UNUSED
+					|| (operation.auxiliary.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& slot_kind(operation.auxiliary)
+							!= ZEND_MIR_SOURCE_SLOT_CV
+						&& slot_kind(operation.auxiliary)
+							!= ZEND_MIR_SOURCE_SLOT_TMP)
+					|| (operation.auxiliary.kind
+							!= ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& (!zend_mir_id_is_valid(
+								operation.auxiliary_storage_id)
+							|| operation.auxiliary_storage_id
+								== operation.op1_storage_id))))
+			|| (!container_literal
+				&& !zend_mir_id_is_valid(operation.op1_storage_id))
+			|| (!key_literal && !register_key
+				&& !zend_mir_id_is_valid(operation.op2_storage_id))
+			|| (!assigns
+				&& (!zend_mir_id_is_valid(operation.result_storage_id)
+					|| operation.result_storage_id
+						== operation.op1_storage_id
+					|| operation.result_storage_id
+						== operation.op2_storage_id))
+			|| (node.has_result && reads
+				&& !((adaptor->machine_kind(node.result)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& val_parts(node.result).count() == 2)
+					|| (adaptor->machine_kind(node.result)
+							== ZEND_TPDE_MACHINE_VALUE_I64
+						&& adaptor->exact_type(node.result)
+							== ZEND_MIR_SCALAR_TYPE_I64
+						&& val_parts(node.result).count() == 1)))
+			|| (node.has_result && tests
+				&& val_parts(node.result).count() != 1)
+			|| (node.has_result && access == ElementAccess::Coalesce
+				&& adaptor->machine_kind(node.result)
+					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+		return 0;
+	}
+	auto frame_offset = [](zend_mir_storage_id storage) {
+		return frame_slot_offset(storage);
+	};
+	const uint64_t container_offset = container_literal
+		? uint64_t{operation.op1.index} * sizeof(zval)
+		: frame_offset(operation.op1_storage_id);
+	const uint64_t key_offset = key_literal
+		? uint64_t{operation.op2.index} * sizeof(zval)
+		: !zend_mir_id_is_valid(operation.op2_storage_id) ? 0
+		: frame_offset(operation.op2_storage_id);
+	const uint64_t result_offset = assigns
+		? 0 : frame_offset(operation.result_storage_id);
+	const bool value_literal = assigns
+		&& operation.auxiliary.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	/* An assignment's literal key is an integer or a string with its
+	 * hash, which the compiler made non-numeric. */
+	if (assigns && key_literal
+			&& (adaptor->plan()->source_literals == nullptr
+				|| operation.op2.index
+					>= adaptor->plan()->source_literal_count
+				|| (Z_TYPE(adaptor->plan()->source_literals[
+						operation.op2.index]) != IS_LONG
+					&& (Z_TYPE(adaptor->plan()->source_literals[
+							operation.op2.index]) != IS_STRING
+						|| ZSTR_H(Z_STR(adaptor->plan()->source_literals[
+							operation.op2.index])) == 0)))) {
+		return 0;
+	}
+	const uint64_t value_offset = !assigns ? 0
+		: value_literal
+			? uint64_t{operation.auxiliary.index} * sizeof(zval)
+			: frame_offset(operation.auxiliary_storage_id);
+	/* A CV container Zend's type inference proves to be an array,
+	 * neither undefined nor a reference: the known_* lookups take its
+	 * table without testing the zval. Some of them need one scratch
+	 * register more than the general lookups. */
+	const bool known_array = [&] {
+		const zend_tpde_plan *plan = adaptor->plan();
+		if (container_literal || container_temporary || container_var
+				|| unlocked_gp_registers() < 10
+				|| plan->source_opcodes == nullptr
+				|| operation.source_position_id
+					>= plan->source_opcode_count) {
+			return false;
+		}
+		const zend_tpde_source_opcode &source =
+			plan->source_opcodes[operation.source_position_id];
+		return source.op1_type == IS_CV
+			&& source.op1_var == container_offset
+			&& (source.op1_may_be & (MAY_BE_ANY | MAY_BE_UNDEF
+					| MAY_BE_REF | MAY_BE_INDIRECT)) == MAY_BE_ARRAY;
+	}();
+	/* The lookup snippets use up to seven scratch registers; with the
+	 * literal register held across them, one stays spare. */
+	if (container_offset > INT32_MAX - sizeof(zval)
+			|| key_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)
+			|| value_offset > INT32_MAX - sizeof(zval)
+			|| unlocked_gp_registers() < 9) {
+		return 0;
+	}
+	for (const auto &[operand, storage] : published) {
+		if (!materialize_cold_operand(ctx, operand, storage)) {
+			return -1;
+		}
+	}
+
+	auto slow = text_writer.label_create();
+	auto absent = text_writer.label_create();
+	auto answered = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg decision{this};
+	ScratchReg answer{this};
+	/* A literal key the compiler can read is passed as what it is: an
+	 * integer index, or a string with its hash. A runtime key Zend's
+	 * type inference proves may be an integer and never a string is
+	 * passed as an index read from its slot; unless it is proven an
+	 * integer (neither undefined nor a reference), any other type
+	 * takes the helper. */
+	enum class LiteralKey { None, Index, String, Register };
+	LiteralKey literal_key = LiteralKey::None;
+	uint64_t literal_key_value = 0;
+	bool register_key_checked = false;
+	{
+		const zend_tpde_plan *plan = adaptor->plan();
+		if (register_key) {
+			literal_key = LiteralKey::Register;
+		} else if (!key_literal && unlocked_gp_registers() >= 10
+				&& plan->source_opcodes != nullptr
+				&& operation.source_position_id
+					< plan->source_opcode_count) {
+			const zend_tpde_source_opcode &source =
+				plan->source_opcodes[operation.source_position_id];
+			const uint32_t may_be = source.op2_may_be
+				& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF
+					| MAY_BE_INDIRECT);
+			if (source.op2_type != IS_CONST
+					&& source.op2_var == key_offset
+					&& source.op2_may_be != UINT32_MAX
+					&& (may_be & MAY_BE_LONG) != 0
+					&& (may_be & MAY_BE_STRING) == 0) {
+				literal_key = LiteralKey::Register;
+				register_key_checked = may_be != MAY_BE_LONG;
+			}
+		}
+		if (key_literal && plan->source_literals != nullptr
+				&& operation.op2.index < plan->source_literal_count) {
+			const zval *literal =
+				&plan->source_literals[operation.op2.index];
+			if (Z_TYPE_P(literal) == IS_LONG) {
+				literal_key = LiteralKey::Index;
+				literal_key_value =
+					static_cast<uint64_t>(Z_LVAL_P(literal));
+			} else if (Z_TYPE_P(literal) == IS_STRING
+					&& ZSTR_H(Z_STR_P(literal)) != 0) {
+				literal_key = LiteralKey::String;
+				literal_key_value = ZSTR_H(Z_STR_P(literal));
+			}
+		}
+	}
+	ScratchReg literals{this};
+	AsmReg literals_reg = frame_reg;
+	if (container_literal || value_literal
+			|| (key_literal && literal_key != LiteralKey::Index)) {
+		literals_reg = literals.alloc_gp();
+		emit_literal_base(literals_reg, frame_reg);
+	}
+	auto address = [](AsmReg base, uint64_t offset) {
+		return GenericValuePart{GenericValuePart::Expr{
+			base, static_cast<int64_t>(offset)}};
+	};
+	/* The operation consumes a temporary key: one that needs a release
+	 * (a counted string) takes the helper. */
+	if (slot_kind(operation.op2) == ZEND_MIR_SOURCE_SLOT_TMP
+			&& !register_key) {
+		emit_counted_check(frame_reg, static_cast<int32_t>(key_offset),
+			slow);
+	}
+	/* An assignment may insert into the array before it stores the
+	 * value, so the value is checked first: defined and not a
+	 * reference. An array value is copied after the insertion as
+	 * ZEND_ASSIGN_DIM copies it: only the container's own zval holds
+	 * the unshared array, which is another storage (see above) or the
+	 * target of a VAR's INDIRECT, where the VM stores it the same. */
+	if (assigns && !value_literal) {
+		ScratchReg value_type{this};
+		const AsmReg type_reg = value_type.alloc_gp();
+		ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(value_offset
+				+ offsetof(zval, u1.v.type))));
+		ASM(CMP32ri, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::je, slow);
+		ASM(CMP32ri, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::je, slow);
+	}
+	const AsmReg container_base =
+		container_literal ? literals_reg : frame_reg;
+	ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
+	auto container_address = address(container_base, container_offset);
+	auto key_address = key_literal
+		? address(literals_reg, key_offset)
+		: address(frame_reg, key_offset);
+	/*
+	 * A probe that cannot decide a key (a string without its hash, a
+	 * bucket key of the same hash that is another string, a numeric
+	 * string) finds the element in C out of the hot code, with the
+	 * probe's result encoding, before anything takes the helper.
+	 */
+	static_assert(ZEND_NATIVE_FIND_UNKNOWN == ZEND_NATIVE_ELEMENT_UNKNOWN
+		&& ZEND_NATIVE_FIND_ABSENT == ZEND_NATIVE_ELEMENT_ABSENT
+		&& ZEND_NATIVE_FIND_ISSET_UNKNOWN == ZEND_NATIVE_ISSET_UNKNOWN);
+	const bool find_element = !writes && !register_key
+		&& literal_key != LiteralKey::Index
+		&& literal_key != LiteralKey::Register
+		&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
+	auto find_element_filter = [&](tpde::Label undecided) {
+		emit_find_element_filter(container_base,
+			static_cast<int32_t>(container_offset),
+			key_literal ? literals_reg : frame_reg,
+			static_cast<int32_t>(key_offset), undecided);
+	};
+	auto find_element_call = [&](AsmReg out_reg, uint64_t mode) {
+		emit_find_element_call(out_reg, mode, frame_reg, container_base,
+			static_cast<int32_t>(container_offset),
+			key_literal ? literals_reg : frame_reg,
+			static_cast<int32_t>(key_offset));
+	};
+	/*
+	 * A runtime key: a string looks up inline, any other key (an
+	 * integer, a reference) out of line, both into one register. Only
+	 * with a register to spare, so that neither lookup evicts.
+	 */
+	const bool split_string_key = !key_literal
+		&& unlocked_gp_registers() >= 10;
+	auto string_key_split = [&](auto &&string_lookup,
+			auto &&general_lookup, ValuePart &out) -> bool {
+		ScratchReg common{this};
+		const AsmReg common_reg = common.alloc_gp();
+		auto other = text_writer.label_create();
+		auto joined = text_writer.label_create();
+		ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(key_offset
+				+ offsetof(zval, u1.v.type))), IS_STRING);
+		generate_raw_jump(Jump::jne, other);
+		{
+			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+			if (!string_lookup(value)) {
+				return false;
+			}
+			mov(common_reg, value.cur_reg_or_load(this), 8);
+			value.reset(this);
+		}
+		const bool cold_other = !text_writer.in_cold_area();
+		if (cold_other) {
+			cold_begin();
+		} else {
+			generate_raw_jump(Jump::jmp, joined);
+		}
+		label_place(other);
+		{
+			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+			if (!general_lookup(value)) {
+				return false;
+			}
+			mov(common_reg, value.cur_reg_or_load(this), 8);
+			value.reset(this);
+		}
+		if (cold_other) {
+			generate_raw_jump(Jump::jmp, joined);
+			cold_end();
+		}
+		label_place(joined);
+		out.set_value(this, std::move(common));
+		return true;
+	};
+	/* An isset whose element a read reuses finds it in the general
+	 * form, which also leaves its address; a read that reuses one skips
+	 * its own lookup. */
+	const bool reuse_store = access == ElementAccess::Isset
+		&& reuse_read != IRInstRef{UINT32_MAX} && !container_temporary
+		&& !register_key && literal_key != LiteralKey::Register;
+	const bool reuse_load = (access == ElementAccess::Read
+			|| (access == ElementAccess::Write && !container_var))
+		&& lookup_reuse_armed(instruction) && !register_key
+		&& literal_key != LiteralKey::Register
+		&& unlocked_gp_registers() >= 10;
+	/* isset() of an array element decides in one snippet: set, not
+	 * set, or the helper's. */
+	if (access == ElementAccess::Isset && !container_temporary
+			&& !reuse_store) {
+		ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+		bool tested;
+		if (literal_key == LiteralKey::Index) {
+			tested = (known_array
+			? EncodeBase::encode_zend_native_known_isset_idx(
+				std::move(container_address),
+				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+					tpde::x64::PlatformConfig::GP_BANK}}, value)
+			: EncodeBase::encode_zend_native_array_isset_idx(
+				std::move(container_address),
+				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+					tpde::x64::PlatformConfig::GP_BANK}}, value));
+		} else if (literal_key == LiteralKey::String) {
+			ScratchReg name{this};
+			ASM(MOV64rm, name.alloc_gp(),
+				FE_MEM(literals_reg, 0, FE_NOREG,
+					static_cast<int32_t>(key_offset)));
+			tested = (known_array
+			? EncodeBase::encode_zend_native_known_isset_str(
+				std::move(container_address),
+				GenericValuePart{std::move(name)},
+				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+					tpde::x64::PlatformConfig::GP_BANK}}, value)
+			: EncodeBase::encode_zend_native_array_isset_str(
+				std::move(container_address),
+				GenericValuePart{std::move(name)},
+				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
+					tpde::x64::PlatformConfig::GP_BANK}}, value));
+		} else if (key_literal) {
+			tested = (known_array
+			? EncodeBase::encode_zend_native_known_isset_literal(
+				std::move(container_address), std::move(key_address),
+				value)
+			: EncodeBase::encode_zend_native_array_isset_literal(
+				std::move(container_address), std::move(key_address),
+				value));
+		} else if (split_string_key) {
+			tested = string_key_split(
+				[&](ValuePart &out) {
+					return (known_array
+			? EncodeBase::encode_zend_native_known_isset_string_key(
+						address(container_base, container_offset),
+						address(frame_reg, key_offset), out)
+			: EncodeBase::encode_zend_native_array_isset_string_key(
+						address(container_base, container_offset),
+						address(frame_reg, key_offset), out));
+				},
+				[&](ValuePart &out) {
+					return (known_array
+			? EncodeBase::encode_zend_native_known_isset_key(
+						address(container_base, container_offset),
+						address(frame_reg, key_offset), out)
+			: EncodeBase::encode_zend_native_array_isset_key(
+						address(container_base, container_offset),
+						address(frame_reg, key_offset), out));
+				}, value);
+		} else {
+			tested = (known_array
+			? EncodeBase::encode_zend_native_known_isset_key(
+				std::move(container_address), std::move(key_address),
+				value)
+			: EncodeBase::encode_zend_native_array_isset_key(
+				std::move(container_address), std::move(key_address),
+				value));
+		}
+		if (!tested) {
+			return -1;
+		}
+		auto decision_reg = decision.alloc_gp();
+		auto answer_reg = answer.alloc_gp();
+		mov(answer_reg, value.cur_reg_or_load(this), 8);
+		value.reset(this);
+		ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
+		if (find_element) {
+			auto complete = text_writer.label_create();
+			auto known = text_writer.label_create();
+			generate_raw_jump(Jump::je, complete);
+			const bool cold_find = !text_writer.in_cold_area();
+			if (cold_find) {
+				cold_begin();
+			} else {
+				generate_raw_jump(Jump::jmp, known);
+			}
+			label_place(complete);
+			find_element_filter(slow);
+			find_element_call(answer_reg,
+				ZEND_NATIVE_FIND_TEST | ZEND_NATIVE_FIND_ISSET);
+			ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
+			generate_raw_jump(Jump::je, slow);
+			generate_raw_jump(Jump::jmp, known);
+			if (cold_find) {
+				cold_end();
+			}
+			label_place(known);
+		} else {
+			generate_raw_jump(Jump::je, slow);
+		}
+		literals.reset();
+		if (node.has_result) {
+			auto [result_ref, result] = result_ref_single(node.result);
+			mov(result.alloc_reg(), answer_reg, 8);
+			result.set_modified();
+		} else {
+			/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
+			ASM(ADD32ri, answer_reg, IS_FALSE);
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))),
+				answer_reg);
+		}
+		answer.reset();
+		finish_guarded(slow, done, std::move(decision), frame_scratch,
+			successors);
+		return 1;
+	}
+	auto reuse_cached = text_writer.label_create();
+	auto reuse_joined = text_writer.label_create();
+	if (reuse_store) {
+		ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
+	} else if (reuse_load) {
+		/* A write fetch changes the found element in place only in an
+		 * array without another owner (zend_native_probe_array_w()); the
+		 * isset found it, so the CV holds an array, maybe through a
+		 * reference. */
+		auto shared = text_writer.label_create();
+		if (writes) {
+			ScratchReg table{this};
+			const AsmReg table_reg = table.alloc_gp();
+			auto direct = text_writer.label_create();
+			ASM(MOV64rm, table_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(container_offset)));
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(container_offset
+					+ offsetof(zval, u1.v.type))), IS_REFERENCE);
+			emit_cold_branch(Jump::je, direct, [&] {
+				ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_reference, val))));
+			});
+			ASM(CMP32mi, FE_MEM(table_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_refcounted_h,
+					refcount))), 1);
+			generate_raw_jump(Jump::jne, shared);
+		}
+		ASM(CMP64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
+		generate_raw_jump(Jump::jne, reuse_cached);
+		label_place(shared);
+	}
+	/*
+	 * An assignment under a string key, or a key of unknown type, looks
+	 * its element up, or inserts it, in one call of
+	 * zend_native_array_assign_lookup() rather than repeating
+	 * zend_hash_lookup() inline at every site. NULL (UNKNOWN) takes the
+	 * helper.
+	 */
+	const bool lookup_call = assigns
+		&& literal_key != LiteralKey::Index
+		&& literal_key != LiteralKey::Register;
+	bool found;
+	if (lookup_call) {
+		if (container_var) {
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(container_offset
+					+ offsetof(zval, u1.v.type))), IS_INDIRECT);
+			generate_raw_jump(Jump::jne, slow);
+		}
+		ScratchReg looked{this};
+		const AsmReg looked_reg = looked.alloc_gp();
+		const uint64_t live_registers = static_cast<uint64_t>(
+			register_file.used) & ~(uint64_t{1} << looked_reg.id());
+		emit_preserving_call(live_registers,
+			ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP, [&] {
+				/* The key's address first, through a caller-saved
+				 * register neither base uses, as the frame or the
+				 * literals may sit in either argument register. */
+				const AsmReg key_base =
+					key_literal ? literals_reg : frame_reg;
+				FeRegGP key_temp = FE_AX;
+				for (const auto &[id, reg] : {std::pair{AsmReg::AX, FE_AX},
+						std::pair{AsmReg::CX, FE_CX},
+						std::pair{AsmReg::DX, FE_DX}}) {
+					if (frame_reg.id() != id && key_base.id() != id) {
+						key_temp = reg;
+						break;
+					}
+				}
+				ASM(LEA64rm, key_temp, FE_MEM(key_base, 0, FE_NOREG,
+					static_cast<int32_t>(key_offset)));
+				/* The container's zval: the CV, or the target of the
+				 * VAR's INDIRECT. */
+				if (container_var) {
+					ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(container_offset)));
+				} else {
+					ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(container_offset)));
+				}
+				ASM(MOV64rr, FE_SI, key_temp);
+			}, [&] {
+				ASM(MOV64rr, looked_reg, FE_AX);
+			});
+		element.set_value(this, std::move(looked));
+		found = true;
+	} else if (literal_key != LiteralKey::None) {
+		ScratchReg key_index{this};
+		if (register_key_checked) {
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(key_offset
+					+ offsetof(zval, u1.v.type))), IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
+		}
+		if (register_key) {
+			auto [key_ref, key_part] = val_ref_single(node.operands[0]);
+			ASM(MOV64rr, key_index.alloc_gp(), key_part.load_to_reg());
+		} else if (literal_key == LiteralKey::Register) {
+			ASM(MOV64rm, key_index.alloc_gp(), FE_MEM(frame_reg, 0,
+				FE_NOREG, static_cast<int32_t>(key_offset)));
+		}
+		auto constant = [&]() {
+			return literal_key == LiteralKey::Register
+				? GenericValuePart{std::move(key_index)}
+				: GenericValuePart{ValuePartRef{this, literal_key_value,
+					8, tpde::x64::PlatformConfig::GP_BANK}};
+		};
+		const bool index = literal_key == LiteralKey::Index
+			|| literal_key == LiteralKey::Register;
+		ScratchReg name{this};
+		if (!index) {
+			ASM(MOV64rm, name.alloc_gp(),
+				FE_MEM(literals_reg, 0, FE_NOREG,
+					static_cast<int32_t>(key_offset)));
+		}
+		auto name_part = [&]() {
+			return GenericValuePart{std::move(name)};
+		};
+		if (assigns && !index) {
+			return -1;
+		} else if (assigns) {
+			found = container_var
+				? EncodeBase::encode_zend_native_indirect_assign_idx(
+					std::move(container_address), constant(), element)
+				: EncodeBase::encode_zend_native_array_assign_idx(
+					std::move(container_address), constant(), element);
+		} else if (container_var) {
+			found = index
+				? EncodeBase::encode_zend_native_indirect_find_idx_w(
+					std::move(container_address), constant(), element)
+				: EncodeBase::encode_zend_native_indirect_find_str_w(
+					std::move(container_address), name_part(),
+					constant(), element);
+		} else if (writes) {
+			found = index
+				? (known_array
+			? EncodeBase::encode_zend_native_known_find_idx_w(
+					std::move(container_address), constant(), element)
+			: EncodeBase::encode_zend_native_array_find_idx_w(
+					std::move(container_address), constant(), element))
+				: (known_array
+			? EncodeBase::encode_zend_native_known_find_str_w(
+					std::move(container_address), name_part(),
+					constant(), element)
+			: EncodeBase::encode_zend_native_array_find_str_w(
+					std::move(container_address), name_part(),
+					constant(), element));
+		} else if (tests || access == ElementAccess::Coalesce) {
+			found = index
+				? (known_array
+			? EncodeBase::encode_zend_native_known_find_idx(
+					std::move(container_address), constant(), element)
+			: EncodeBase::encode_zend_native_array_test_idx(
+					std::move(container_address), constant(), element))
+				: (known_array
+			? EncodeBase::encode_zend_native_known_find_str(
+					std::move(container_address), name_part(),
+					constant(), element)
+			: EncodeBase::encode_zend_native_array_test_str(
+					std::move(container_address), name_part(),
+					constant(), element));
+		} else {
+			found = index
+				? (known_array
+			? EncodeBase::encode_zend_native_known_find_idx(
+					std::move(container_address), constant(), element)
+			: EncodeBase::encode_zend_native_array_find_idx(
+					std::move(container_address), constant(), element))
+				: (known_array
+			? EncodeBase::encode_zend_native_known_find_str(
+					std::move(container_address), name_part(),
+					constant(), element)
+			: EncodeBase::encode_zend_native_array_find_str(
+					std::move(container_address), name_part(),
+					constant(), element));
+		}
+	} else
+	{
+		/* Keyed assignments take lookup_call. */
+		ZEND_ASSERT(!assigns);
+		if (container_var) {
+			found = key_literal
+				? EncodeBase::encode_zend_native_indirect_find_literal_w(
+					std::move(container_address), std::move(key_address),
+					element)
+				: EncodeBase::encode_zend_native_indirect_find_key_w(
+					std::move(container_address), std::move(key_address),
+					element);
+		} else if (writes) {
+			found = key_literal
+				? (known_array
+			? EncodeBase::encode_zend_native_known_find_literal_w(
+					std::move(container_address), std::move(key_address),
+					element)
+			: EncodeBase::encode_zend_native_array_find_literal_w(
+					std::move(container_address), std::move(key_address),
+					element))
+				: (known_array
+			? EncodeBase::encode_zend_native_known_find_key_w(
+					std::move(container_address), std::move(key_address),
+					element)
+			: EncodeBase::encode_zend_native_array_find_key_w(
+					std::move(container_address), std::move(key_address),
+					element));
+		} else if (split_string_key) {
+			const bool testing = tests || access == ElementAccess::Coalesce;
+			found = string_key_split(
+				[&](ValuePart &out) {
+					return testing
+						? (known_array
+			? EncodeBase::encode_zend_native_known_find_string_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out)
+			: EncodeBase::encode_zend_native_array_test_string_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out))
+						: (known_array
+			? EncodeBase::encode_zend_native_known_find_string_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out)
+			: EncodeBase::encode_zend_native_array_find_string_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out));
+				},
+				[&](ValuePart &out) {
+					return testing
+						? (known_array
+			? EncodeBase::encode_zend_native_known_find_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out)
+			: EncodeBase::encode_zend_native_array_test_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out))
+						: (known_array
+			? EncodeBase::encode_zend_native_known_find_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out)
+			: EncodeBase::encode_zend_native_array_find_key(
+							address(container_base, container_offset),
+							address(frame_reg, key_offset), out));
+				}, element);
+		} else if (tests || access == ElementAccess::Coalesce) {
+			/* An undefined or null container has no element to test. */
+			found = key_literal
+				? (known_array
+			? EncodeBase::encode_zend_native_known_find_literal(
+					std::move(container_address), std::move(key_address),
+					element)
+			: EncodeBase::encode_zend_native_array_test_literal(
+					std::move(container_address), std::move(key_address),
+					element))
+				: (known_array
+			? EncodeBase::encode_zend_native_known_find_key(
+					std::move(container_address), std::move(key_address),
+					element)
+			: EncodeBase::encode_zend_native_array_test_key(
+					std::move(container_address), std::move(key_address),
+					element));
+		} else {
+			found = key_literal
+				? (known_array
+			? EncodeBase::encode_zend_native_known_find_literal(
+					std::move(container_address), std::move(key_address),
+					element)
+			: EncodeBase::encode_zend_native_array_find_literal(
+					std::move(container_address), std::move(key_address),
+					element))
+				: (known_array
+			? EncodeBase::encode_zend_native_known_find_key(
+					std::move(container_address), std::move(key_address),
+					element)
+			: EncodeBase::encode_zend_native_array_find_key(
+					std::move(container_address), std::move(key_address),
+					element));
+		}
+	}
+	if (!found) {
+		return -1;
+	}
+	const AsmReg element_reg = element.cur_reg_or_load(this);
+	/* The isset stored only an element it found: its reuse skips the
+	 * probe's answer tests. */
+	auto element_ready = text_writer.label_create();
+	if (reuse_load) {
+		generate_raw_jump(Jump::jmp, reuse_joined);
+		label_place(reuse_cached);
+		ASM(MOV64rm, element_reg,
+			FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()));
+		generate_raw_jump(Jump::jmp, element_ready);
+		label_place(reuse_joined);
+	}
+	/* Held from here on; the lookup needed the registers before. */
+	auto decision_reg = decision.alloc_gp();
+	auto answer_reg = answer.alloc_gp();
+	auto unknown = text_writer.label_create();
+	/* A read of a CV that is not an array may be a string offset: the
+	 * one-character string, looked up out of the hot code. */
+	const bool string_reads = access == ElementAccess::Read
+		&& !known_array && !container_literal && !container_temporary
+		&& !register_key
+		&& (literal_key == LiteralKey::Index || !key_literal);
+	auto string_offset = text_writer.label_create();
+	auto element_found = text_writer.label_create();
+	const auto undecided = access == ElementAccess::Coalesce ? unknown
+		: string_reads ? string_offset : slow;
+	auto decide = text_writer.label_create();
+	label_place(decide);
+	ASM(CMP64ri, element_reg,
+		static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+	if (find_element) {
+		/* The C lookup's answer passes the same test again; one it
+		 * cannot decide either goes where the probe's would. */
+		auto complete = text_writer.label_create();
+		auto decided = text_writer.label_create();
+		generate_raw_jump(Jump::jb, complete);
+		const bool cold_find = !text_writer.in_cold_area();
+		if (cold_find) {
+			cold_begin();
+		} else {
+			generate_raw_jump(Jump::jmp, decided);
+		}
+		label_place(complete);
+		find_element_filter(undecided);
+		find_element_call(element_reg,
+			tests || access == ElementAccess::Coalesce
+				? ZEND_NATIVE_FIND_TEST : 0);
+		ASM(CMP64ri, element_reg,
+			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+		generate_raw_jump(Jump::jb, undecided);
+		generate_raw_jump(Jump::jmp, decide);
+		if (cold_find) {
+			cold_end();
+		}
+		label_place(decided);
+	} else {
+		generate_raw_jump(Jump::jb, undecided);
+	}
+	/* A read of a missing key warns and a write fetch inserts it; the
+	 * helper does that. An assignment under an integer key into a CV's
+	 * unshared array inserts the null element out of line instead and
+	 * stores into it as into an existing one. */
+	const bool insert_index = assigns && !container_var
+		&& !container_temporary && !container_literal
+		&& (literal_key == LiteralKey::Index
+			|| literal_key == LiteralKey::Register)
+		/* A register key of a string-key assignment has no helper. */
+		&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX).valid();
+	auto insert = text_writer.label_create();
+	auto inserted = text_writer.label_create();
+	generate_raw_jump(Jump::je, insert_index ? insert
+		: access == ElementAccess::Read || writes ? slow : absent);
+	label_place(element_ready);
+	if (reuse_store) {
+		ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
+			element_reg);
+		lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse_read));
+	}
+	if (insert_index) {
+		const bool cold_insert = !text_writer.in_cold_area();
+		if (cold_insert) {
+			cold_begin();
+		} else {
+			generate_raw_jump(Jump::jmp, inserted);
+		}
+		label_place(insert);
+		const uint64_t live_registers = static_cast<uint64_t>(
+			register_file.used) & ~(uint64_t{1} << element_reg.id());
+		emit_preserving_call(live_registers,
+			ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX, [&] {
+				const auto key_to_si = [&] {
+					if (literal_key == LiteralKey::Index) {
+						ASM(MOV64ri, FE_SI,
+							static_cast<int64_t>(literal_key_value));
+					} else {
+						ASM(MOV64rm, FE_SI, FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(key_offset)));
+					}
+				};
+				/* The frame may sit in either argument register. */
+				if (frame_reg.id() == AsmReg{AsmReg::DI}.id()) {
+					key_to_si();
+					ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(container_offset)));
+				} else {
+					ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(container_offset)));
+					key_to_si();
+				}
+			}, [&] {
+				ASM(MOV64rr, element_reg, FE_AX);
+			});
+		generate_raw_jump(Jump::jmp, inserted);
+		if (cold_insert) {
+			cold_end();
+		}
+		label_place(inserted);
+	}
+	if (string_reads) {
+		const bool cold_string = !text_writer.in_cold_area();
+		if (cold_string) {
+			cold_begin();
+		} else {
+			generate_raw_jump(Jump::jmp, element_found);
+		}
+		label_place(string_offset);
+		ValuePart chars = image_symbol_value(
+			ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
+			ZEND_NATIVE_HELPER_CHAR_STRINGS);
+		if (!chars.has_reg()) {
+			generate_raw_jump(Jump::jmp, slow);
+		} else {
+			auto chars_scratch = std::move(chars).into_scratch(this);
+			ValuePart offset_element{
+				tpde::x64::PlatformConfig::GP_BANK, 8};
+			const bool encoded = literal_key == LiteralKey::Index
+				? EncodeBase::encode_zend_native_string_offset_idx(
+					address(container_base, container_offset),
+					GenericValuePart{ValuePartRef{this, literal_key_value,
+						8, tpde::x64::PlatformConfig::GP_BANK}},
+					GenericValuePart{std::move(chars_scratch)}, offset_element)
+				: EncodeBase::encode_zend_native_string_offset_key(
+					address(container_base, container_offset),
+					address(frame_reg, key_offset),
+					GenericValuePart{std::move(chars_scratch)}, offset_element);
+			if (!encoded) {
+				return -1;
+			}
+			mov(element_reg, offset_element.cur_reg_or_load(this), 8);
+			offset_element.reset(this);
+			ASM(TEST64rr, element_reg, element_reg);
+			generate_raw_jump(Jump::je, slow);
+			generate_raw_jump(Jump::jmp, element_found);
+		}
+		if (cold_string) {
+			cold_end();
+		}
+		label_place(element_found);
+	}
+	if (container_temporary) {
+		ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!EncodeBase::encode_zend_native_container_shared(
+				address(frame_reg, container_offset), shared)) {
+			return -1;
+		}
+		const AsmReg shared_reg = shared.cur_reg_or_load(this);
+		ASM(TEST64rr, shared_reg, shared_reg);
+		shared.reset(this);
+		generate_raw_jump(Jump::je, slow);
+	}
+	if (access == ElementAccess::Read && node.has_result
+			&& adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+		/* An integer result needs an integer element
+		 * (zend_native_zval_is_long()), tested in memory. */
+		ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		auto [result_ref, result] = result_ref_single(node.result);
+		if (!EncodeBase::encode_zend_native_load_u64(
+				address(element_reg, 0), result)) {
+			return -1;
+		}
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset)),
+			result.load_to_reg());
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_LONG);
+	} else if (reads) {
+		ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
+		ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!EncodeBase::encode_zend_native_zval_copy_deref(
+				address(element_reg, 0), payload, type_info)) {
+			return -1;
+		}
+		const AsmReg payload_reg = payload.cur_reg_or_load(this);
+		const AsmReg type_info_reg = type_info.cur_reg_or_load(this);
+		/* The owned copy lives in the result temporary; a boxed register
+		 * result mirrors it, as the cold path reloads it. */
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset)),
+			payload_reg);
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+			type_info_reg);
+		if (node.has_result && access == ElementAccess::Read) {
+			auto result = result_ref(node.result);
+			auto result_payload = result.part(0);
+			auto result_type = result.part(1);
+			mov(result_payload.alloc_reg(), payload_reg, 8);
+			mov(result_type.alloc_reg(), type_info_reg, 4);
+			result_payload.set_modified();
+			result_type.set_modified();
+		}
+		payload.reset(this);
+		type_info.reset(this);
+		if (access == ElementAccess::Coalesce) {
+			generate_raw_jump(Jump::jmp, answered);
+			/* Not an array: a scalar container reads as null. */
+			label_place(unknown);
+			ValuePart scalar{tpde::x64::PlatformConfig::GP_BANK, 8};
+			if (!EncodeBase::encode_zend_native_zval_is_scalar(
+					address(container_base, container_offset), scalar)) {
+				return -1;
+			}
+			const AsmReg scalar_reg = scalar.cur_reg_or_load(this);
+			ASM(TEST64rr, scalar_reg, scalar_reg);
+			scalar.reset(this);
+			generate_raw_jump(Jump::je, slow);
+			label_place(absent);
+			if (container_temporary) {
+				ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
+				if (!EncodeBase::encode_zend_native_container_shared(
+						address(frame_reg, container_offset), shared)) {
+					return -1;
+				}
+				const AsmReg shared_reg = shared.cur_reg_or_load(this);
+				ASM(TEST64rr, shared_reg, shared_reg);
+				shared.reset(this);
+				generate_raw_jump(Jump::je, slow);
+			}
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))),
+				IS_NULL);
+			label_place(answered);
+		}
+	} else if (assigns) {
+		/* The element's old value needs no release (an appended
+		 * element reads as null), or is a string, whose release runs
+		 * no code: dropped before the store, freed out of line by its
+		 * last owner. Anything else takes the helper. The value,
+		 * checked above, is copied, a temporary moved. A literal is
+		 * counted without opcache. */
+		const int32_t type_offset =
+			static_cast<int32_t>(offsetof(zval, u1.type_info));
+		const AsmReg value_base = value_literal ? literals_reg : frame_reg;
+		ScratchReg value_type{this};
+		ScratchReg value_payload{this};
+		const AsmReg type_reg = value_type.alloc_gp();
+		const AsmReg payload_reg = value_payload.alloc_gp();
+		{
+			auto released = text_writer.label_create();
+			auto last_owner = text_writer.label_create();
+			ASM(MOV32rm, type_reg,
+				FE_MEM(element_reg, 0, FE_NOREG, type_offset));
+			ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::je, released);
+			ASM(CMP8ri, type_reg, IS_STRING);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, payload_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
+			ASM(CMP32mi, FE_MEM(payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+				1);
+			generate_raw_jump(Jump::jle, last_owner);
+			ASM(SUB32mi, FE_MEM(payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+				1);
+			const bool cold_free = !text_writer.in_cold_area();
+			if (cold_free) {
+				cold_begin();
+			} else {
+				generate_raw_jump(Jump::jmp, released);
+			}
+			label_place(last_owner);
+			emit_preserving_call(static_cast<uint64_t>(register_file.used),
+				ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW, [&] {
+					ASM(MOV64rr, FE_DI, element_reg);
+				}, [] {});
+			generate_raw_jump(Jump::jmp, released);
+			if (cold_free) {
+				cold_end();
+			}
+			label_place(released);
+		}
+		ASM(MOV32rm, type_reg, FE_MEM(value_base, 0, FE_NOREG,
+			static_cast<int32_t>(value_offset) + type_offset));
+		ASM(MOV64rm, payload_reg, FE_MEM(value_base, 0, FE_NOREG,
+			static_cast<int32_t>(value_offset)));
+		const zend_tpde_plan *value_plan = adaptor->plan();
+		const bool counted_literal = value_literal
+			&& (value_plan->source_literals == nullptr
+				|| operation.auxiliary.index
+					>= value_plan->source_literal_count
+				|| Z_REFCOUNTED(value_plan->source_literals[
+					operation.auxiliary.index]));
+		if (counted_literal || (!value_literal
+				&& slot_kind(operation.auxiliary)
+					== ZEND_MIR_SOURCE_SLOT_CV)) {
+			auto uncounted = text_writer.label_create();
+			ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
+			generate_raw_jump(Jump::je, uncounted);
+			ASM(ADD32mi, FE_MEM(payload_reg, 0, FE_NOREG, 0), 1);
+			label_place(uncounted);
+		}
+		ASM(MOV64mr, FE_MEM(element_reg, 0, FE_NOREG, 0), payload_reg);
+		ASM(MOV32mr, FE_MEM(element_reg, 0, FE_NOREG, type_offset),
+			type_reg);
+	} else if (writes) {
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset)),
+			element_reg);
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_INDIRECT);
+	} else {
+		ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+		const bool tested = access == ElementAccess::Isset
+			? EncodeBase::encode_zend_native_zval_isset(
+				address(element_reg, 0), value)
+			: EncodeBase::encode_zend_native_zval_empty(
+				address(element_reg, 0), value);
+		if (!tested) {
+			return -1;
+		}
+		mov(answer_reg, value.cur_reg_or_load(this), 8);
+		value.reset(this);
+		if (access == ElementAccess::Empty) {
+			ASM(CMP64ri, answer_reg, ZEND_NATIVE_EMPTY_UNKNOWN);
+			generate_raw_jump(Jump::je, slow);
+		}
+		generate_raw_jump(Jump::jmp, answered);
+		label_place(absent);
+		ASM(MOV64ri, answer_reg,
+			access == ElementAccess::Empty ? 1 : 0);
+		if (container_temporary) {
+			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
+			if (!EncodeBase::encode_zend_native_container_shared(
+					address(frame_reg, container_offset), shared)) {
+				return -1;
+			}
+			const AsmReg shared_reg = shared.cur_reg_or_load(this);
+			ASM(TEST64rr, shared_reg, shared_reg);
+			shared.reset(this);
+			generate_raw_jump(Jump::je, slow);
+		}
+		label_place(answered);
+	}
+	element.reset(this);
+	literals.reset();
+	if (container_temporary) {
+		if (!EncodeBase::encode_zend_native_release_shared(
+				address(frame_reg, container_offset))) {
+			return -1;
+		}
+	}
+	if (access == ElementAccess::Coalesce && node.has_result) {
+		/* Both answers are in the result temporary. */
+		auto result = result_ref(node.result);
+		auto result_payload = result.part(0);
+		auto result_type = result.part(1);
+		ASM(MOV64rm, result_payload.alloc_reg(),
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset)));
+		ASM(MOV32rm, result_type.alloc_reg(),
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))));
+		result_payload.set_modified();
+		result_type.set_modified();
+	} else if (tests && node.has_result) {
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		mov(result_reg, answer_reg, 8);
+		result.set_modified();
+	} else if (tests) {
+		/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
+		ASM(ADD32ri, answer_reg, IS_FALSE);
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(result_offset
+					+ offsetof(zval, u1.type_info))),
+			answer_reg);
+	}
+	answer.reset();
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return 1;
+}
+
+/*
+ * FETCH_DIM_R whose key, and possibly container, are SSA values and whose
+ * result is an integer or a boxed value, composed of EncodeGen snippets:
+ * the container's array (zend_native_zval_table, _boxed_table or an
+ * array pointer), the element under an integer, string or boxed key
+ * (zend_native_table_find_*), and the result. Every undecided probe
+ * takes the guarded cold block. Returns 1 when emitted, 0 when the form
+ * does not apply and -1 on an encoding failure.
+ */
+int ZendCompilerX64::array_element_register(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_array_read layout;
+	const zend_tpde_machine_reference *element_reference =
+		operation_machine_reference(ctx,
+			ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
+	if (node.kind != Adaptor::InstKind::GuardedFast || !node.has_result
+			|| node.operands.empty()
+			|| !zend_tpde_array_read_at(mir, &layout, true)
+			|| element_reference == nullptr
+			|| (!layout.container_literal
+				&& !zend_mir_id_is_valid(
+					element_reference->base_value_id))
+			|| !zend_mir_id_is_valid(element_reference->index_value_id)
+			|| element_reference->scale != sizeof(zval)
+			|| element_reference->access_width != sizeof(zval)
+			|| layout.container_offset > INT32_MAX - 8
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX) {
+		return 0;
+	}
+	const auto successors = guarded_successors_of(node);
+	const IRValueRef key_value = node.operands[0];
+	const zend_tpde_machine_value_kind key_kind =
+		adaptor->machine_kind(key_value);
+	const bool key_long = key_kind == ZEND_TPDE_MACHINE_VALUE_I64
+		&& adaptor->exact_type(key_value) == ZEND_MIR_SCALAR_TYPE_I64
+		&& adaptor->representation(key_value)
+			== ZEND_MIR_REPRESENTATION_I64;
+	const bool key_string =
+		key_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
+	const bool key_boxed = key_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& adaptor->representation(key_value)
+			== ZEND_MIR_REPRESENTATION_ZVAL
+		&& val_parts(key_value).count() == 2;
+	const bool result_long =
+		adaptor->machine_kind(node.result) == ZEND_TPDE_MACHINE_VALUE_I64
+		&& adaptor->exact_type(node.result) == ZEND_MIR_SCALAR_TYPE_I64
+		&& adaptor->representation(node.result)
+			== ZEND_MIR_REPRESENTATION_I64;
+	const bool result_boxed = adaptor->machine_kind(node.result)
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& adaptor->representation(node.result)
+			== ZEND_MIR_REPRESENTATION_ZVAL
+		&& val_parts(node.result).count() == 2;
+	/* A temporary key is consumed by the read: only an integer, which
+	 * needs no release, stays here. */
+	const bool temporary_key =
+		mir.value_operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+		|| mir.value_operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR;
+	if ((!key_long && !key_string && !key_boxed)
+			|| (!result_long && !result_boxed)
+			|| (temporary_key && !key_long)) {
+		return 0;
+	}
+	const bool register_receiver = node.operands.size() > 1
+		&& node.machine_reference_operand_index != 1
+		&& (adaptor->machine_kind(node.operands[1])
+				== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+			|| (adaptor->machine_kind(node.operands[1])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& adaptor->representation(node.operands[1])
+					== ZEND_MIR_REPRESENTATION_ZVAL
+				&& val_parts(node.operands[1]).count() == 2));
+	if (!register_receiver && layout.container_literal
+			&& node.machine_reference_operand_index
+				>= node.operands.size()) {
+		return 0;
+	}
+	if (!register_receiver && !layout.container_literal
+			&& mir.value_operation.op1.slot_kind
+				!= ZEND_MIR_SOURCE_SLOT_CV) {
+		return 0;
+	}
+	/* The lookup snippets use up to six scratch registers, with the
+	 * array and the key parts held across them. */
+	if (unlocked_gp_registers() < (key_boxed ? 10u : 9u)) {
+		return 0;
+	}
+	auto part_index = [&](IRValueRef value,
+			zend_tpde_machine_part_role role) -> uint32_t {
+		const ValueParts parts = val_parts(value);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			if (parts.representation.parts[part].semantic_role == role) {
+				return part;
+			}
+		}
+		return UINT32_MAX;
+	};
+
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg decision{this};
+	/* The container's array, or null. */
+	ValuePart table{tpde::x64::PlatformConfig::GP_BANK, 8};
+	if (register_receiver) {
+		auto receiver = val_ref(node.operands[1]);
+		if (adaptor->machine_kind(node.operands[1])
+				== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR) {
+			mov(table.alloc_reg(this), receiver.part(0).load_to_reg(), 8);
+		} else {
+			const uint32_t payload = part_index(node.operands[1],
+				ZEND_TPDE_MACHINE_PART_PAYLOAD);
+			const uint32_t type_info = part_index(node.operands[1],
+				ZEND_TPDE_MACHINE_PART_TYPE_INFO);
+			if (payload == UINT32_MAX || type_info == UINT32_MAX
+					|| !EncodeBase::encode_zend_native_boxed_table(
+						receiver.part(payload), receiver.part(type_info),
+						table)) {
+				return -1;
+			}
+		}
+	} else if (layout.container_literal) {
+		auto [literal_ref, literal] = val_ref_single(
+			node.operands[node.machine_reference_operand_index]);
+		if (!EncodeBase::encode_zend_native_zval_table(
+				GenericValuePart{GenericValuePart::Expr{
+					literal.load_to_reg(), 0}},
+				table)) {
+			return -1;
+		}
+	} else if (!EncodeBase::encode_zend_native_zval_table(
+			GenericValuePart{GenericValuePart::Expr{frame_reg,
+				static_cast<int64_t>(layout.container_offset)}},
+			table)) {
+		return -1;
+	}
+	const AsmReg table_reg = table.cur_reg_or_load(this);
+	ASM(TEST64rr, table_reg, table_reg);
+	generate_raw_jump(Jump::je, slow);
+	ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
+	{
+		auto key = val_ref(key_value);
+		GenericValuePart table_value{
+			GenericValuePart::Expr{table_reg, 0}};
+		bool found;
+		if (key_long) {
+			found = EncodeBase::encode_zend_native_table_find_long(
+				std::move(table_value), key.part(0), element);
+		} else if (key_string) {
+			found = EncodeBase::encode_zend_native_table_find_string(
+				std::move(table_value), key.part(0), element);
+		} else {
+			const uint32_t payload = part_index(key_value,
+				ZEND_TPDE_MACHINE_PART_PAYLOAD);
+			const uint32_t type_info = part_index(key_value,
+				ZEND_TPDE_MACHINE_PART_TYPE_INFO);
+			found = payload != UINT32_MAX && type_info != UINT32_MAX
+				&& EncodeBase::encode_zend_native_table_find_boxed(
+					std::move(table_value), key.part(payload),
+					key.part(type_info), element);
+		}
+		if (!found) {
+			return -1;
+		}
+	}
+	table.reset(this);
+	const AsmReg element_reg = element.cur_reg_or_load(this);
+	auto decision_reg = decision.alloc_gp();
+	/* A missing key warns and an undecided probe needs the helper. */
+	ASM(CMP64ri, element_reg,
+		static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+	generate_raw_jump(Jump::jbe, slow);
+	const zend_mir_executable_value_ref &read = mir.value_operation;
+	const uint64_t result_offset =
+		frame_slot_offset(read.result_storage_id);
+	const bool publish = zend_mir_id_is_valid(read.result_storage_id)
+		&& (read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+		&& result_offset <= INT32_MAX - sizeof(zval);
+	auto result = result_ref(node.result);
+	if (result_long) {
+		/* zend_native_zval_is_long(), tested in memory. */
+		ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		auto value = result.part(0);
+		if (!EncodeBase::encode_zend_native_load_u64(
+				GenericValuePart{GenericValuePart::Expr{element_reg, 0}},
+				value)) {
+			return -1;
+		}
+		if (publish) {
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset)),
+				value.load_to_reg());
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))),
+				IS_LONG);
+		}
+	} else {
+		/* An owned copy; frame-slot consumers read it there. */
+		const uint32_t payload =
+			part_index(node.result, ZEND_TPDE_MACHINE_PART_PAYLOAD);
+		const uint32_t type_info =
+			part_index(node.result, ZEND_TPDE_MACHINE_PART_TYPE_INFO);
+		if (payload == UINT32_MAX || type_info == UINT32_MAX) {
+			return -1;
+		}
+		auto result_payload = result.part(payload);
+		auto result_type = result.part(type_info);
+		if (!EncodeBase::encode_zend_native_zval_copy_deref(
+				GenericValuePart{GenericValuePart::Expr{element_reg, 0}},
+				result_payload, result_type)) {
+			return -1;
+		}
+		if (publish) {
+			ASM(MOV64mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset)),
+				result_payload.load_to_reg());
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(result_offset
+						+ offsetof(zval, u1.type_info))),
+				result_type.load_to_reg());
+		}
+	}
+	element.reset(this);
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return 1;
+}
+
+bool ZendCompilerX64::read_array(InstContext &ctx) {
+	if (const int element = array_element(ctx, ElementAccess::Read);
+			element != 0) {
+		return element > 0;
+	}
+	if (const int element = array_element_register(ctx); element != 0) {
+		return element > 0;
+	}
+	return branch_to_guarded_cold(ctx);
+}
+
+/*
+ * A comparison or TYPE_CHECK fused into the following branch (see
+ * freeze_fused_compare_branches): the branch evaluates it. Its operands,
+ * including boundary transports, are dead; statepoint materializations
+ * were consumed already.
+ */
+bool ZendCompilerX64::fused_into_branch_placeholder(InstContext &ctx) {
+	const IRInstRef instruction = ctx.instruction;
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	/* A register-held operand, whether a node operand or a
+	 * liveness-only register result such as a property read, is
+	 * published to its slot, which the branch reads. */
+	const zend_mir_executable_value_ref &compare_operation =
+		mir.value_operation;
+	for (size_t index = 0;
+			index < node.liveness_operands.size(); ++index) {
+		if (materialized_operand(instruction, index)) {
+			continue;
+		}
+		const IRValueRef operand = node.liveness_operands[index];
+		const zend_mir_storage_id storage =
+			operand == IRValueRef{Adaptor::FRAME_VALUE}
+				|| operand == IRValueRef{
+					Adaptor::EXECUTION_CONTEXT_ARGUMENT}
+			? ZEND_MIR_ID_INVALID
+			: adaptor->canonical_storage(operand);
+		if (zend_mir_id_is_valid(storage)
+				&& (storage == compare_operation.op1_storage_id
+					|| storage
+						== compare_operation.op2_storage_id)) {
+			if (!materialize_cold_operand(ctx, operand, storage)) {
+				return false;
+			}
+			continue;
+		}
+		auto consumed = val_ref(operand);
+		(void) consumed;
+	}
+	if (node.has_result) {
+		auto result = result_ref(node.result);
+		for (uint32_t part = 0;
+				part < val_parts(node.result).count(); ++part) {
+			auto value = result.part(part);
+			ASM(MOV32ri, value.alloc_reg(), IS_FALSE);
+			value.set_modified();
+		}
+	}
+	return true;
+}
+
+/*
+ * TYPE_CHECK of a CV or temporary through zend_native_zval_type_check():
+ * the bool lands in the result temporary and a register result; a
+ * temporary is consumed only when another owner keeps it alive. An
+ * undefined variable, which warns, and a resource check, which asks the
+ * resource list, take the guarded cold block. Returns 1 when emitted, 0
+ * when the form does not apply and -1 on an encoding failure.
+ */
+int ZendCompilerX64::type_check_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	const bool temporary = is_frame_slot(operation.op1)
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| !mir.has_value_operation
+			|| operation.source_opcode != ZEND_TYPE_CHECK
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| operation.extended_value == MAY_BE_RESOURCE
+			|| !is_frame_slot(operation.op1)
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& !temporary)
+			|| operation.result_storage_id == operation.op1_storage_id
+			|| !zend_mir_id_is_valid(operation.op1_storage_id)
+			|| !is_frame_slot(operation.result)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_VAR
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_CV)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)
+			|| (node.has_result && val_parts(node.result).count() > 2)
+			|| unlocked_gp_registers() < 6) {
+		return 0;
+	}
+	if (!frame_only_operands(node)) {
+		return 0;
+	}
+	const auto successors = guarded_successors_of(node);
+	const uint64_t value_offset =
+		frame_slot_offset(operation.op1_storage_id);
+	const uint64_t result_offset =
+		frame_slot_offset(operation.result_storage_id);
+	if (value_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)) {
+		return 0;
+	}
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg mask{this};
+	ASM(MOV32ri, mask.alloc_gp(),
+		static_cast<int32_t>(operation.extended_value));
+	ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
+	if (!EncodeBase::encode_zend_native_zval_type_check(
+			GenericValuePart{GenericValuePart::Expr{frame_reg,
+				static_cast<int64_t>(value_offset)}},
+			GenericValuePart{std::move(mask)}, matched)) {
+		return -1;
+	}
+	const AsmReg matched_reg = matched.cur_reg_or_load(this);
+	ScratchReg decision{this};
+	ScratchReg type{this};
+	auto decision_reg = decision.alloc_gp();
+	auto type_reg = type.alloc_gp();
+	ASM(CMP64ri, matched_reg, ZEND_NATIVE_TYPE_CHECK_UNDEFINED);
+	generate_raw_jump(Jump::je, slow);
+	/* A CV result is overwritten: its old value must need no
+	 * release (a counted one takes the helper). */
+	if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
+			slow);
+	}
+	if (temporary) {
+		emit_consume_shared(frame_reg,
+			static_cast<int32_t>(value_offset), slow);
+	}
+	store_bool_result(node, frame_reg, result_offset, matched_reg,
+		type_reg);
+	matched.reset(this);
+	type.reset();
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return 1;
+}
+
+/*
+ * === and !== of a CV or temporary and a literal through
+ * zend_native_zval_identical(): the bool lands in the result temporary
+ * and a register result; a temporary is consumed only when another
+ * owner keeps it alive. An undefined variable, doubles, arrays and
+ * objects take the guarded cold block. Returns 1 when emitted, 0 when the
+ * form does not apply and -1 on an encoding failure.
+ */
+int ZendCompilerX64::identical_literal(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	const bool negated = operation.source_opcode == ZEND_IS_NOT_IDENTICAL;
+	const bool temporary = is_frame_slot(operation.op1)
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+	/* The second operand: a literal, or a CV or temporary compared
+	 * through zend_native_zval_identical_any(); a temporary is
+	 * consumed as the first one. */
+	const bool other_temporary = is_frame_slot(operation.op2)
+		&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+	const bool variable_other = is_frame_slot(operation.op2)
+		&& (operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			|| other_temporary)
+		&& zend_mir_id_is_valid(operation.op2_storage_id)
+		&& operation.op2_storage_id != operation.result_storage_id
+		&& operation.op2_storage_id != operation.op1_storage_id;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| !mir.has_value_operation
+			|| mir.fused_into_branch
+			|| (operation.source_opcode != ZEND_IS_IDENTICAL && !negated)
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& !variable_other)
+			|| !is_frame_slot(operation.op1)
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& !temporary)
+			|| !zend_mir_id_is_valid(operation.op1_storage_id)
+			|| !is_frame_slot(operation.result)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_VAR
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_CV)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)
+			|| operation.result_storage_id == operation.op1_storage_id
+			|| (variable_other && operation.result_storage_id
+				== operation.op2_storage_id)
+			|| (node.has_result && val_parts(node.result).count() > 2)
+			/* The snippet's seven scratch registers, the frame and the
+			 * literals. */
+			|| unlocked_gp_registers() < 9) {
+		return 0;
+	}
+	/* A temporary may be held boxed in registers: it is stored into its
+	 * slot first, and a register copy of the literal is not needed. */
+	const bool register_temporary = temporary && !variable_other
+		&& node.operands.size() == 3
+		&& node.materialization_count == 0
+		&& node.operands[2] == IRValueRef{Adaptor::FRAME_VALUE}
+		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+		&& adaptor->machine_kind(node.operands[0])
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& val_parts(node.operands[0]).count() == 2;
+	if (!register_temporary) {
+		if (!frame_only_operands(node)) {
+			return 0;
+		}
+	}
+	const auto successors = guarded_successors_of(node);
+	const uint64_t value_offset =
+		frame_slot_offset(operation.op1_storage_id);
+	const uint64_t literal_offset = variable_other
+		? frame_slot_offset(operation.op2_storage_id)
+		: uint64_t{operation.op2.index} * sizeof(zval);
+	const uint64_t result_offset =
+		frame_slot_offset(operation.result_storage_id);
+	if (value_offset > INT32_MAX - sizeof(zval)
+			|| literal_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)) {
+		return 0;
+	}
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	if (register_temporary) {
+		auto boxed = val_ref(node.operands[0]);
+		auto payload = boxed.part(0);
+		auto type_info = boxed.part(1);
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(value_offset)),
+			payload.load_to_reg());
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(value_offset
+					+ offsetof(zval, u1.type_info))),
+			type_info.load_to_reg());
+		payload.reset();
+		type_info.reset();
+		if (node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}) {
+			auto literal_copy = val_ref(node.operands[1]);
+			(void) literal_copy;
+		}
+	}
+	ScratchReg literals{this};
+	ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
+	/* A null, bool or integer literal compares by type byte and
+	 * payload; an undefined or referenced operand takes the cold
+	 * block. */
+	const zval *known_literal = !variable_other
+			&& adaptor->plan()->source_literals != nullptr
+			&& operation.op2.index
+				< adaptor->plan()->source_literal_count
+		? &adaptor->plan()->source_literals[operation.op2.index]
+		: nullptr;
+	const bool typed_literal = known_literal != nullptr
+		&& (Z_TYPE_P(known_literal) <= IS_TRUE
+			|| Z_TYPE_P(known_literal) == IS_LONG)
+		&& Z_TYPE_P(known_literal) != IS_UNDEF;
+	if (typed_literal) {
+		const uint32_t may_be = adaptor->plan()->source_opcodes != nullptr
+			? adaptor->plan()->source_opcodes[
+				operation.source_position_id].op1_may_be
+			: UINT32_MAX;
+		ScratchReg match{this};
+		ScratchReg value_type{this};
+		const AsmReg match_reg = match.alloc_gp();
+		const AsmReg value_type_reg = value_type.alloc_gp();
+		auto mismatch = text_writer.label_create();
+		const int32_t value_disp = static_cast<int32_t>(value_offset);
+		const bool may_be_undefined =
+			(may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0;
+		ASM(XOR32rr, match_reg, match_reg);
+		ASM(MOVZXr32m8, value_type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			value_disp + static_cast<int32_t>(
+				offsetof(zval, u1.v.type))));
+		ASM(CMP32ri, value_type_reg, Z_TYPE_P(known_literal));
+		generate_raw_jump(Jump::jne, mismatch);
+		if (Z_TYPE_P(known_literal) == IS_LONG) {
+			const zend_long literal_value = Z_LVAL_P(known_literal);
+			if (literal_value >= INT32_MIN && literal_value <= INT32_MAX) {
+				ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, value_disp),
+					static_cast<int32_t>(literal_value));
+			} else {
+				ASM(MOV64ri, value_type_reg,
+					static_cast<int64_t>(literal_value));
+				ASM(CMP64rm, value_type_reg,
+					FE_MEM(frame_reg, 0, FE_NOREG, value_disp));
+			}
+			generate_raw_set(Jump::je, match_reg, false);
+		} else {
+			ASM(MOV32ri, match_reg, 1);
+		}
+		if (may_be_undefined) {
+			auto decided = text_writer.label_create();
+			generate_raw_jump(Jump::jmp, decided);
+			label_place(mismatch);
+			ASM(TEST32rr, value_type_reg, value_type_reg);
+			generate_raw_jump(Jump::je, slow);
+			ASM(CMP32ri, value_type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::je, slow);
+			label_place(decided);
+		} else {
+			label_place(mismatch);
+		}
+		value_type.reset();
+		matched.set_value(this, std::move(match));
+	} else if (variable_other) {
+		if (!EncodeBase::encode_zend_native_zval_identical_any(
+				GenericValuePart{GenericValuePart::Expr{frame_reg,
+					static_cast<int64_t>(value_offset)}},
+				GenericValuePart{GenericValuePart::Expr{frame_reg,
+					static_cast<int64_t>(literal_offset)}},
+				matched)) {
+			return -1;
+		}
+	} else {
+		auto literals_reg = literals.alloc_gp();
+		emit_literal_base(literals_reg, frame_reg);
+		if (!EncodeBase::encode_zend_native_zval_identical(
+				GenericValuePart{GenericValuePart::Expr{frame_reg,
+					static_cast<int64_t>(value_offset)}},
+				GenericValuePart{GenericValuePart::Expr{literals_reg,
+					static_cast<int64_t>(literal_offset)}},
+				matched)) {
+			return -1;
+		}
+	}
+	literals.reset();
+	const AsmReg matched_reg = matched.cur_reg_or_load(this);
+	ScratchReg decision{this};
+	ScratchReg type{this};
+	auto decision_reg = decision.alloc_gp();
+	auto type_reg = type.alloc_gp();
+	if (!typed_literal) {
+		ASM(CMP64ri, matched_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
+		generate_raw_jump(Jump::je, slow);
+	}
+	/* A CV result is overwritten: its old value must need no
+	 * release (a counted one takes the helper). */
+	if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
+			slow);
+	}
+	/* A temporary second operand must need no release: a counted
+	 * one takes the helper. */
+	if (variable_other && other_temporary) {
+		emit_counted_check(frame_reg, static_cast<int32_t>(literal_offset),
+			slow);
+	}
+	if (temporary) {
+		emit_consume_shared(frame_reg,
+			static_cast<int32_t>(value_offset), slow);
+	}
+	if (negated) {
+		ASM(XOR32ri, matched_reg, 1);
+	}
+	store_bool_result(node, frame_reg, result_offset, matched_reg,
+		type_reg);
+	matched.reset(this);
+	type.reset();
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return 1;
+}
+
+/*
+ * array_key_exists() of a literal or CV key in an array CV or temporary
+ * through the element probes: a found element is true and a certainly
+ * absent key false, both in the result temporary and a register result;
+ * a temporary array is consumed only when another owner keeps it alive.
+ * Undecided probes take the guarded cold block. Returns 1 when emitted, 0
+ * when the form does not apply and -1 on an encoding failure.
+ */
+int ZendCompilerX64::key_exists_inline(InstContext &ctx) {
+	const IRInstRef instruction = ctx.instruction;
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	const bool key_literal =
+		operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	const bool temporary = is_frame_slot(operation.op2)
+		&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| !mir.has_value_operation
+			|| operation.source_opcode != ZEND_ARRAY_KEY_EXISTS
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| (!key_literal
+				&& (!is_frame_slot(operation.op1)
+					|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					|| !zend_mir_id_is_valid(operation.op1_storage_id)))
+			|| !is_frame_slot(operation.op2)
+			|| (operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& !temporary)
+			|| !zend_mir_id_is_valid(operation.op2_storage_id)
+			|| !is_frame_slot(operation.result)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_VAR
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_CV)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)
+			|| operation.result_storage_id == operation.op2_storage_id
+			|| (!key_literal
+				&& operation.result_storage_id
+					== operation.op1_storage_id)
+			|| (node.has_result && val_parts(node.result).count() > 2)
+			/* The probe's seven scratch registers, its result and the
+			 * literals, with one to spare. */
+			|| unlocked_gp_registers() < 10) {
+		return 0;
+	}
+	if (!frame_only_operands(node)) {
+		return 0;
+	}
+	const auto successors = guarded_successors_of(node);
+	auto frame_offset = [](zend_mir_storage_id storage) {
+		return frame_slot_offset(storage);
+	};
+	const uint64_t key_offset = key_literal
+		? uint64_t{operation.op1.index} * sizeof(zval)
+		: frame_offset(operation.op1_storage_id);
+	const uint64_t array_offset = frame_offset(operation.op2_storage_id);
+	const uint64_t result_offset =
+		frame_offset(operation.result_storage_id);
+	if (key_offset > INT32_MAX - sizeof(zval)
+			|| array_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)) {
+		return 0;
+	}
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	auto address = [](AsmReg base, uint64_t offset) {
+		return GenericValuePart{GenericValuePart::Expr{
+			base, static_cast<int64_t>(offset)}};
+	};
+	/* A read of the found element reuses it (lookup_reuse_consumer()). */
+	const IRInstRef reuse = temporary
+		? IRInstRef{UINT32_MAX} : lookup_reuse_consumer(instruction);
+	if (reuse != IRInstRef{UINT32_MAX}) {
+		ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
+	}
+	ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
+	{
+		ScratchReg literals{this};
+		AsmReg key_base = frame_reg;
+		if (key_literal) {
+			key_base = literals.alloc_gp();
+			emit_literal_base(key_base, frame_reg);
+		}
+		/* A literal argument keeps a numeric string, which only a
+		 * dimension literal has as an integer: probe it as a runtime
+		 * key. */
+		const bool probed = EncodeBase::encode_zend_native_array_find_key(
+			address(frame_reg, array_offset),
+			address(key_base, key_offset), element);
+		if (!probed) {
+			return -1;
+		}
+	}
+	const AsmReg element_reg = element.cur_reg_or_load(this);
+	ScratchReg decision{this};
+	ScratchReg answer{this};
+	auto decision_reg = decision.alloc_gp();
+	auto answer_reg = answer.alloc_gp();
+	ASM(CMP64ri, element_reg,
+		static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+	generate_raw_jump(Jump::jb, slow);
+	if (reuse != IRInstRef{UINT32_MAX}) {
+		/* ABSENT only reaches the false edge, where nothing reads it. */
+		ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
+			element_reg);
+		lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse));
+	}
+	/* ABSENT is 1 and an element pointer more: exists = element > 1. */
+	generate_raw_set(Jump::ja, answer_reg);
+	element.reset(this);
+	/* A CV result is overwritten: its old value must need no
+	 * release (a counted one takes the helper). */
+	if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
+			slow);
+	}
+	if (temporary) {
+		emit_consume_shared(frame_reg,
+			static_cast<int32_t>(array_offset), slow);
+	}
+	{
+		ScratchReg type{this};
+		auto type_reg = type.alloc_gp();
+		store_bool_result(node, frame_reg, result_offset, answer_reg,
+			type_reg);
+	}
+	answer.reset();
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return 1;
+}
+
+/*
+ * FE_FREE of an array holder that another owner keeps alive drops one
+ * reference (zend_native_iterator_shared, _release_shared), as the VM's
+ * inlined zval_ptr_dtor_nogc does. Object iterators and a last reference
+ * take the guarded cold block. Returns 1 when emitted, 0 when the form
+ * does not apply and -1 on an encoding failure.
+ */
+int ZendCompilerX64::iterator_free_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| !mir.has_value_operation
+			|| operation.source_opcode != ZEND_FE_FREE
+			|| node.has_result
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+			|| !zend_mir_id_is_valid(operation.op1_storage_id)
+			|| unlocked_gp_registers() < 6) {
+		return 0;
+	}
+	if (!frame_only_operands(node)) {
+		return 0;
+	}
+	const auto successors = guarded_successors_of(node);
+	const uint64_t holder_offset =
+		frame_slot_offset(operation.op1_storage_id);
+	if (holder_offset > INT32_MAX - sizeof(zval)) {
+		return 0;
+	}
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	/* zend_native_iterator_shared() and the release together. */
+	ScratchReg decision{this};
+	decision.alloc_gp();
+	emit_consume_shared(frame_reg,
+		static_cast<int32_t>(holder_offset), slow, true);
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return 1;
+}
+
+/*
+ * QM_ASSIGN of a literal: zend_native_zval_copy() copies it, with its
+ * reference, into the fresh result temporary and a register result.
+ * Returns 1 when emitted and 0 when the form does not apply, -1 on an
+ * encoding failure.
+ */
+int ZendCompilerX64::copy_literal(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| !mir.has_value_operation
+			|| operation.source_opcode != ZEND_QM_ASSIGN
+			|| operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_VAR)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)
+			|| (node.has_result
+				&& (adaptor->machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					|| val_parts(node.result).count() != 2))
+			|| unlocked_gp_registers() < 6) {
+		return 0;
+	}
+	if (!frame_only_operands(node)) {
+		return 0;
+	}
+	const auto successors = guarded_successors_of(node);
+	const uint64_t literal_offset =
+		uint64_t{operation.op1.index} * sizeof(zval);
+	const uint64_t result_offset =
+		frame_slot_offset(operation.result_storage_id);
+	if (literal_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)) {
+		return 0;
+	}
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg literals{this};
+	auto literals_reg = literals.alloc_gp();
+	emit_literal_base(literals_reg, frame_reg);
+	ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
+	ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 8};
+	if (!EncodeBase::encode_zend_native_zval_copy(
+			GenericValuePart{GenericValuePart::Expr{literals_reg,
+				static_cast<int64_t>(literal_offset)}},
+			payload, type_info)) {
+		return -1;
+	}
+	literals.reset();
+	const AsmReg payload_reg = payload.cur_reg_or_load(this);
+	const AsmReg type_info_reg = type_info.cur_reg_or_load(this);
+	ASM(MOV64mr,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(result_offset)),
+		payload_reg);
+	ASM(MOV32mr,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(result_offset
+				+ offsetof(zval, u1.type_info))),
+		type_info_reg);
+	if (node.has_result) {
+		auto result = result_ref(node.result);
+		const ValueParts parts = val_parts(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			auto result_part = result.part(part);
+			mov(result_part.alloc_reg(),
+				parts.representation.parts[part].semantic_role
+						== ZEND_TPDE_MACHINE_PART_TYPE_INFO
+					? type_info_reg : payload_reg, 8);
+			result_part.set_modified();
+		}
+	}
+	payload.reset(this);
+	type_info.reset(this);
+	frame_scratch.reset();
+	/* The copy cannot fail: the fast block continues unconditionally. */
+	generate_uncond_branch(successors[0]);
+	return 1;
+}
+
+/*
+ * count() of an array CV or temporary through
+ * zend_native_zval_array_count(): the integer lands in the result
+ * temporary and a register result; a temporary is consumed only when
+ * another owner keeps it alive. Every other value takes the guarded cold
+ * block. Returns 1 when emitted, 0 when the form does not apply and -1
+ * on an encoding failure.
+ */
+int ZendCompilerX64::count_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	const bool temporary = is_frame_slot(operation.op1)
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| !mir.has_value_operation
+			|| operation.source_opcode != ZEND_COUNT
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| !is_frame_slot(operation.op1)
+			|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+				&& !temporary)
+			|| !zend_mir_id_is_valid(operation.op1_storage_id)
+			|| !is_frame_slot(operation.result)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_VAR
+				&& operation.result.slot_kind
+					!= ZEND_MIR_SOURCE_SLOT_CV)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)
+			|| operation.result_storage_id == operation.op1_storage_id
+			|| (node.has_result && val_parts(node.result).count() > 2)
+			|| unlocked_gp_registers() < 6) {
+		return 0;
+	}
+	if (!frame_only_operands(node)) {
+		return 0;
+	}
+	const auto successors = guarded_successors_of(node);
+	const uint64_t value_offset =
+		frame_slot_offset(operation.op1_storage_id);
+	const uint64_t result_offset =
+		frame_slot_offset(operation.result_storage_id);
+	if (value_offset > INT32_MAX - sizeof(zval)
+			|| result_offset > INT32_MAX - sizeof(zval)) {
+		return 0;
+	}
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	auto value_address = [&]() {
+		return GenericValuePart{GenericValuePart::Expr{frame_reg,
+			static_cast<int64_t>(value_offset)}};
+	};
+	ValuePart count{tpde::x64::PlatformConfig::GP_BANK, 8};
+	if (!EncodeBase::encode_zend_native_zval_array_count(
+			value_address(), count)) {
+		return -1;
+	}
+	const AsmReg count_reg = count.cur_reg_or_load(this);
+	ScratchReg decision{this};
+	auto decision_reg = decision.alloc_gp();
+	ASM(CMP64ri, count_reg, -1);
+	generate_raw_jump(Jump::je, slow);
+	/* A CV result is overwritten: its old value must need no
+	 * release (a counted one takes the helper). */
+	if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+		emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
+			slow);
+	}
+	if (temporary) {
+		emit_consume_shared(frame_reg,
+			static_cast<int32_t>(value_offset), slow);
+	}
+	ASM(MOV64mr,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(result_offset)),
+		count_reg);
+	ASM(MOV32mi,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(result_offset
+				+ offsetof(zval, u1.type_info))),
+		IS_LONG);
+	if (node.has_result && val_parts(node.result).count() == 1) {
+		auto [result_ref, result] = result_ref_single(node.result);
+		mov(result.alloc_reg(), count_reg, 8);
+		result.set_modified();
+	} else if (node.has_result) {
+		auto result = result_ref(node.result);
+		const ValueParts parts = val_parts(node.result);
+		for (uint32_t part = 0; part < parts.count(); ++part) {
+			auto result_part = result.part(part);
+			if (parts.representation.parts[part].semantic_role
+					== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+				ASM(MOV32ri, result_part.alloc_reg(), IS_LONG);
+			} else {
+				mov(result_part.alloc_reg(), count_reg, 8);
+			}
+			result_part.set_modified();
+		}
+	}
+	count.reset(this);
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		successors);
+	return 1;
+}
+
+bool ZendCompilerX64::write_array(InstContext &ctx) {
+	if (const int element = array_element(ctx, ElementAccess::Write);
+			element != 0) {
+		return element > 0;
+	}
+	return branch_to_guarded_cold(ctx);
+}
+
+bool ZendCompilerX64::coalesce_array(InstContext &ctx) {
+	if (const int element = array_element(ctx, ElementAccess::Coalesce);
+			element != 0) {
+		return element > 0;
+	}
+	return branch_to_guarded_cold(ctx);
+}
+
+bool ZendCompilerX64::isset_array(InstContext &ctx) {
+	const IRInstRef instruction = ctx.instruction;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	IRInstRef &reuse_read = ctx.reuse_read;
+	reuse_read = lookup_reuse_consumer(instruction);
+	const int element = array_element(ctx,
+		(mir.value_operation.extended_value & ZEND_ISEMPTY) != 0
+			? ElementAccess::Empty : ElementAccess::Isset);
+	if (element != 0) {
+		return element > 0;
+	}
+	return branch_to_guarded_cold(ctx);
+}
+
+bool ZendCompilerX64::append_packed_array(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_packed_array_append layout;
+	const zend_tpde_machine_reference *element_reference =
+		operation_machine_reference(ctx,
+			ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
+
+	const bool append_layout =
+		zend_tpde_packed_array_append_at(mir, &layout);
+	if (!append_layout
+			|| (!layout.indirect_container
+				&& (element_reference == nullptr
+					|| !zend_mir_id_is_valid(
+						element_reference->base_value_id)
+					|| zend_mir_id_is_valid(
+						element_reference->index_value_id)
+					|| element_reference->scale != sizeof(zval)
+					|| element_reference->access_width
+						!= sizeof(zval)))
+			|| layout.container_offset > INT32_MAX - 8
+			|| layout.value_offset > INT32_MAX - 8
+			|| layout.result_offset > INT32_MAX - 8) {
+		/* A keyed assignment replaces an existing element inline; an
+		 * append without its inline layout calls the helper (see
+		 * freeze_machine_control_flow()). */
+		if (node.kind == Adaptor::InstKind::GuardedFast
+				&& mir.value_operation.op2.kind
+					!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+			const int element = array_element(ctx, ElementAccess::Assign);
+			if (element != 0) {
+				return element > 0;
+			}
+			return branch_to_guarded_cold(ctx);
+		}
+		return execute_value_operation(ctx);
+	}
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX) {
+		return false;
+	}
+	const auto successors = guarded_successors_of(node);
+	const bool scalar_value =
+		node.packed_append_value_operand_index < node.operands.size()
+		&& adaptor->representation(node.operands[
+			node.packed_append_value_operand_index])
+			== ZEND_MIR_REPRESENTATION_I64
+		&& adaptor->exact_type(node.operands[
+			node.packed_append_value_operand_index])
+			== ZEND_MIR_SCALAR_TYPE_I64
+		&& adaptor->machine_kind(node.operands[
+			node.packed_append_value_operand_index])
+			== ZEND_TPDE_MACHINE_VALUE_I64;
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	/* Nine scratch registers; see unlocked_gp_registers(). */
+	if (unlocked_gp_registers() < 10) {
+		return branch_to_guarded_cold(ctx);
+	}
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg type{this};
+	ScratchReg array{this};
+	ScratchReg count{this};
+	ScratchReg limit{this};
+	ScratchReg element{this};
+	ScratchReg low_word{this};
+	ScratchReg high_word{this};
+	ScratchReg decision{this};
+	auto type_reg = type.alloc_gp();
+	auto array_reg = array.alloc_gp();
+	auto count_reg = count.alloc_gp();
+	auto limit_reg = limit.alloc_gp();
+	auto element_reg = element.alloc_gp();
+	auto low_word_reg = low_word.alloc_gp();
+	auto high_word_reg = high_word.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+
+	if (layout.indirect_container) {
+		/* The VAR addresses the array's zval, as ZEND_FETCH_DIM_W left
+		 * it; the helper handles any other VAR. */
+		ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.container_offset
+				+ offsetof(zval, u1.v.type))), IS_INDIRECT);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, element_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.container_offset)));
+		load_array_container(element_reg, 0, type_reg, array_reg, slow);
+	} else {
+		load_array_container(frame_reg,
+			static_cast<int32_t>(layout.container_offset),
+			type_reg, array_reg, slow);
+	}
+	ASM(CMP32mi,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_refcounted_h, refcount))),
+		1);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(TEST32mi,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, u))),
+		IS_ARRAY_IMMUTABLE);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(TEST32mi,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, u))),
+		HASH_FLAG_PACKED);
+	generate_raw_jump(Jump::je, slow);
+	ASM(MOV32rm, count_reg,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+	ASM(CMP32rm, count_reg,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, nTableSize))));
+	generate_raw_jump(Jump::jae, slow);
+	ASM(CMP64rm, count_reg,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(HashTable, nNextFreeElement))));
+	generate_raw_jump(Jump::jne, slow);
+
+	if (!scalar_value) {
+		ASM(MOV32rm, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.value_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP8ri, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::je, slow);
+		ASM(CMP8ri, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::je, slow);
+		ASM(CMP8ri, type_reg, IS_INDIRECT);
+		generate_raw_jump(Jump::je, slow);
+	}
+	if (layout.has_result) {
+		ASM(MOV32rm, limit_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.result_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, limit_reg, IS_UNDEF);
+		generate_raw_jump(Jump::jne, slow);
+	}
+
+	static_assert(sizeof(zval) == 16);
+	ASM(MOV64rr, element_reg, count_reg);
+	ASM(SHL64ri, element_reg, zval_size_shift);
+	ASM(ADD64rm, element_reg,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, arPacked))));
+	if (scalar_value) {
+		auto [value_ref, value] = val_ref_single(node.operands[
+			node.packed_append_value_operand_index]);
+		auto value_reg = value.load_to_reg();
+		ASM(MOV64rr, low_word_reg, value_reg);
+		ASM(MOV64ri, high_word_reg, IS_LONG);
+	} else {
+		ASM(MOV64rm, low_word_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.value_offset)));
+		ASM(MOV64rm, high_word_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.value_offset + zval_high_word)));
+	}
+	ASM(MOV64mr,
+		FE_MEM(element_reg, 0, FE_NOREG, 0), low_word_reg);
+	ASM(MOV64mr,
+		FE_MEM(element_reg, 0, FE_NOREG, zval_high_word), high_word_reg);
+	if (layout.move_value) {
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.value_offset
+						+ offsetof(zval, u1.type_info))),
+			IS_UNDEF);
+	} else if (!scalar_value) {
+		emit_try_addref(type_reg, low_word_reg);
+	}
+	ASM(ADD32ri, count_reg, 1);
+	ASM(MOV32mr,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, nNumUsed))),
+		count_reg);
+	ASM(ADD32mi,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, nNumOfElements))),
+		1);
+	ASM(MOV64mr,
+		FE_MEM(array_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, nNextFreeElement))),
+		count_reg);
+	if (layout.indirect_container) {
+		/* The consumed VAR, as the helper leaves it. */
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.container_offset
+				+ offsetof(zval, u1.type_info))), IS_UNDEF);
+	}
+	if (layout.has_result) {
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			low_word_reg);
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset + zval_high_word)),
+			high_word_reg);
+		if (!scalar_value) {
+			emit_try_addref(type_reg, low_word_reg);
+		}
+	}
+	finish_guarded_with(slow, done, std::move(decision), [&] {
+		type.reset();
+		array.reset();
+		count.reset();
+		limit.reset();
+		element.reset();
+		low_word.reset();
+		high_word.reset();
+	}, successors);
+	return true;
+}
+
+bool ZendCompilerX64::string_length(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_string_length layout;
+
+	if (!zend_tpde_string_length_at(mir, &layout, true)) {
+		zend_tpde_bool_unary boolean;
+		const bool boolean_layout =
+			zend_tpde_bool_unary_at(mir, &boolean);
+		const bool register_boolean = boolean_layout
+			&& !node.synthetic
+			&& node.kind == Adaptor::InstKind::MIR
+			&& node.has_result
+			&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+			&& node.operands.size() == 2
+			&& adaptor->exact_type(node.operands[0])
+				== ZEND_MIR_SCALAR_TYPE_I1
+			&& adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_BOOL
+			&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
+		if (register_boolean) {
+			auto [operand_ref, operand] =
+				val_ref_single(node.operands[0]);
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto operand_reg = operand.load_to_reg();
+			auto result_reg = result.alloc_reg();
+			ASM(MOV32rr, result_reg, operand_reg);
+			if (boolean.negate) {
+				ASM(XOR32ri, result_reg, 1);
+			}
+			result.set_modified();
+			return true;
+		}
+		const bool frame_only = node.operands.size() == 1
+			&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE};
+		if (!node.synthetic
+				&& node.kind == Adaptor::InstKind::MIR
+				&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+				&& frame_only
+				&& boolean_layout) {
+			auto [frame_ref, frame] =
+				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+			auto frame_scratch = frame_register(std::move(frame));
+			auto frame_reg = frame_scratch.cur_reg();
+			ScratchReg result{this};
+			auto result_reg = result.alloc_gp();
+			ASM(MOV32rm, result_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(boolean.operand_offset)));
+			if (boolean.negate) {
+				ASM(XOR32ri, result_reg, 1);
+			}
+			ScratchReg type{this};
+			store_boolean_zval(frame_reg,
+				static_cast<int32_t>(boolean.result_offset), result_reg,
+				type.alloc_gp());
+			return true;
+		}
+		/*
+		 * ! and (bool) of an untyped null, boolean, integer, string or
+		 * array decide inline; an undefined variable (which warns), a
+		 * reference, a counted temporary string or array (which the
+		 * operation releases) and any other type take the guarded cold
+		 * block.
+		 */
+		if (boolean_layout && frame_only
+				&& node.kind == Adaptor::InstKind::GuardedFast
+				&& node.control_block != UINT32_MAX
+				&& node.continuation_block != UINT32_MAX
+				&& boolean.operand_offset <= INT32_MAX - sizeof(zval)
+				&& boolean.result_offset <= INT32_MAX - sizeof(zval)
+				&& (!node.has_result
+					|| val_parts(node.result).count() <= 2)) {
+			const auto successors =
+				adaptor->block_succs(IRBlockRef{node.control_block});
+			if (successors.size() >= 2
+					&& static_cast<uint32_t>(successors[0])
+						== node.continuation_block
+					&& static_cast<uint32_t>(successors[1])
+						== node.argument_index) {
+				auto slow = text_writer.label_create();
+				auto done = text_writer.label_create();
+				auto integer = text_writer.label_create();
+				auto decided = text_writer.label_create();
+				auto [frame_ref, frame] =
+					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+				auto frame_scratch = frame_register(std::move(frame));
+				auto frame_reg = frame_scratch.cur_reg();
+				ScratchReg decision{this};
+				ScratchReg type{this};
+				ScratchReg truth{this};
+				auto decision_reg = decision.alloc_gp();
+				auto type_reg = type.alloc_gp();
+				auto truth_reg = truth.alloc_gp();
+				const int32_t operand =
+					static_cast<int32_t>(boolean.operand_offset);
+				ASM(MOVZXr32m8, type_reg,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						operand + static_cast<int32_t>(
+							offsetof(zval, u1.type_info))));
+				auto string = text_writer.label_create();
+				auto array = text_writer.label_create();
+				ASM(XOR32rr, truth_reg, truth_reg);
+				ASM(CMP32ri, type_reg, IS_LONG);
+				generate_raw_jump(Jump::je, integer);
+				ASM(CMP32ri, type_reg, IS_STRING);
+				generate_raw_jump(Jump::je, string);
+				ASM(CMP32ri, type_reg, IS_ARRAY);
+				generate_raw_jump(Jump::je, array);
+				ASM(CMP32ri, type_reg, IS_TRUE);
+				generate_raw_jump(Jump::ja, slow);
+				generate_raw_set(Jump::je, truth_reg, false);
+				ASM(TEST32rr, type_reg, type_reg);
+				generate_raw_jump(Jump::je, slow);
+				generate_raw_jump(Jump::jmp, decided);
+				const bool releases_operand =
+					mir.value_operation.op1.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV;
+				label_place(string);
+				if (releases_operand) {
+					ASM(TEST8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+						operand + static_cast<int32_t>(
+							offsetof(zval, u1.v.type_flags))),
+						IS_TYPE_REFCOUNTED);
+					generate_raw_jump(Jump::jne, slow);
+				}
+				/* A string is true unless empty or "0". */
+				ASM(MOV64rm, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					operand));
+				ASM(CMP64mi, FE_MEM(type_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, len))), 1);
+				generate_raw_set(Jump::ja, truth_reg, false);
+				generate_raw_jump(Jump::jne, decided);
+				ASM(CMP8mi, FE_MEM(type_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, val))), '0');
+				generate_raw_set(Jump::jne, truth_reg, false);
+				generate_raw_jump(Jump::jmp, decided);
+				label_place(array);
+				if (releases_operand) {
+					ASM(TEST8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+						operand + static_cast<int32_t>(
+							offsetof(zval, u1.v.type_flags))),
+						IS_TYPE_REFCOUNTED);
+					generate_raw_jump(Jump::jne, slow);
+				}
+				ASM(MOV64rm, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					operand));
+				ASM(CMP32mi, FE_MEM(type_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(HashTable,
+						nNumOfElements))), 0);
+				generate_raw_set(Jump::jne, truth_reg, false);
+				generate_raw_jump(Jump::jmp, decided);
+				label_place(integer);
+				ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, operand), 0);
+				generate_raw_set(Jump::jne, truth_reg, false);
+				label_place(decided);
+				if (boolean.negate) {
+					ASM(XOR32ri, truth_reg, 1);
+				}
+				/* IS_FALSE + truth is IS_FALSE or IS_TRUE. */
+				store_bool_result(node, frame_reg, boolean.result_offset,
+					truth_reg, type_reg);
+				truth.reset();
+				type.reset();
+				finish_guarded(slow, done, std::move(decision), frame_scratch,
+					successors);
+				return true;
+			}
+		}
+		return execute_value_operation(ctx);
+	}
+	const bool frame_only = node.operands.size() == 1
+		&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE};
+	const bool register_string = node.operands.size() == 2
+		&& adaptor->machine_kind(node.operands[0])
+			== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+		&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
+	const bool normal_register_string = register_string
+		&& !node.synthetic
+		&& node.kind == Adaptor::InstKind::MIR
+		&& node.has_result
+		&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I64;
+	const bool normal_frame_string = frame_only
+		&& !node.synthetic
+		&& node.kind == Adaptor::InstKind::MIR
+		&& node.has_result
+		&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I64;
+	if (layout.operand_offset > INT32_MAX - 8
+			|| layout.result_offset > INT32_MAX - 8
+			|| (!frame_only && !register_string)) {
+		return false;
+	}
+	if (normal_register_string) {
+		auto [frame_ref, frame] = val_ref_single(node.operands[1]);
+		auto frame_scratch = frame_register(std::move(frame));
+		auto frame_reg = frame_scratch.cur_reg();
+		auto string = val_ref(node.operands[0]);
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		uint64_t known_length = 0;
+		if (adaptor->known_string_literal(
+				node.operands[0], &known_length, nullptr)) {
+			ASM(MOV64ri, result_reg, known_length);
+		} else {
+			auto string_reg = string.part(0).load_to_reg();
+			ASM(MOV64rm, result_reg,
+				FE_MEM(string_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, len))));
+		}
+		/*
+		 * A source call may read the temporary's zval although the
+		 * producer is register-authoritative: publish the result there;
+		 * machine consumers use result_reg.
+		 */
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			result_reg);
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_LONG);
+		result.set_modified();
+		return true;
+	}
+	if (normal_frame_string) {
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = frame_register(std::move(frame));
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg string{this};
+		auto string_reg = string.alloc_gp();
+		ASM(MOV64rm, string_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		ASM(MOV64rm, result_reg,
+			FE_MEM(string_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_string, len))));
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			result_reg);
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_LONG);
+		result.set_modified();
+		return true;
+	}
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX) {
+		return false;
+	}
+	const auto successors = guarded_successors_of(node);
+	if (register_string) {
+		auto [frame_ref, frame] = val_ref_single(node.operands[1]);
+		auto frame_scratch = frame_register(std::move(frame));
+		auto frame_reg = frame_scratch.cur_reg();
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		uint64_t known_length = 0;
+		if (adaptor->known_string_literal(
+				node.operands[0], &known_length, nullptr)) {
+			ASM(MOV64ri, result_reg, known_length);
+		} else {
+			auto [string_ref, string] =
+				val_ref_single(node.operands[0]);
+			auto string_reg = string.load_to_reg();
+			ASM(MOV64rm, result_reg,
+				FE_MEM(string_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, len))));
+		}
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			result_reg);
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_LONG);
+		result.set_modified();
+		generate_uncond_branch(successors[0]);
+		return true;
+	}
+	auto slow = text_writer.label_create();
+	auto ready = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg type{this};
+	ScratchReg string{this};
+	ScratchReg decision{this};
+	auto type_reg = type.alloc_gp();
+	auto string_reg = string.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+
+	ASM(MOVZXr32m8, type_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				layout.operand_offset + offsetof(zval, u1.type_info))));
+	ASM(CMP32ri, type_reg, IS_STRING);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV64rm, string_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.operand_offset)));
+
+	/* A frame-only consumer such as RETURN reads the published slot. */
+	auto store_length = [&](AsmReg length_reg) {
+		ASM(MOV64rm, length_reg,
+			FE_MEM(string_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_string, len))));
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			length_reg);
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_LONG);
+	};
+	if (node.has_result) {
+		auto [result_ref, result] = result_ref_single(node.result);
+		store_length(result.alloc_reg());
+		result.set_modified();
+	} else {
+		ScratchReg length{this};
+		store_length(length.alloc_gp());
+	}
+	finish_guarded_with(slow, ready, std::move(decision), [&] {
+		type.reset();
+		string.reset();
+	}, successors);
+	return true;
+}
+
+bool ZendCompilerX64::long_binary(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	if (const int identical = identical_literal(ctx); identical != 0) {
+		return identical > 0;
+	}
+	zend_tpde_long_binary layout{};
+	const bool framed_layout =
+		zend_tpde_long_binary_at(mir, &layout);
+	auto register_long_operand = [&](IRValueRef operand) {
+		return adaptor->exact_type(operand)
+					== ZEND_MIR_SCALAR_TYPE_I64
+			|| (adaptor->exact_type(operand)
+					== ZEND_MIR_SCALAR_TYPE_NONE
+				&& adaptor->machine_kind(operand)
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
+	};
+	const bool register_layout =
+		node.has_result
+			&& node.operands.size() == 3
+			&& register_long_operand(node.operands[0])
+			&& register_long_operand(node.operands[1]);
+	bool register_result_layout = false;
+	if (!framed_layout && register_layout
+			&& zend_mir_id_is_valid(
+				mir.value_operation.result_storage_id)
+			&& (mir.value_operation.result.kind
+					== ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| mir.value_operation.result.kind
+					== ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (mir.value_operation.result.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_TMP
+				|| mir.value_operation.result.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_VAR
+				|| mir.value_operation.result.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_CV)) {
+		const uint64_t result_offset =
+			frame_slot_offset(mir.value_operation.result_storage_id);
+		if (result_offset <= UINT32_MAX - 8) {
+			layout.result_offset =
+				static_cast<uint32_t>(result_offset);
+			register_result_layout = true;
+		}
+	}
+	/*
+	 * Operands that live in CV slots or literals, as in most untyped
+	 * loops, never reach the register form. Evaluate integer and floating
+	 * point operands inline like the VM's fast paths: long/long with an
+	 * overflow check, any long/double mix in double precision. Other
+	 * types, integer overflow, integer division and a zero divisor use
+	 * the helper.
+	 */
+	auto numeric_framed_binary = [&]() -> int {
+		const zend_mir_executable_value_ref &operation =
+			mir.value_operation;
+		const uint32_t opcode = operation.source_opcode;
+		const bool arithmetic = opcode == ZEND_ADD
+			|| opcode == ZEND_SUB || opcode == ZEND_MUL
+			|| opcode == ZEND_DIV;
+		const bool comparison = opcode == ZEND_IS_SMALLER
+			|| opcode == ZEND_IS_SMALLER_OR_EQUAL
+			|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
+		/* Integer-only operations: two longs inline, anything else,
+		 * a zero or -1 divisor and a shift count outside 0..63 use the
+		 * helper. */
+		const bool integer_op = opcode == ZEND_MOD
+			|| opcode == ZEND_SL || opcode == ZEND_SR;
+		/* A proven operation of two numbers cannot fail: integer
+		 * overflow continues in double. A typed body emits it without a
+		 * guarded diamond; in a Zend entry its cold edge is dead. */
+		const bool proven =
+			zend_tpde_numeric_binary_proven(adaptor->plan(), mir);
+		const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
+		if ((!arithmetic && !comparison && !integer_op)
+				|| (!guarded && !(proven && adaptor->typed_body()))
+				|| !mir.has_value_operation
+				|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
+			return -1;
+		}
+		/* The plan keeps the result of two longs an exact long only where
+		 * Zend's range inference excludes overflow. */
+		if (adaptor->typed_body() && !guarded && arithmetic
+				&& opcode != ZEND_DIV && node.has_result
+				&& node.operands.size() == 2
+				&& adaptor->machine_kind(node.result)
+					== ZEND_TPDE_MACHINE_VALUE_I64) {
+			ScratchReg left_value{this};
+			ScratchReg right_value{this};
+			auto left_reg = left_value.alloc_gp();
+			auto right_reg = right_value.alloc_gp();
+			auto load_long = [&](IRValueRef operand, AsmReg target) {
+				if (adaptor->machine_kind(operand)
+						== ZEND_TPDE_MACHINE_VALUE_I64) {
+					auto [value_ref, value] = val_ref_single(operand);
+					ASM(MOV64rr, target, value.load_to_reg());
+					return true;
+				}
+				if (adaptor->machine_kind(operand)
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+					return false;
+				}
+				auto value = val_ref(operand);
+				auto payload = value.part(0);
+				ASM(MOV64rr, target, payload.load_to_reg());
+				return true;
+			};
+			if (!load_long(node.operands[0], left_reg)
+					|| !load_long(node.operands[1], right_reg)) {
+				return 0;
+			}
+			switch (opcode) {
+				case ZEND_ADD:
+					ASM(ADD64rr, left_reg, right_reg);
+					break;
+				case ZEND_SUB:
+					ASM(SUB64rr, left_reg, right_reg);
+					break;
+				default:
+					ASM(IMUL64rr, left_reg, right_reg);
+					break;
+			}
+#if ZEND_DEBUG
+			auto no_overflow = text_writer.label_create();
+			generate_raw_jump(Jump::jno, no_overflow);
+			ASM(UD2);
+			label_place(no_overflow);
+#endif
+			auto [result_ref_value, result] =
+				result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(MOV64rr, result_reg, left_reg);
+			result.set_modified();
+			return 1;
+		}
+		/*
+		 * Register operands, such as the boxed result of a preceding
+		 * numeric node, take this form only where the long-only register
+		 * form cannot: MUL and DIV, or any result that can hold a double
+		 * or a boolean. A typed body passes both operands without a frame
+		 * operand.
+		 */
+		const bool register_operands = register_layout
+			|| (adaptor->typed_body() && !guarded
+				&& node.has_result && node.operands.size() == 2
+				&& register_long_operand(node.operands[0])
+				&& register_long_operand(node.operands[1]));
+		if (register_operands) {
+			const zend_tpde_machine_value_kind kind = node.has_result
+				? adaptor->machine_kind(node.result)
+				: ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+			if (!(opcode == ZEND_MUL || opcode == ZEND_DIV
+					|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					|| (comparison
+						&& kind == ZEND_TPDE_MACHINE_VALUE_BOOL))) {
+				return -1;
+			}
+			for (uint32_t index = 0; index < 2; ++index) {
+				const IRValueRef operand = node.operands[index];
+				if (!(adaptor->machine_kind(operand)
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& val_parts(operand).count() == 2)
+						&& !(adaptor->machine_kind(operand)
+								== ZEND_TPDE_MACHINE_VALUE_I64
+							&& adaptor->exact_type(operand)
+								== ZEND_MIR_SCALAR_TYPE_I64)) {
+					return -1;
+				}
+			}
+		} else {
+			if (!frame_only_operands(node)) {
+				return -1;
+			}
+		}
+		struct FramedOperand {
+			bool literal;
+			int32_t offset;
+			bool reg;
+			uint32_t index;
+		};
+		auto framed_operand = [&](const zend_mir_source_operand_ref &operand,
+				zend_mir_storage_id storage, FramedOperand *out) {
+			uint64_t offset;
+			out->reg = false;
+			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+				out->literal = true;
+				offset = uint64_t{operand.index} * sizeof(zval);
+			} else if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+						|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+					&& (operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+						|| operand.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+						|| operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+					&& zend_mir_id_is_valid(storage)) {
+				/* With frame-only operands a temporary is published in its
+				 * slot; consuming a number needs no release. */
+				out->literal = false;
+				offset = frame_slot_offset(storage);
+			} else {
+				return false;
+			}
+			if (offset > INT32_MAX - sizeof(zval)) {
+				return false;
+			}
+			out->offset = static_cast<int32_t>(offset);
+			return true;
+		};
+		FramedOperand left{false, 0, true, 0}, right{false, 0, true, 1};
+		if ((!register_operands
+					&& (!framed_operand(
+							operation.op1, operation.op1_storage_id, &left)
+						|| !framed_operand(
+							operation.op2, operation.op2_storage_id,
+							&right)))
+				|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& operation.result.kind
+						!= ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_VAR
+					&& operation.result.slot_kind
+						!= ZEND_MIR_SOURCE_SLOT_CV)
+				|| (!register_operands
+					&& !zend_mir_id_is_valid(
+						operation.result_storage_id))) {
+			return -1;
+		}
+		/* A typed body has no frame; its result lives in registers. */
+		const bool result_slot =
+			zend_mir_id_is_valid(operation.result_storage_id)
+			&& !adaptor->typed_body();
+		/* A CV result only replaces a non-refcounted value: OPcache
+		 * contracts ASSIGN into it only then, and an aliased input was
+		 * just checked to be numeric. A temporary never aliases input. */
+		const uint64_t result_offset64 = result_slot
+			? frame_slot_offset(operation.result_storage_id)
+			: 0;
+		if (result_offset64 > INT32_MAX - sizeof(zval)
+				|| (!register_operands
+					&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
+					&& ((!left.literal && operation.op1_storage_id
+							== operation.result_storage_id)
+						|| (!right.literal && operation.op2_storage_id
+							== operation.result_storage_id)))) {
+			return -1;
+		}
+		const int32_t result_offset =
+			static_cast<int32_t>(result_offset64);
+		const zend_tpde_machine_value_kind result_kind = node.has_result
+			? adaptor->machine_kind(node.result)
+			: ZEND_TPDE_MACHINE_VALUE_I64;
+		if (node.has_result
+				&& result_kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				&& !(comparison
+					&& result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL)) {
+			return -1;
+		}
+		const auto guarded_successors = guarded
+			? adaptor->block_succs(IRBlockRef{node.control_block})
+			: decltype(adaptor->block_succs(
+				IRBlockRef{node.control_block})){};
+		if (guarded
+				&& (node.control_block == UINT32_MAX
+					|| node.continuation_block == UINT32_MAX
+					|| guarded_successors.size() < 2
+					|| static_cast<uint32_t>(guarded_successors[0])
+						!= node.continuation_block
+					|| static_cast<uint32_t>(guarded_successors[1])
+						!= node.argument_index)) {
+			return 0;
+		}
+
+		/* Zend's type inference fixes most operand types in numeric
+		 * code; test only the unknown ones. */
+		uint8_t left_known = IS_UNDEF;
+		uint8_t right_known = IS_UNDEF;
+		if (!register_operands
+				&& operation.source_position_id
+					< adaptor->plan()->source_opcode_count) {
+			const zend_tpde_source_opcode &source =
+				adaptor->plan()->source_opcodes[
+					operation.source_position_id];
+			if (source.opcode == opcode) {
+				left_known = source.op1_known_type;
+				right_known = source.op2_known_type;
+			}
+		}
+		if (proven) {
+			if (left_known == IS_UNDEF) {
+				left_known = ZEND_TPDE_KNOWN_NUMBER;
+			}
+			if (right_known == IS_UNDEF) {
+				right_known = ZEND_TPDE_KNOWN_NUMBER;
+			}
+		}
+		const bool known_long =
+			left_known == IS_LONG && right_known == IS_LONG;
+		const bool known_double = !register_operands
+			&& ((left_known == IS_DOUBLE
+					&& (right_known == IS_LONG
+						|| right_known == IS_DOUBLE))
+				|| (right_known == IS_DOUBLE
+					&& left_known == IS_LONG));
+		/*
+		 * Double arithmetic other than division and every comparison of
+		 * known numbers cannot fail: compute in SSE registers straight
+		 * from the slots and store a double or boolean.
+		 */
+		if (known_double && opcode != ZEND_DIV && !integer_op
+				&& (arithmetic
+					|| !node.has_result
+					|| result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL
+					|| result_kind
+						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+			auto [frame_ref, frame] =
+				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+			auto frame_scratch = frame_register(std::move(frame));
+			auto frame_reg = frame_scratch.cur_reg();
+			ScratchReg literals{this};
+			ScratchReg value{this};
+			ScratchReg left_double{this};
+			ScratchReg right_double{this};
+			auto value_reg = value.alloc_gp();
+			auto left_fp = left_double.alloc(
+				tpde::x64::PlatformConfig::FP_BANK);
+			auto right_fp = right_double.alloc(
+				tpde::x64::PlatformConfig::FP_BANK);
+			AsmReg literals_reg = frame_reg;
+			if (left.literal || right.literal) {
+				literals_reg = literals.alloc_gp();
+				emit_literal_base(literals_reg, frame_reg);
+			}
+			auto load_double = [&](const FramedOperand &operand,
+					uint8_t known, AsmReg fp_reg) {
+				const AsmReg base =
+					operand.literal ? literals_reg : frame_reg;
+				if (known == IS_DOUBLE) {
+					ASM(SSE_MOVSDrm, fp_reg,
+						FE_MEM(base, 0, FE_NOREG, operand.offset));
+				} else {
+					ASM(MOV64rm, value_reg,
+						FE_MEM(base, 0, FE_NOREG, operand.offset));
+					ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
+				}
+			};
+			load_double(left, left_known, left_fp);
+			load_double(right, right_known, right_fp);
+			literals.reset();
+			if (arithmetic) {
+				emit_double_arith(opcode, left_fp, right_fp);
+				if (result_slot) {
+					ASM(SSE_MOVSDmr,
+						FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+						left_fp);
+					ASM(MOV32mi,
+						FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+							+ static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						IS_DOUBLE);
+				}
+				if (node.has_result) {
+					auto fast_result = result_ref(node.result);
+					auto payload = fast_result.part(0);
+					auto type_info = fast_result.part(1);
+					auto payload_reg = payload.alloc_reg();
+					auto type_info_reg = type_info.alloc_reg();
+					ASM(SSE_MOVQ_X2Grr, payload_reg, left_fp);
+					ASM(MOV32ri, type_info_reg, IS_DOUBLE);
+					payload.set_modified();
+					type_info.set_modified();
+				}
+			} else {
+				ScratchReg parity{this};
+				auto parity_reg = parity.alloc_gp();
+				emit_double_compare_set(opcode, left_fp, right_fp,
+					value_reg, parity_reg);
+				if (result_slot) {
+					ASM(LEA32rm, parity_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
+					ASM(MOV32mr,
+						FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+							+ static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						parity_reg);
+				}
+				if (node.has_result) {
+					if (result_kind
+							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+						auto fast_result = result_ref(node.result);
+						auto payload = fast_result.part(0);
+						auto type_info = fast_result.part(1);
+						auto payload_reg = payload.alloc_reg();
+						auto type_info_reg = type_info.alloc_reg();
+						ASM(MOV64rr, payload_reg, value_reg);
+						ASM(LEA32rm, type_info_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
+						payload.set_modified();
+						type_info.set_modified();
+					} else {
+						auto [bool_ref, bool_result] =
+							result_ref_single(node.result);
+						auto bool_reg = bool_result.alloc_reg();
+						ASM(MOV64rr, bool_reg, value_reg);
+						bool_result.set_modified();
+					}
+				}
+			}
+			left_double.reset();
+			right_double.reset();
+			if (!guarded) {
+				return 1;
+			}
+			/* Both operands are known doubles: the cold edge is never
+			 * taken. */
+			value.reset();
+			generate_uncond_branch(guarded_successors[0]);
+			return 1;
+		}
+
+		auto slow = text_writer.label_create();
+		auto done = text_writer.label_create();
+		auto mixed = text_writer.label_create();
+		auto store = text_writer.label_create();
+		/* IDIV takes rdx:rax and a variable shift its count in cl;
+		 * reserve them before the operands are placed. */
+		ScratchReg fixed_ax{this};
+		ScratchReg fixed_dx{this};
+		ScratchReg fixed_cx{this};
+		const AsmReg ax_reg{AsmReg::AX};
+		const AsmReg dx_reg{AsmReg::DX};
+		const AsmReg cx_reg{AsmReg::CX};
+		if (opcode == ZEND_DIV || opcode == ZEND_MOD) {
+			fixed_ax.alloc_specific(ax_reg);
+			fixed_dx.alloc_specific(dx_reg);
+		} else if (opcode == ZEND_SL || opcode == ZEND_SR) {
+			fixed_cx.alloc_specific(cx_reg);
+		}
+		ScratchReg frame_scratch{this};
+		AsmReg frame_reg = AsmReg::make_invalid();
+		if (!register_operands || result_slot) {
+			auto [frame_ref, frame] =
+				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+			frame_scratch = std::move(frame).into_scratch();
+			frame_reg = frame_scratch.cur_reg();
+		}
+		ScratchReg literals{this};
+		ScratchReg left_type{this};
+		ScratchReg right_type{this};
+		ScratchReg left_value{this};
+		ScratchReg right_value{this};
+		ScratchReg left_double{this};
+		ScratchReg right_double{this};
+		auto left_type_reg = left_type.alloc_gp();
+		auto right_type_reg = right_type.alloc_gp();
+		auto left_reg = left_value.alloc_gp();
+		auto right_reg = right_value.alloc_gp();
+		/* Register pressure: the right type becomes the result type once
+		 * the operands are classified, the left type the decision. */
+		const AsmReg result_type_reg = right_type_reg;
+		const AsmReg decision_reg = left_type_reg;
+		auto left_fp = left_double.alloc(
+			tpde::x64::PlatformConfig::FP_BANK);
+		auto right_fp = right_double.alloc(
+			tpde::x64::PlatformConfig::FP_BANK);
+		AsmReg literals_reg = frame_reg;
+		if (left.literal || right.literal) {
+			literals_reg = literals.alloc_gp();
+			emit_literal_base(literals_reg, frame_reg);
+		}
+		auto load = [&](const FramedOperand &operand, AsmReg type_reg,
+				AsmReg value_reg, uint8_t known,
+				zend_mir_storage_id storage) {
+			if (operand.reg) {
+				const IRValueRef source = node.operands[operand.index];
+				if (adaptor->machine_kind(source)
+						== ZEND_TPDE_MACHINE_VALUE_I64) {
+					auto [value_ref, value] = val_ref_single(source);
+					ASM(MOV64rr, value_reg, value.load_to_reg());
+					ASM(MOV32ri, type_reg, IS_LONG);
+				} else {
+					auto value = val_ref(source);
+					auto payload = value.part(0);
+					auto type_info = value.part(1);
+					ASM(MOV64rr, value_reg, payload.load_to_reg());
+					ASM(MOVZXr32r8, type_reg, type_info.load_to_reg());
+				}
+				return;
+			}
+			const AsmReg base = operand.literal ? literals_reg : frame_reg;
+			/* A known long's type is never tested. */
+			if (known != IS_LONG) {
+				ASM(MOVZXr32m8, type_reg,
+					FE_MEM(base, 0, FE_NOREG, operand.offset
+						+ static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			}
+			ASM(MOV64rm, value_reg,
+				FE_MEM(base, 0, FE_NOREG, operand.offset));
+			/* A CV bound by global, static or & holds a reference; read
+			 * through it like the VM. A CV result written back into the
+			 * same slot keeps the helper, which updates the referent. */
+			if (!operand.literal
+					&& (known == IS_UNDEF
+						|| known == ZEND_TPDE_KNOWN_BOOL)
+					&& !(operation.result.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV
+						&& storage == operation.result_storage_id)) {
+				auto plain = text_writer.label_create();
+				ASM(CMP32ri, type_reg, IS_REFERENCE);
+				emit_cold_branch(Jump::je, plain, [&] {
+					emit_deref_value(type_reg, value_reg, true);
+				});
+			}
+		};
+		load(left, left_type_reg, left_reg, left_known,
+			operation.op1_storage_id);
+		load(right, right_type_reg, right_reg, right_known,
+			operation.op2_storage_id);
+
+		/* long op long; a known double goes straight to the double path */
+		if (!known_double) {
+			if (left_known != IS_LONG) {
+				ASM(CMP32ri, left_type_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, mixed);
+			}
+			if (right_known != IS_LONG) {
+				ASM(CMP32ri, right_type_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, mixed);
+			}
+			/* Proven arithmetic recomputes an overflowing result in
+			 * double: the wrapped sum or difference gives the left operand
+			 * back exactly, a product keeps it in the dead right type
+			 * register. */
+			auto overflow = text_writer.label_create();
+			const bool overflow_edge = proven && arithmetic
+				&& opcode != ZEND_DIV;
+			if (overflow_edge && opcode == ZEND_MUL) {
+				ASM(MOV64rr, result_type_reg, left_reg);
+			}
+			switch (opcode) {
+				case ZEND_ADD:
+					ASM(ADD64rr, left_reg, right_reg);
+					generate_raw_jump(Jump::jo,
+						overflow_edge ? overflow : slow);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				case ZEND_SUB:
+					ASM(SUB64rr, left_reg, right_reg);
+					generate_raw_jump(Jump::jo,
+						overflow_edge ? overflow : slow);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				case ZEND_MUL:
+					ASM(IMUL64rr, left_reg, right_reg);
+					generate_raw_jump(Jump::jo,
+						overflow_edge ? overflow : slow);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				case ZEND_DIV:
+					/* An exact quotient stays a long; otherwise divide both
+					 * operands in double precision below. */
+					ASM(TEST64rr, right_reg, right_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(CMP64ri, right_reg, -1);
+					generate_raw_jump(Jump::je, slow);
+					ASM(MOV64rr, ax_reg, left_reg);
+					ASM(CQO);
+					ASM(IDIV64r, right_reg);
+					ASM(TEST64rr, dx_reg, dx_reg);
+					generate_raw_jump(Jump::jne, mixed);
+					ASM(MOV64rr, left_reg, ax_reg);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				case ZEND_MOD:
+					ASM(TEST64rr, right_reg, right_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(CMP64ri, right_reg, -1);
+					generate_raw_jump(Jump::je, slow);
+					ASM(MOV64rr, ax_reg, left_reg);
+					ASM(CQO);
+					ASM(IDIV64r, right_reg);
+					ASM(MOV64rr, left_reg, dx_reg);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				case ZEND_SL:
+				case ZEND_SR:
+					/* Unsigned: a negative count is out of range too. */
+					ASM(CMP64ri, right_reg, 63);
+					generate_raw_jump(Jump::ja, slow);
+					ASM(MOV64rr, cx_reg, right_reg);
+					if (opcode == ZEND_SL) {
+						ASM(SHL64rr, left_reg, cx_reg);
+					} else {
+						ASM(SAR64rr, left_reg, cx_reg);
+					}
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				default: {
+					const Jump condition =
+						opcode == ZEND_IS_SMALLER ? Jump::jl
+						: opcode == ZEND_IS_SMALLER_OR_EQUAL ? Jump::jle
+						: opcode == ZEND_IS_EQUAL ? Jump::je
+						: Jump::jne;
+					ASM(CMP64rr, left_reg, right_reg);
+					generate_raw_set(condition, left_reg);
+					ASM(LEA32rm, result_type_reg, FE_MEM(left_reg, 0, FE_NOREG, IS_FALSE));
+					break;
+				}
+			}
+			generate_raw_jump(Jump::jmp, store);
+			if (overflow_edge) {
+				label_place(overflow);
+				if (opcode == ZEND_ADD) {
+					ASM(SUB64rr, left_reg, right_reg);
+				} else if (opcode == ZEND_SUB) {
+					ASM(ADD64rr, left_reg, right_reg);
+				} else {
+					ASM(MOV64rr, left_reg, result_type_reg);
+				}
+				ASM(SSE_CVTSI2SD64rr, left_fp, left_reg);
+				ASM(SSE_CVTSI2SD64rr, right_fp, right_reg);
+				emit_double_arith(opcode, left_fp, right_fp);
+				ASM(SSE_MOVQ_X2Grr, left_reg, left_fp);
+				ASM(MOV32ri, result_type_reg, IS_DOUBLE);
+				generate_raw_jump(Jump::jmp, store);
+			}
+		}
+
+		/* long or double, at least one double: reached only from the
+		 * type tests and an inexact division, and an integer operation
+		 * takes the helper for it. */
+		const bool mixed_reachable =
+			known_double || !known_long || opcode == ZEND_DIV;
+		label_place(mixed);
+		if (integer_op && mixed_reachable) {
+			generate_raw_jump(Jump::jmp, slow);
+		}
+		auto to_double = [&](AsmReg type_reg, AsmReg value_reg,
+				AsmReg fp_reg, uint8_t known) {
+			if (known == IS_DOUBLE) {
+				ASM(SSE_MOVQ_G2Xrr, fp_reg, value_reg);
+				return;
+			}
+			if (known == IS_LONG) {
+				ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
+				return;
+			}
+			emit_number_to_double(type_reg, value_reg, fp_reg, slow,
+				known != ZEND_TPDE_KNOWN_NUMBER);
+		};
+		if (mixed_reachable && !integer_op) {
+			to_double(left_type_reg, left_reg, left_fp, left_known);
+			to_double(right_type_reg, right_reg, right_fp, right_known);
+			switch (opcode) {
+				case ZEND_ADD:
+					ASM(SSE_ADDSDrr, left_fp, right_fp);
+					break;
+				case ZEND_SUB:
+					ASM(SSE_SUBSDrr, left_fp, right_fp);
+					break;
+				case ZEND_MUL:
+					ASM(SSE_MULSDrr, left_fp, right_fp);
+					break;
+				case ZEND_DIV: {
+					/* A zero or NaN divisor sets ZF; the helper throws. */
+					ScratchReg zero{this};
+					auto zero_fp = zero.alloc(
+						tpde::x64::PlatformConfig::FP_BANK);
+					ASM(SSE_XORPDrr, zero_fp, zero_fp);
+					ASM(SSE_UCOMISDrr, right_fp, zero_fp);
+					generate_raw_jump(Jump::je, slow);
+					ASM(SSE_DIVSDrr, left_fp, right_fp);
+					break;
+				}
+				default:
+					break;
+			}
+			if (arithmetic) {
+				ASM(SSE_MOVQ_X2Grr, left_reg, left_fp);
+				ASM(MOV32ri, result_type_reg, IS_DOUBLE);
+			} else {
+				emit_double_compare_set(opcode, left_fp, right_fp, left_reg,
+					right_reg);
+				ASM(LEA32rm, result_type_reg,
+					FE_MEM(left_reg, 0, FE_NOREG, IS_FALSE));
+			}
+		}
+
+		label_place(store);
+		literals.reset();
+		left_double.reset();
+		right_double.reset();
+		if (result_slot) {
+			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+				left_reg);
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+					+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				result_type_reg);
+		}
+		if (node.has_result) {
+			if (result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				auto fast_result = result_ref(node.result);
+				auto payload = fast_result.part(0);
+				auto type_info = fast_result.part(1);
+				auto payload_reg = payload.alloc_reg();
+				auto type_info_reg = type_info.alloc_reg();
+				ASM(MOV64rr, payload_reg, left_reg);
+				ASM(MOV32rr, type_info_reg, result_type_reg);
+				payload.set_modified();
+				type_info.set_modified();
+			} else {
+				auto [bool_ref, bool_result] =
+					result_ref_single(node.result);
+				auto bool_reg = bool_result.alloc_reg();
+				ASM(MOV64rr, bool_reg, left_reg);
+				bool_result.set_modified();
+			}
+		}
+		if (!guarded) {
+			right_value.reset();
+			return 1;
+		}
+		finish_guarded_with(slow, done, std::move(left_type),
+			[&] { right_value.reset(); }, guarded_successors);
+		return 1;
+	};
+	{
+		const int framed = numeric_framed_binary();
+		if (framed >= 0) {
+			return framed != 0;
+		}
+	}
+	if (!register_layout
+			|| (!framed_layout && !register_result_layout)
+			|| (framed_layout
+				&& (layout.left.offset > INT32_MAX - 8
+					|| layout.right.offset > INT32_MAX - 8
+					|| layout.result_offset > INT32_MAX - 8))
+			|| !node.has_result
+			|| node.operands.size() != 3
+			|| node.operands[2]
+				!= IRValueRef{Adaptor::FRAME_VALUE}) {
+		return branch_to_guarded_cold(ctx);
+	}
+	layout.source_opcode = mir.value_operation.source_opcode;
+	const bool supported_source_opcode =
+		layout.source_opcode == ZEND_ADD
+		|| layout.source_opcode == ZEND_SUB
+		|| layout.source_opcode == ZEND_BW_OR
+		|| layout.source_opcode == ZEND_BW_AND
+		|| layout.source_opcode == ZEND_BW_XOR
+		|| layout.source_opcode == ZEND_SPACESHIP
+		|| layout.source_opcode == ZEND_IS_IDENTICAL
+		|| layout.source_opcode == ZEND_IS_NOT_IDENTICAL
+		|| layout.source_opcode == ZEND_IS_EQUAL
+		|| layout.source_opcode == ZEND_IS_NOT_EQUAL
+		|| layout.source_opcode == ZEND_IS_SMALLER
+		|| layout.source_opcode == ZEND_IS_SMALLER_OR_EQUAL;
+	if (!supported_source_opcode) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (node.kind != Adaptor::InstKind::GuardedFast) {
+		return false;
+	}
+	const auto guarded_successors = guarded_successors_of(node);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg result_value{this};
+	ScratchReg decision{this};
+	auto result_reg = result_value.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+
+	auto load_register_long =
+		[&](IRValueRef operand, AsmReg target) {
+			if (adaptor->machine_kind(operand)
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				auto value = val_ref(operand);
+				const ValueParts parts = val_parts(operand);
+				if (parts.count() != 2) {
+					return false;
+				}
+				auto payload = value.part(0);
+				auto type_info = value.part(1);
+				auto payload_reg = payload.load_to_reg();
+				auto type_info_reg = type_info.load_to_reg();
+				ASM(CMP32ri, type_info_reg, IS_LONG);
+				generate_raw_jump(Jump::jne, slow);
+				ASM(MOV64rr, target, payload_reg);
+				return true;
+			}
+			auto [value_ref, value] = val_ref_single(operand);
+			ASM(MOV64rr, target, value.load_to_reg());
+			return true;
+		};
+	if (!load_register_long(node.operands[0], result_reg)) {
+		return false;
+	}
+	const bool boolean_result =
+		layout.source_opcode == ZEND_IS_IDENTICAL
+		|| layout.source_opcode == ZEND_IS_NOT_IDENTICAL
+		|| layout.source_opcode == ZEND_IS_EQUAL
+		|| layout.source_opcode == ZEND_IS_NOT_EQUAL
+		|| layout.source_opcode == ZEND_IS_SMALLER
+		|| layout.source_opcode == ZEND_IS_SMALLER_OR_EQUAL;
+	{
+		ScratchReg right_value{this};
+		auto right_reg = right_value.alloc_gp();
+		if (!load_register_long(node.operands[1], right_reg)) {
+			return false;
+		}
+			switch (layout.source_opcode) {
+			case ZEND_ADD:
+				ASM(ADD64rr, result_reg, right_reg);
+				generate_raw_jump(Jump::jo, slow);
+				break;
+			case ZEND_SUB:
+				ASM(SUB64rr, result_reg, right_reg);
+				generate_raw_jump(Jump::jo, slow);
+				break;
+			case ZEND_BW_OR:
+				ASM(OR64rr, result_reg, right_reg);
+				break;
+			case ZEND_BW_AND:
+				ASM(AND64rr, result_reg, right_reg);
+				break;
+			case ZEND_BW_XOR:
+				ASM(XOR64rr, result_reg, right_reg);
+				break;
+			case ZEND_SPACESHIP: {
+				ScratchReg less{this};
+				auto less_reg = less.alloc_gp();
+				ASM(CMP64rr, result_reg, right_reg);
+				generate_raw_set(Jump::jl, less_reg);
+				generate_raw_set(Jump::jg, result_reg);
+				ASM(SUB64rr, result_reg, less_reg);
+				break;
+			}
+			case ZEND_IS_IDENTICAL:
+			case ZEND_IS_EQUAL:
+				ASM(CMP64rr, result_reg, right_reg);
+				generate_raw_set(Jump::je, result_reg);
+				break;
+			case ZEND_IS_NOT_IDENTICAL:
+			case ZEND_IS_NOT_EQUAL:
+				ASM(CMP64rr, result_reg, right_reg);
+				generate_raw_set(Jump::jne, result_reg);
+				break;
+			case ZEND_IS_SMALLER:
+				ASM(CMP64rr, result_reg, right_reg);
+				generate_raw_set(Jump::jl, result_reg);
+				break;
+			case ZEND_IS_SMALLER_OR_EQUAL:
+				ASM(CMP64rr, result_reg, right_reg);
+				generate_raw_set(Jump::jle, result_reg);
+				break;
+			default:
+				return false;
+		}
+	}
+	if (framed_layout || register_result_layout) {
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			result_reg);
+		if (boolean_result) {
+			ScratchReg result_type{this};
+			auto result_type_reg = result_type.alloc_gp();
+			ASM(LEA32rm, result_type_reg, FE_MEM(result_reg, 0, FE_NOREG, IS_FALSE));
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.result_offset
+							+ offsetof(zval, u1.type_info))),
+				result_type_reg);
+		} else {
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.result_offset
+							+ offsetof(zval, u1.type_info))),
+				IS_LONG);
+		}
+	}
+	if (adaptor->machine_kind(node.result)
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		auto fast_result = result_ref(node.result);
+		auto payload = fast_result.part(0);
+		auto type_info = fast_result.part(1);
+		auto payload_reg = payload.alloc_reg();
+		auto type_info_reg = type_info.alloc_reg();
+		ASM(MOV64rr, payload_reg, result_reg);
+		if (boolean_result) {
+			ASM(LEA32rm, type_info_reg, FE_MEM(result_reg, 0, FE_NOREG, IS_FALSE));
+		} else {
+			ASM(MOV32ri, type_info_reg, IS_LONG);
+		}
+		payload.set_modified();
+		type_info.set_modified();
+	} else {
+		auto [fast_result_ref, fast_result] =
+			result_ref_single(node.result);
+		auto fast_result_reg = fast_result.alloc_reg();
+		ASM(MOV64rr, fast_result_reg, result_reg);
+		fast_result.set_modified();
+	}
+	finish_guarded_with(slow, done, std::move(decision),
+		[&] { result_value.reset(); }, guarded_successors);
+	return true;
+}
+
+bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_long_assign_op layout;
+
+	if (!zend_tpde_long_assign_op_at(mir, &layout)
+			|| layout.left_offset > INT32_MAX - 8
+			|| layout.right.offset > INT32_MAX - 8
+			|| layout.result_offset > INT32_MAX - 8) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (layout.has_result != node.has_result
+			&& !(node.mutation_result
+				&& !layout.has_result && node.has_result)) {
+		return branch_to_guarded_cold(ctx);
+	}
+	/* ASSIGN_OP is always guarded (see freeze_machine_control_flow()),
+	 * also in typed bodies. */
+	ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
+	const auto guarded_successors = guarded_successors_of(node);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg type{this};
+	ScratchReg left{this};
+	ScratchReg right{this};
+	ScratchReg decision{this};
+	auto type_reg = type.alloc_gp();
+	auto left_reg = left.alloc_gp();
+	auto right_reg = right.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+	/* A lazy mutation leaves its result in the register only when it
+	 * read the previous value from the register too: a value read
+	 * from the slot is the slot's, which the result must update. */
+	bool left_from_register = false;
+
+		if (node.assign_op_left_operand_index < node.operands.size()
+				&& adaptor->representation(
+					node.operands[node.assign_op_left_operand_index])
+					== ZEND_MIR_REPRESENTATION_I64
+				&& adaptor->exact_type(
+					node.operands[node.assign_op_left_operand_index])
+					== ZEND_MIR_SCALAR_TYPE_I64
+				&& adaptor->machine_kind(
+					node.operands[node.assign_op_left_operand_index])
+					== ZEND_TPDE_MACHINE_VALUE_I64) {
+			auto [left_ref, left_value] =
+				val_ref_single(
+					node.operands[node.assign_op_left_operand_index]);
+			ASM(MOV64rr, left_reg, left_value.load_to_reg());
+			left_from_register = true;
+		} else if (node.assign_op_left_operand_index < node.operands.size()
+				&& adaptor->machine_kind(
+					node.operands[node.assign_op_left_operand_index])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto left_value = val_ref(
+				node.operands[node.assign_op_left_operand_index]);
+		auto payload = left_value.part(0);
+		auto type_info = left_value.part(1);
+		ASM(MOV64rr, left_reg, payload.load_to_reg());
+		ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		left_from_register = true;
+	} else {
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.left_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, left_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.left_offset)));
+	}
+
+		if (node.assign_op_right_operand_index < node.operands.size()
+				&& adaptor->representation(
+					node.operands[node.assign_op_right_operand_index])
+					== ZEND_MIR_REPRESENTATION_I64
+				&& adaptor->exact_type(
+					node.operands[node.assign_op_right_operand_index])
+					== ZEND_MIR_SCALAR_TYPE_I64
+				&& adaptor->machine_kind(
+					node.operands[node.assign_op_right_operand_index])
+					== ZEND_TPDE_MACHINE_VALUE_I64) {
+			auto [right_ref, right_value] =
+				val_ref_single(
+					node.operands[node.assign_op_right_operand_index]);
+			ASM(MOV64rr, right_reg, right_value.load_to_reg());
+		} else if (node.assign_op_right_operand_index < node.operands.size()
+				&& adaptor->machine_kind(
+					node.operands[node.assign_op_right_operand_index])
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto right_value = val_ref(
+				node.operands[node.assign_op_right_operand_index]);
+		auto payload = right_value.part(0);
+		auto type_info = right_value.part(1);
+		auto payload_reg = payload.load_to_reg();
+		auto type_info_reg = type_info.load_to_reg();
+		ASM(MOV64rr, right_reg, payload_reg);
+		ASM(CMP8ri, type_info_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+	} else if (layout.right.literal) {
+		if (node.machine_reference_operand_index
+					>= node.operands.size()) {
+			return branch_to_guarded_cold(ctx);
+		}
+		auto [literal_ref, literal] = val_ref_single(
+			node.operands[node.machine_reference_operand_index]);
+		auto literal_reg = literal.load_to_reg();
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(literal_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, right_reg,
+			FE_MEM(literal_reg, 0, FE_NOREG, 0));
+	} else {
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.right.offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, right_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.right.offset)));
+	}
+
+	if (layout.has_result) {
+		ASM(TEST32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.result_offset
+						+ offsetof(zval, u1.type_info))),
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::jne, slow);
+	}
+
+	switch (layout.source_opcode) {
+		case ZEND_ADD:
+			ASM(ADD64rr, left_reg, right_reg);
+			generate_raw_jump(Jump::jo, slow);
+			break;
+		case ZEND_SUB:
+			ASM(SUB64rr, left_reg, right_reg);
+			generate_raw_jump(Jump::jo, slow);
+			break;
+		case ZEND_BW_OR:
+			ASM(OR64rr, left_reg, right_reg);
+			break;
+		case ZEND_BW_AND:
+			ASM(AND64rr, left_reg, right_reg);
+			break;
+		case ZEND_BW_XOR:
+			ASM(XOR64rr, left_reg, right_reg);
+			break;
+		default:
+			return false;
+	}
+	if (node.mutation_result) {
+		if (adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+			auto [result_ref, result] =
+				result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(MOV64rr, result_reg, left_reg);
+			result.set_modified();
+		} else if (adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto result = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto value = result.part(part);
+				auto value_reg = value.alloc_reg();
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					ASM(MOV64rr, value_reg, left_reg);
+				} else if (role
+						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					ASM(MOV32ri, value_reg, IS_LONG);
+				} else {
+					return false;
+				}
+				value.set_modified();
+			}
+		} else {
+			return false;
+		}
+	}
+	if (!(node.mutation_result && mir.mutation_lazy_scalar
+			&& left_from_register)) {
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.left_offset)),
+			left_reg);
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.left_offset + offsetof(zval, u1.type_info))),
+			IS_LONG);
+	}
+	if (layout.has_result) {
+		auto [result_ref, result] =
+			result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		ASM(MOV64rr, result_reg, left_reg);
+		result.set_modified();
+	}
+	if (layout.consume_right) {
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.right.offset
+					+ offsetof(zval, u1.type_info))),
+			IS_UNDEF);
+	}
+	type.reset();
+	left.reset();
+	right.reset();
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		guarded_successors);
+	return true;
+}
+
+bool ZendCompilerX64::long_incdec(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_long_incdec layout;
+
+	if (!zend_tpde_long_incdec_at(mir, &layout, true)
+			|| layout.operand_offset > INT32_MAX - 8
+			|| layout.result_offset > INT32_MAX - 8
+			|| (layout.indirect
+				&& (node.mutation_result || mir.mutation_lazy_scalar
+					|| (!node.operands.empty()
+						&& node.operands[0]
+							!= IRValueRef{Adaptor::FRAME_VALUE})))) {
+		return branch_to_guarded_cold(ctx);
+	}
+	/* A result without a machine value is published to its slot. */
+	if (layout.has_result != node.has_result
+			&& !(node.mutation_result
+				&& !layout.has_result && node.has_result)
+			&& !(layout.has_result && !node.has_result)) {
+		return branch_to_guarded_cold(ctx);
+	}
+	/* INCDEC is always guarded (see freeze_machine_control_flow()),
+	 * also in typed bodies. */
+	ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
+	const bool machine_result = node.has_result;
+	const auto guarded_successors = guarded_successors_of(node);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg type{this};
+	ScratchReg value{this};
+	ScratchReg limit{this};
+	ScratchReg decision{this};
+	auto type_reg = type.alloc_gp();
+	auto value_reg = value.alloc_gp();
+	auto limit_reg = limit.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+	/* Address of the updated integer when it is not the CV slot itself. */
+	ScratchReg target{this};
+	AsmReg target_reg{};
+	/* As for ASSIGN_OP: only a value read from the register may leave
+	 * the slot behind. */
+	const bool lazy_register_operand =
+		node.mutation_result && mir.mutation_lazy_scalar
+		&& !node.operands.empty()
+		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+		&& ((adaptor->representation(node.operands[0])
+					== ZEND_MIR_REPRESENTATION_I64
+				&& adaptor->exact_type(node.operands[0])
+					== ZEND_MIR_SCALAR_TYPE_I64
+				&& adaptor->machine_kind(node.operands[0])
+					== ZEND_TPDE_MACHINE_VALUE_I64)
+			|| adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
+
+	if (!node.operands.empty()
+			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+			&& adaptor->representation(node.operands[0])
+				== ZEND_MIR_REPRESENTATION_I64
+			&& adaptor->exact_type(node.operands[0])
+				== ZEND_MIR_SCALAR_TYPE_I64
+			&& adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+		auto [operand_ref, operand] =
+			val_ref_single(node.operands[0]);
+		ASM(MOV64rr, value_reg, operand.load_to_reg());
+	} else if (!node.operands.empty()
+			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
+			&& adaptor->machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		auto operand = val_ref(node.operands[0]);
+		auto payload = operand.part(0);
+		auto type_info = operand.part(1);
+		ASM(MOV64rr, value_reg, payload.load_to_reg());
+		ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+	} else if (layout.indirect) {
+		/*
+		 * ++/-- through a write fetch (++$a[$k]): the VAR holds the
+		 * INDIRECT to the element. An integer or an untyped reference's
+		 * integer is updated in place; the helper does the rest.
+		 */
+		auto loaded = text_writer.label_create();
+		target_reg = target.alloc_gp();
+		ASM(CMP8mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.operand_offset
+						+ offsetof(zval, u1.type_info))),
+			IS_INDIRECT);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, target_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(target_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		emit_cold_branch(Jump::jne, loaded, [&] {
+			ASM(CMP32ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+			ASM(CMP64mi,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_reference, sources.ptr))),
+				0);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(ADD64ri, target_reg,
+				static_cast<int32_t>(offsetof(zend_reference, val)));
+			ASM(CMP8mi,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))),
+				IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
+		});
+		ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+	} else if (!lazy_register_operand) {
+		/*
+		 * The CV may hold a reference, as for an int &$value parameter.
+		 * Update an untyped reference's integer in place; typed
+		 * references need the helper's type checks.
+		 */
+		target_reg = target.alloc_gp();
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.operand_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(LEA64rm, target_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		emit_cold_branch(Jump::jne, text_writer.label_create(), [&] {
+			ASM(CMP32ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+			ASM(CMP64mi,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_reference, sources.ptr))),
+				0);
+			generate_raw_jump(Jump::jne, slow);
+			ASM(ADD64ri, target_reg,
+				static_cast<int32_t>(offsetof(zend_reference, val)));
+			ASM(MOVZXr32m8, type_reg,
+				FE_MEM(target_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zval, u1.type_info))));
+			ASM(CMP32ri, type_reg, IS_LONG);
+			generate_raw_jump(Jump::jne, slow);
+		});
+		ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
+	} else {
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.operand_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, value_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+	}
+	/* The add overflows exactly at ZEND_LONG_MAX (ZEND_LONG_MIN), which
+	 * the helper turns into a double; nothing is written before. */
+	const int32_t step = layout.increment ? 1 : -1;
+	ASM(ADD64ri, value_reg, step);
+	generate_raw_jump(Jump::jo, slow);
+
+	if (layout.has_result) {
+		ASM(TEST32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.result_offset
+						+ offsetof(zval, u1.type_info))),
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::jne, slow);
+		if (layout.post) {
+			if (machine_result) {
+				auto [result_ref, result] =
+					result_ref_single(node.result);
+				auto result_reg = result.alloc_reg();
+				ASM(LEA64rm, result_reg,
+					FE_MEM(value_reg, 0, FE_NOREG, -step));
+				result.set_modified();
+			} else {
+				ASM(LEA64rm, limit_reg,
+					FE_MEM(value_reg, 0, FE_NOREG, -step));
+				ASM(MOV64mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset)),
+					limit_reg);
+			}
+		}
+	}
+	if (node.mutation_result) {
+		if (adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+			auto [result_ref, result] =
+				result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			ASM(MOV64rr, result_reg, value_reg);
+			result.set_modified();
+		} else if (adaptor->machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			auto result = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto result_part = result.part(part);
+				auto result_reg = result_part.alloc_reg();
+				const zend_tpde_machine_part_role role =
+					parts.representation.parts[part].semantic_role;
+				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+					ASM(MOV64rr, result_reg, value_reg);
+				} else if (role
+						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
+					ASM(MOV32ri, result_reg, IS_LONG);
+				} else {
+					return false;
+				}
+				result_part.set_modified();
+			}
+		} else {
+			return false;
+		}
+	}
+	if (target.has_reg()) {
+		ASM(MOV64mr, FE_MEM(target_reg, 0, FE_NOREG, 0), value_reg);
+	} else if (!lazy_register_operand) {
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)),
+			value_reg);
+	}
+	if (layout.has_result) {
+		if (!layout.post) {
+			if (machine_result) {
+				auto [result_ref, result] =
+					result_ref_single(node.result);
+				auto result_reg = result.alloc_reg();
+				ASM(MOV64rr, result_reg, value_reg);
+				result.set_modified();
+			} else {
+				ASM(MOV64mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset)),
+					value_reg);
+			}
+		}
+		if (!machine_result) {
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.result_offset
+							+ offsetof(zval, u1.type_info))),
+				IS_LONG);
+		}
+	}
+	type.reset();
+	value.reset();
+	limit.reset();
+	target.reset();
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		guarded_successors);
+	return true;
+}
+
+bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_slot_isset_empty layout;
+
+	if (!zend_tpde_slot_isset_empty_at(mir, &layout)
+			|| layout.operand_offset
+				> static_cast<uint32_t>(INT32_MAX
+					- offsetof(zval, u1.type_info))
+			|| layout.result_offset
+				> static_cast<uint32_t>(INT32_MAX
+					- offsetof(zval, u1.type_info))) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (!node.has_result
+			&& node.kind != Adaptor::InstKind::GuardedFast) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (!node.has_result
+			&& node.kind == Adaptor::InstKind::GuardedFast
+			&& (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL
+				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64)) {
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_scratch = frame_register(std::move(frame));
+		auto frame_reg = frame_scratch.cur_reg();
+		ScratchReg result{this};
+		ScratchReg type{this};
+		auto result_reg = result.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		if (!layout.is_empty) {
+			ASM(MOV32ri, result_reg,
+				node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL ? 0 : 1);
+		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+			ASM(MOV32ri, result_reg, 1);
+		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			ASM(MOV32rm, type_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.operand_offset)));
+			ASM(TEST32rr, type_reg, type_reg);
+			generate_raw_set(Jump::je, result_reg);
+		} else {
+			ASM(MOV64rm, type_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.operand_offset)));
+			ASM(TEST64rr, type_reg, type_reg);
+			generate_raw_set(Jump::je, result_reg);
+		}
+		store_boolean_zval(frame_reg,
+			static_cast<int32_t>(layout.result_offset), result_reg,
+			type_reg);
+		const auto successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		generate_branch_to_block(
+			Jump::jmp, successors[0], false, false);
+		return true;
+	}
+	if (node.has_result) {
+		const bool invert_result =
+			(mir.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_INVERT_RESULT) != 0;
+		const bool has_scalar_operand = !node.operands.empty()
+			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE};
+		const IRValueRef operand = has_scalar_operand
+			? node.operands[0] : IRValueRef{Adaptor::FRAME_VALUE};
+		const zend_mir_scalar_type_mask type = has_scalar_operand
+			? adaptor->exact_type(operand) : node.exact_type;
+		if (type == ZEND_MIR_SCALAR_TYPE_NULL
+				|| type == ZEND_MIR_SCALAR_TYPE_I1
+				|| type == ZEND_MIR_SCALAR_TYPE_I64) {
+			auto [result_ref, result] = result_ref_single(node.result);
+			auto result_reg = result.alloc_reg();
+			if (!layout.is_empty) {
+				ASM(MOV32ri, result_reg,
+					type == ZEND_MIR_SCALAR_TYPE_NULL ? 0 : 1);
+			} else if (type == ZEND_MIR_SCALAR_TYPE_NULL) {
+				ASM(MOV32ri, result_reg, 1);
+			} else if (has_scalar_operand) {
+				auto [operand_ref, value] = val_ref_single(operand);
+				auto value_reg = value.load_to_reg();
+				if (type == ZEND_MIR_SCALAR_TYPE_I1) {
+					ASM(TEST32rr, value_reg, value_reg);
+				} else {
+					ASM(TEST64rr, value_reg, value_reg);
+				}
+				generate_raw_set(
+					invert_result ? Jump::jne : Jump::je, result_reg);
+			} else {
+				auto [frame_ref, frame] =
+					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+				auto frame_scratch = frame_register(std::move(frame));
+				ScratchReg value{this};
+				auto value_reg = value.alloc_gp();
+				if (type == ZEND_MIR_SCALAR_TYPE_I1) {
+					ASM(MOV32rm, value_reg,
+						FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+							static_cast<int32_t>(layout.operand_offset)));
+					ASM(TEST32rr, value_reg, value_reg);
+				} else {
+					ASM(MOV64rm, value_reg,
+						FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
+							static_cast<int32_t>(layout.operand_offset)));
+					ASM(TEST64rr, value_reg, value_reg);
+				}
+				generate_raw_set(
+					invert_result ? Jump::jne : Jump::je, result_reg);
+			}
+			result.set_modified();
+			if (node.kind == Adaptor::InstKind::GuardedFast) {
+				auto [frame_ref, frame] =
+					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+				auto frame_scratch = frame_register(std::move(frame));
+				ScratchReg result_type{this};
+				store_boolean_zval(frame_scratch.cur_reg(),
+					static_cast<int32_t>(layout.result_offset), result_reg,
+					result_type.alloc_gp());
+				const auto successors = adaptor->block_succs(
+					IRBlockRef{node.control_block});
+				generate_branch_to_block(
+					Jump::jmp, successors[0], false, false);
+			}
+			return true;
+		}
+	}
+	/* The general path decides a guarded node's branch. */
+	if (node.kind != Adaptor::InstKind::GuardedFast) {
+		return false;
+	}
+	auto slow = text_writer.label_create();
+	auto truthy = text_writer.label_create();
+	auto falsey = text_writer.label_create();
+	auto store = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg type{this};
+	ScratchReg value{this};
+	ScratchReg decision{this};
+	auto type_reg = type.alloc_gp();
+	auto value_reg = value.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+
+	if (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+		generate_raw_jump(Jump::jmp,
+			layout.is_empty ? truthy : falsey);
+	} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
+			|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64) {
+		if (!layout.is_empty) {
+			generate_raw_jump(Jump::jmp, truthy);
+		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			ASM(MOV32rm, value_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.operand_offset)));
+			ASM(TEST32rr, value_reg, value_reg);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+		} else {
+			ASM(MOV64rm, value_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(layout.operand_offset)));
+			ASM(TEST64rr, value_reg, value_reg);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+		}
+	} else {
+	ASM(MOVZXr32m8, type_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				layout.operand_offset
+					+ offsetof(zval, u1.type_info))));
+	ASM(CMP32ri, type_reg, IS_NULL);
+	generate_raw_jump(Jump::jle, falsey);
+	ASM(CMP32ri, type_reg, IS_REFERENCE);
+	generate_raw_jump(Jump::je, slow);
+	if (!layout.is_empty) {
+		generate_raw_jump(Jump::jmp, truthy);
+	} else {
+		ASM(CMP32ri, type_reg, IS_FALSE);
+		generate_raw_jump(Jump::je, falsey);
+		ASM(CMP32ri, type_reg, IS_TRUE);
+		generate_raw_jump(Jump::je, truthy);
+		ASM(CMP32ri, type_reg, IS_LONG);
+		auto not_long = text_writer.label_create();
+		generate_raw_jump(Jump::jne, not_long);
+		ASM(MOV64rm, value_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+		ASM(TEST64rr, value_reg, value_reg);
+		generate_raw_jump(Jump::jne, truthy);
+		generate_raw_jump(Jump::jmp, falsey);
+
+		label_place(not_long);
+		ASM(CMP32ri, type_reg, IS_STRING);
+		auto not_string = text_writer.label_create();
+		generate_raw_jump(Jump::jne, not_string);
+		ASM(MOV64rm, value_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+		ASM(MOV64rm, type_reg,
+			FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_string, len))));
+		ASM(TEST64rr, type_reg, type_reg);
+		generate_raw_jump(Jump::je, falsey);
+		ASM(CMP64ri, type_reg, 1);
+		generate_raw_jump(Jump::jne, truthy);
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_string, val))));
+		ASM(CMP32ri, type_reg, '0');
+		generate_raw_jump(Jump::je, falsey);
+		generate_raw_jump(Jump::jmp, truthy);
+
+		label_place(not_string);
+		ASM(CMP32ri, type_reg, IS_ARRAY);
+		auto not_array = text_writer.label_create();
+		generate_raw_jump(Jump::jne, not_array);
+		ASM(MOV64rm, value_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(HashTable, nNumOfElements))));
+		ASM(TEST32rr, type_reg, type_reg);
+		generate_raw_jump(Jump::jne, truthy);
+		generate_raw_jump(Jump::jmp, falsey);
+
+		label_place(not_array);
+		ASM(CMP32ri, type_reg, IS_RESOURCE);
+		auto not_resource = text_writer.label_create();
+		generate_raw_jump(Jump::jne, not_resource);
+		ASM(MOV64rm, value_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.operand_offset)));
+		ASM(MOV32rm, type_reg,
+			FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_resource, handle))));
+		ASM(TEST32rr, type_reg, type_reg);
+		generate_raw_jump(Jump::jne, truthy);
+		generate_raw_jump(Jump::jmp, falsey);
+		label_place(not_resource);
+		generate_raw_jump(Jump::jmp, slow);
+	}
+	}
+
+	label_place(truthy);
+	ASM(MOV32ri, type_reg, layout.is_empty ? 0 : 1);
+	generate_raw_jump(Jump::jmp, store);
+	label_place(falsey);
+	ASM(MOV32ri, type_reg, layout.is_empty ? 1 : 0);
+	label_place(store);
+	if (node.has_result) {
+		auto [result_ref, result] =
+			result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		ASM(MOV32rr, result_reg, type_reg);
+		result.set_modified();
+	} else {
+		store_boolean_zval(frame_reg,
+			static_cast<int32_t>(layout.result_offset), type_reg,
+			value_reg);
+	}
+	type.reset();
+	value.reset();
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		guarded_successors_of(node));
+	return true;
+}
+
+bool ZendCompilerX64::object_property_read(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_instruction_record &record = ctx.record;
+	zend_tpde_object_property_read layout;
+	const zend_tpde_machine_reference *property_reference =
+		operation_machine_reference(ctx,
+			ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT);
+
+	/* A result without a machine value lives only in its temporary:
+	 * the copy goes there, as the helper's cached read puts it. */
+	const bool frame_result = !node.has_result
+		&& (mir.value_operation.result.slot_kind
+				== ZEND_MIR_SOURCE_SLOT_TMP
+			|| mir.value_operation.result.slot_kind
+				== ZEND_MIR_SOURCE_SLOT_VAR);
+	const bool isset_read = record.opcode
+		== ZEND_MIR_OPCODE_OBJECT_FETCH_IS;
+	const bool func_arg_read = record.opcode
+		== ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG;
+	if (!(isset_read
+				? frame_result
+					&& zend_tpde_object_property_isset_read_at(
+						mir, &layout)
+				: func_arg_read
+					? frame_result
+						&& zend_tpde_object_property_func_arg_read_at(
+							mir, &layout)
+					: zend_tpde_object_property_read_at(mir, &layout))
+			|| (!frame_result && !node.has_result)
+			|| (!frame_result
+				&& (property_reference == nullptr
+					|| property_reference->stable_storage_or_layout_id
+						!= layout.cache_offset
+					|| property_reference->access_width
+						!= sizeof(zval)))
+			|| layout.receiver_offset > INT32_MAX
+			|| layout.result_offset > INT32_MAX
+			|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)
+			|| node.kind != Adaptor::InstKind::GuardedFast) {
+		return branch_to_guarded_cold(ctx);
+	}
+	const auto guarded_successors = guarded_successors_of(node);
+	const zend_tpde_machine_value_kind result_kind = frame_result
+		? ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		: adaptor->machine_kind(node.result);
+	const zend_mir_scalar_type_mask exact = frame_result
+		? ZEND_MIR_SCALAR_TYPE_NONE : adaptor->exact_type(node.result);
+	const bool boxed = result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+	const bool pointer = result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+		|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+		|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
+		|| result_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
+		|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
+	if (!boxed && exact != ZEND_MIR_SCALAR_TYPE_I1
+			&& exact != ZEND_MIR_SCALAR_TYPE_I64
+			&& exact != ZEND_MIR_SCALAR_TYPE_F64 && !pointer) {
+		return false;
+	}
+	/*
+	 * The declared property the VM run-time cache names is probed by
+	 * zend_native_property_slot(); a miss leaves everything unchanged and
+	 * takes the guarded cold block, whose helper repeats the fetch.
+	 */
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg decision{this};
+	auto decision_reg = decision.alloc_gp();
+	{
+		ScratchReg cache{this};
+		auto cache_reg = cache.alloc_gp();
+		if (func_arg_read) {
+			/* An argument sent by reference fetches for writing. */
+			ASM(MOV64rm, cache_reg,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, call))));
+			ASM(TEST32mi,
+				FE_MEM(cache_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, This)
+						+ offsetof(zval, u1.type_info))),
+				static_cast<int32_t>(ZEND_CALL_SEND_ARG_BY_REF));
+			generate_raw_jump(Jump::jne, slow);
+		}
+		ASM(MOV64rm, cache_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_execute_data, run_time_cache))));
+		ASM(TEST64rr, cache_reg, cache_reg);
+		generate_raw_jump(Jump::je, slow);
+		/* A reference property reads as its value (ZVAL_COPY_DEREF). */
+		ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!EncodeBase::encode_zend_native_property_read_slot(
+				GenericValuePart{GenericValuePart::Expr{frame_reg,
+					static_cast<int64_t>(layout.receiver_offset)}},
+				GenericValuePart{GenericValuePart::Expr{
+					std::move(cache),
+					static_cast<int64_t>(layout.cache_offset)}},
+				slot)) {
+			return false;
+		}
+		const AsmReg slot_reg = slot.cur_reg_or_load(this);
+		ASM(TEST64rr, slot_reg, slot_reg);
+		generate_raw_jump(Jump::je, slow);
+		GenericValuePart property{
+			GenericValuePart::Expr{slot_reg, 0}};
+		bool encoded;
+		if (frame_result) {
+			ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
+			ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 4};
+			encoded = EncodeBase::encode_zend_native_zval_copy(
+				std::move(property), payload, type_info);
+			if (encoded) {
+				ASM(MOV64mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset)),
+					payload.cur_reg_or_load(this));
+				ASM(MOV32mr,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.result_offset
+							+ offsetof(zval, u1.type_info))),
+					type_info.cur_reg_or_load(this));
+			}
+			payload.reset(this);
+			type_info.reset(this);
+			slot.reset(this);
+			if (!encoded) {
+				return false;
+			}
+		} else {
+			auto result = result_ref(node.result);
+			if (boxed) {
+				/* An owned copy, published to the result temporary as the
+				 * helper does, since consumers such as RETURN read it there. */
+				auto payload = result.part(0);
+				auto type_info = result.part(1);
+				encoded = EncodeBase::encode_zend_native_zval_copy(
+					std::move(property), payload, type_info);
+				if (encoded) {
+					ASM(MOV64mr,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(layout.result_offset)),
+						payload.load_to_reg());
+					ASM(MOV32mr,
+						FE_MEM(frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(layout.result_offset
+								+ offsetof(zval, u1.type_info))),
+						type_info.load_to_reg());
+				}
+			} else if (exact == ZEND_MIR_SCALAR_TYPE_I1) {
+				encoded = EncodeBase::encode_zend_native_zval_is_true_type(
+					std::move(property), result.part(0));
+			} else if (exact == ZEND_MIR_SCALAR_TYPE_F64) {
+				encoded = EncodeBase::encode_zend_native_load_f64(
+					std::move(property), result.part(0));
+			} else {
+				encoded = EncodeBase::encode_zend_native_load_u64(
+					std::move(property), result.part(0));
+			}
+			slot.reset(this);
+			if (!encoded) {
+				return false;
+			}
+		}
+	}
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		guarded_successors);
+	return true;
+}
+
+/*
+ * FETCH_OBJ_W of a cached untyped declared property: the VAR result
+ * addresses the slot through IS_INDIRECT, as the helper's cached fetch
+ * does; anything else takes the guarded cold block.
+ */
+bool ZendCompilerX64::object_property_address(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_object_property_read layout;
+
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| node.has_result
+			|| !zend_tpde_object_property_write_fetch_at(mir, &layout)
+			|| layout.receiver_offset > INT32_MAX
+			|| layout.result_offset > INT32_MAX
+			|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
+		return branch_to_guarded_cold(ctx);
+	}
+	const auto guarded_successors = guarded_successors_of(node);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg decision{this};
+	auto decision_reg = decision.alloc_gp();
+	{
+		ScratchReg cache{this};
+		auto cache_reg = cache.alloc_gp();
+		ASM(MOV64rm, cache_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_execute_data, run_time_cache))));
+		ASM(TEST64rr, cache_reg, cache_reg);
+		generate_raw_jump(Jump::je, slow);
+		/* A typed property's info in the cache entry needs the
+		 * helper's checks. */
+		ASM(CMP64mi,
+			FE_MEM(cache_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.cache_offset + 2 * sizeof(void *))),
+			0);
+		generate_raw_jump(Jump::jne, slow);
+		ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!EncodeBase::encode_zend_native_property_slot(
+				GenericValuePart{GenericValuePart::Expr{frame_reg,
+					static_cast<int64_t>(layout.receiver_offset)}},
+				GenericValuePart{GenericValuePart::Expr{
+					std::move(cache),
+					static_cast<int64_t>(layout.cache_offset)}},
+				slot)) {
+			return false;
+		}
+		const AsmReg slot_reg = slot.cur_reg_or_load(this);
+		ASM(TEST64rr, slot_reg, slot_reg);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV64mr,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset)),
+			slot_reg);
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_INDIRECT);
+		slot.reset(this);
+	}
+	finish_guarded(slow, done, std::move(decision), frame_scratch,
+		guarded_successors);
+	return true;
+}
+
+bool ZendCompilerX64::object_property_write(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_object_property_write layout;
+	const zend_tpde_machine_reference *property_reference =
+		operation_machine_reference(ctx,
+			ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT);
+
+	if (!zend_tpde_object_property_write_at(mir, &layout)
+			|| property_reference == nullptr
+			|| property_reference->stable_storage_or_layout_id
+				!= layout.cache_offset
+			|| property_reference->access_width != sizeof(zval)
+			|| layout.receiver_offset > INT32_MAX
+			|| layout.value_offset > INT32_MAX
+			|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
+		return execute_value_operation(ctx);
+	}
+	if (node.kind != Adaptor::InstKind::GuardedFast
+			|| node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX) {
+		return false;
+	}
+	const bool scalar_value =
+		node.property_write_value_operand_index != UINT32_MAX
+		&& node.property_write_value_operand_index < node.operands.size()
+		&& adaptor->machine_kind(node.operands[
+			node.property_write_value_operand_index])
+			== ZEND_TPDE_MACHINE_VALUE_I64
+		&& adaptor->exact_type(node.operands[
+			node.property_write_value_operand_index])
+			== ZEND_MIR_SCALAR_TYPE_I64;
+	const auto successors = guarded_successors_of(node);
+	auto slow = text_writer.label_create();
+	auto property_metadata_valid = text_writer.label_create();
+	auto old_released = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg object{this};
+	ScratchReg cache{this};
+	ScratchReg offset{this};
+	ScratchReg property{this};
+	ScratchReg type{this};
+	ScratchReg low_word{this};
+	ScratchReg decision{this};
+	auto object_reg = object.alloc_gp();
+	auto cache_reg = cache.alloc_gp();
+	auto offset_reg = offset.alloc_gp();
+	auto property_reg = property.alloc_gp();
+	auto type_reg = type.alloc_gp();
+	auto low_word_reg = low_word.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+	ASM(MOVZXr32m8, type_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				layout.receiver_offset
+					+ offsetof(zval, u1.type_info))));
+	ASM(CMP32ri, type_reg, IS_OBJECT);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV64rm, object_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.receiver_offset)));
+	ASM(MOV32rm, offset_reg,
+		FE_MEM(object_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_object, extra_flags))));
+	ASM(TEST32ri, offset_reg,
+		IS_OBJ_LAZY_UNINITIALIZED | IS_OBJ_LAZY_PROXY);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV64rm, cache_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_execute_data, run_time_cache))));
+	ASM(TEST64rr, cache_reg, cache_reg);
+	generate_raw_jump(Jump::je, slow);
+	ASM(MOV64rm, type_reg,
+		FE_MEM(object_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_object, ce))));
+	ASM(MOV64rm, offset_reg,
+		FE_MEM(type_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_class_entry, create_object))));
+	ASM(TEST64rr, offset_reg, offset_reg);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV64rm, property_reg,
+		FE_MEM(cache_reg, 0, FE_NOREG,
+			static_cast<int32_t>(layout.cache_offset)));
+	ASM(CMP64rr, type_reg, property_reg);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV64rm, offset_reg,
+		FE_MEM(cache_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				layout.cache_offset + sizeof(void *))));
+	ASM(CMP64ri, offset_reg, ZEND_FIRST_PROPERTY_OFFSET);
+	generate_raw_jump(Jump::jl, slow);
+	ASM(MOV64rm, type_reg,
+		FE_MEM(cache_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				layout.cache_offset + 2 * sizeof(void *))));
+	ASM(TEST64rr, type_reg, type_reg);
+	generate_raw_jump(Jump::je, property_metadata_valid);
+	ASM(MOV32rm, cache_reg,
+		FE_MEM(type_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_property_info, flags))));
+	ASM(TEST32ri, cache_reg, ZEND_ACC_READONLY);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(TEST32ri, cache_reg, ZEND_ACC_PPP_SET_MASK);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV64rm, cache_reg,
+		FE_MEM(type_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_property_info, hooks))));
+	ASM(TEST64rr, cache_reg, cache_reg);
+	generate_raw_jump(Jump::jne, slow);
+	ASM(MOV32rm, cache_reg,
+		FE_MEM(type_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_property_info, type)
+					+ offsetof(zend_type, type_mask))));
+	ASM(TEST32ri, cache_reg, 1u << IS_LONG);
+	generate_raw_jump(Jump::je, slow);
+	if (!scalar_value) {
+		AsmReg value_base = frame_reg;
+		if (layout.literal_value) {
+			emit_literal_base(cache_reg, frame_reg);
+			value_base = cache_reg;
+		}
+		ASM(MOVZXr32m8, cache_reg,
+			FE_MEM(value_base, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.value_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, cache_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, slow);
+	}
+	label_place(property_metadata_valid);
+	ASM(MOV64rr, property_reg, object_reg);
+	ASM(ADD64rr, property_reg, offset_reg);
+	ASM(MOV32rm, type_reg,
+		FE_MEM(property_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+	ASM(CMP8ri, type_reg, IS_UNDEF);
+	generate_raw_jump(Jump::je, slow);
+	ASM(CMP8ri, type_reg, IS_REFERENCE);
+	generate_raw_jump(Jump::je, slow);
+
+	if (scalar_value) {
+		ASM(MOV32ri, type_reg, IS_LONG);
+	} else {
+		AsmReg value_base = frame_reg;
+		if (layout.literal_value) {
+			emit_literal_base(low_word_reg, frame_reg);
+			value_base = low_word_reg;
+		}
+		ASM(MOV32rm, type_reg,
+			FE_MEM(value_base, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.value_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP8ri, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::je, slow);
+	}
+
+	ASM(TEST8mi,
+		FE_MEM(property_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.v.type_flags))),
+		IS_TYPE_REFCOUNTED);
+	generate_raw_jump(Jump::je, old_released);
+	ASM(MOV64rm, cache_reg,
+		FE_MEM(property_reg, 0, FE_NOREG, 0));
+	ASM(MOV32rm, offset_reg,
+		FE_MEM(cache_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_refcounted_h, refcount))));
+	ASM(CMP32ri, offset_reg, 1);
+	generate_raw_jump(Jump::jle, slow);
+	ASM(SUB32mi,
+		FE_MEM(cache_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_refcounted_h, refcount))),
+		1);
+	label_place(old_released);
+
+	if (scalar_value) {
+		auto [value_ref, value] = val_ref_single(node.operands[
+			node.property_write_value_operand_index]);
+		auto value_reg = value.load_to_reg();
+		ASM(MOV64rr, low_word_reg, value_reg);
+	} else {
+		/* For a literal, low_word still holds the literal base. */
+		ASM(MOV64rm, low_word_reg,
+			FE_MEM(layout.literal_value ? low_word_reg : frame_reg, 0,
+				FE_NOREG, static_cast<int32_t>(layout.value_offset)));
+	}
+	if (!scalar_value && !layout.move_value) {
+		emit_try_addref(type_reg, low_word_reg);
+	}
+	ASM(MOV64mr,
+		FE_MEM(property_reg, 0, FE_NOREG, 0), low_word_reg);
+	ASM(MOV32mr,
+		FE_MEM(property_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))),
+		type_reg);
+	if (layout.move_value) {
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.value_offset
+						+ offsetof(zval, u1.type_info))),
+			IS_UNDEF);
+	}
+	finish_guarded_with(slow, done, std::move(decision), [&] {
+		object.reset();
+		cache.reset();
+		offset.reset();
+		property.reset();
+		type.reset();
+		low_word.reset();
+	}, successors);
+	return true;
+}
+
+/*
+ * FETCH_CONSTANT reads the constant the runtime cache slot names, like
+ * the VM: a cached constant with a non-refcounted value is copied to the
+ * result slot inline. An empty or special slot, a counted value and a
+ * result held in registers use the helper, which also fills the slot.
+ */
+bool ZendCompilerX64::fetch_constant_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	/* FETCH_CONSTANT is never guarded (see
+	 * freeze_machine_control_flow()): the helper runs inline when the
+	 * cached constant is missing or counted. */
+	bool frame_operands = node.kind == Adaptor::InstKind::MIR
+		&& !node.has_result
+		&& mir.has_value_operation
+		&& operation.source_opcode == ZEND_FETCH_CONSTANT
+		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+		&& zend_mir_id_is_valid(operation.result_storage_id)
+		&& operation.extended_value <= INT32_MAX - sizeof(void *);
+	frame_operands = frame_operands && frame_only_operands(node);
+	const uint64_t result_offset64 =
+		frame_slot_offset(operation.result_storage_id);
+	if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
+		return execute_value_operation(ctx);
+	}
+	const int32_t result_offset = static_cast<int32_t>(result_offset64);
+	const auto spilled = spill_before_branch(true);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	{
+		const AsmReg frame_reg = canonical_frame_register();
+		ScratchReg constant{this};
+		ScratchReg type{this};
+		auto constant_reg = constant.alloc_gp();
+		auto type_reg = type.alloc_gp();
+		ASM(MOV64rm, constant_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_execute_data, run_time_cache))));
+		ASM(TEST64rr, constant_reg, constant_reg);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV64rm, constant_reg,
+			FE_MEM(constant_reg, 0, FE_NOREG,
+				static_cast<int32_t>(operation.extended_value)));
+		ASM(TEST64rr, constant_reg, constant_reg);
+		generate_raw_jump(Jump::je, slow);
+		ASM(TEST32ri, constant_reg, CACHE_SPECIAL);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV32rm, type_reg,
+			FE_MEM(constant_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_constant, value)
+					+ offsetof(zval, u1.type_info))));
+		ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV32mr,
+			FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+				+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			type_reg);
+		ASM(MOV64rm, constant_reg,
+			FE_MEM(constant_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_constant, value))));
+		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+			constant_reg);
+		generate_raw_jump(Jump::jmp, done);
+	}
+	label_place(slow);
+	if (!execute_value_operation(ctx)) {
+		return false;
+	}
+	label_place(done);
+	release_spilled_regs(spilled);
+	return true;
+}
+
+/*
+ * BIND_GLOBAL of a CV as the VM binds it: the run-time cache keeps the
+ * global's bucket offset in EG(symbol_table); while that bucket still
+ * holds the name and a reference, the CV takes another reference to
+ * it. Anything else, including a CV that holds a counted value, runs
+ * the helper, which also refreshes the cached offset. A non-ZTS build
+ * reads EG(symbol_table)'s address from the execution context.
+ */
+bool ZendCompilerX64::bind_global_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+#ifdef ZTS
+	return execute_value_operation(ctx);
+#else
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	bool frame_operands = node.kind == Adaptor::InstKind::MIR
+		&& !node.has_result && mir.has_value_operation
+		&& operation.source_opcode == ZEND_BIND_GLOBAL
+		&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		&& zend_mir_id_is_valid(operation.op1_storage_id)
+		&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& operation.extended_value <= INT32_MAX - sizeof(void *)
+		&& uint64_t{operation.op2.index} * sizeof(zval) <= INT32_MAX;
+	frame_operands = frame_operands && frame_only_operands(node);
+	const uint64_t local_offset64 =
+		frame_slot_offset(operation.op1_storage_id);
+	/* Images outlive the process (the OPcache file cache): the symbol
+	 * table comes from the context. */
+	if (!frame_operands || local_offset64 > INT32_MAX - sizeof(zval)
+			|| val_assignment(adaptor->val_local_idx(IRValueRef{
+				Adaptor::EXECUTION_CONTEXT_ARGUMENT})) == nullptr) {
+		return execute_value_operation(ctx);
+	}
+	const int32_t local_offset = static_cast<int32_t>(local_offset64);
+	const AsmReg symbol_context_reg = canonical_value_register(
+		IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
+	const auto spilled = spill_before_branch(true);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	{
+		const AsmReg frame_reg = canonical_frame_register();
+		ScratchReg offset{this};
+		ScratchReg table{this};
+		ScratchReg bucket{this};
+		auto offset_reg = offset.alloc_gp();
+		auto table_reg = table.alloc_gp();
+		auto bucket_reg = bucket.alloc_gp();
+		ASM(MOV64rm, offset_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(
+				offsetof(zend_execute_data, run_time_cache))));
+		ASM(TEST64rr, offset_reg, offset_reg);
+		generate_raw_jump(Jump::je, slow);
+		/* The cache holds offset + 1; an empty slot wraps below. */
+		ASM(MOV64rm, offset_reg, FE_MEM(offset_reg, 0, FE_NOREG,
+			static_cast<int32_t>(operation.extended_value)));
+		ASM(SUB64ri, offset_reg, 1);
+		ASM(MOV64rm, table_reg, FE_MEM(symbol_context_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(
+				zend_native_execution_context, symbol_table))));
+		ASM(MOV32rm, bucket_reg, FE_MEM(table_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
+		ASM(SHL64ri, bucket_reg, 5);
+		static_assert(sizeof(Bucket) == 32);
+		ASM(CMP64rr, offset_reg, bucket_reg);
+		generate_raw_jump(Jump::jae, slow);
+		ASM(MOV64rm, bucket_reg, FE_MEM(table_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(HashTable, arData))));
+		ASM(ADD64rr, bucket_reg, offset_reg);
+		/* The literal name must be the bucket's key string. */
+		emit_literal_base(table_reg, frame_reg);
+		ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
+			static_cast<int32_t>(operation.op2.index * sizeof(zval))));
+		ASM(CMP64rm, table_reg, FE_MEM(bucket_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(Bucket, key))));
+		generate_raw_jump(Jump::jne, slow);
+		ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			IS_INDIRECT);
+		emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
+			ASM(MOV64rm, bucket_reg, FE_MEM(bucket_reg, 0, FE_NOREG, 0));
+		});
+		ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			IS_REFERENCE);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+			local_offset + static_cast<int32_t>(
+				offsetof(zval, u1.type_info))),
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rm, bucket_reg, FE_MEM(bucket_reg, 0, FE_NOREG, 0));
+		ASM(ADD32mi, FE_MEM(bucket_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+			1);
+		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, local_offset),
+			bucket_reg);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+			local_offset + static_cast<int32_t>(
+				offsetof(zval, u1.type_info))),
+			IS_REFERENCE_EX);
+		generate_raw_jump(Jump::jmp, done);
+	}
+	label_place(slow);
+	if (!execute_value_operation(ctx)) {
+		return false;
+	}
+	label_place(done);
+	release_spilled_regs(spilled);
+	return true;
+#endif
+}
+
+/*
+ * FETCH_CLASS_CONSTANT of a literal name as the VM reads it: the
+ * run-time cache keeps the class and the constant's value; for a literal
+ * class the value alone decides, for self::, parent:: and static:: the
+ * class, resolved from the caller, must match. An uncounted value is
+ * copied into the result; anything else runs the helper, which also
+ * fills the cache.
+ */
+bool ZendCompilerX64::class_constant_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	const uint32_t fetch =
+		operation.op1_unused_payload & ZEND_FETCH_CLASS_MASK;
+	const bool literal_class =
+		operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	bool frame_operands = node.kind == Adaptor::InstKind::MIR
+		&& !node.has_result && mir.has_value_operation
+		&& operation.source_opcode == ZEND_FETCH_CLASS_CONSTANT
+		&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& (literal_class
+			|| (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& (fetch == ZEND_FETCH_CLASS_SELF
+					|| fetch == ZEND_FETCH_CLASS_PARENT
+					|| fetch == ZEND_FETCH_CLASS_STATIC)))
+		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+		&& zend_mir_id_is_valid(operation.result_storage_id)
+		&& operation.extended_value <= INT32_MAX - 2 * sizeof(void *);
+	frame_operands = frame_operands && frame_only_operands(node);
+	const uint64_t result_offset64 =
+		frame_slot_offset(operation.result_storage_id);
+	if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
+		return execute_value_operation(ctx);
+	}
+	const int32_t result_offset = static_cast<int32_t>(result_offset64);
+	const int32_t class_slot =
+		static_cast<int32_t>(operation.extended_value);
+	const int32_t value_slot = class_slot
+		+ static_cast<int32_t>(sizeof(void *));
+	const auto spilled = spill_before_branch(true);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	{
+		const AsmReg frame_reg = canonical_frame_register();
+		ScratchReg cache{this};
+		ScratchReg scope{this};
+		ScratchReg value{this};
+		auto cache_reg = cache.alloc_gp();
+		auto scope_reg = scope.alloc_gp();
+		auto value_reg = value.alloc_gp();
+		ASM(MOV64rm, cache_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_execute_data, run_time_cache))));
+		ASM(TEST64rr, cache_reg, cache_reg);
+		generate_raw_jump(Jump::je, slow);
+		if (!literal_class) {
+			if (fetch == ZEND_FETCH_CLASS_STATIC) {
+				/* The called scope: $this's class or the class This
+				 * holds. */
+				ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, This))));
+				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_execute_data, This)
+						+ offsetof(zval, u1.type_info))), IS_OBJECT);
+				/* Mostly a static method, whose This holds the class. */
+				emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
+					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(zend_object, ce))));
+				});
+			} else {
+				ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_execute_data, func))));
+				ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_op_array, scope))));
+				if (fetch == ZEND_FETCH_CLASS_PARENT) {
+					ASM(TEST64rr, scope_reg, scope_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zend_class_entry, parent))));
+				}
+			}
+			ASM(TEST64rr, scope_reg, scope_reg);
+			generate_raw_jump(Jump::je, slow);
+			ASM(CMP64rm, scope_reg,
+				FE_MEM(cache_reg, 0, FE_NOREG, class_slot));
+			generate_raw_jump(Jump::jne, slow);
+		}
+		ASM(MOV64rm, cache_reg, FE_MEM(cache_reg, 0, FE_NOREG, value_slot));
+		ASM(TEST64rr, cache_reg, cache_reg);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV32rm, value_reg, FE_MEM(cache_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		ASM(TEST32ri, value_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV32mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+			+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			value_reg);
+		ASM(MOV64rm, value_reg, FE_MEM(cache_reg, 0, FE_NOREG, 0));
+		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+			value_reg);
+		generate_raw_jump(Jump::jmp, done);
+	}
+	label_place(slow);
+	if (!execute_value_operation(ctx)) {
+		return false;
+	}
+	label_place(done);
+	release_spilled_regs(spilled);
+	return true;
+}
+
+/*
+ * INSTANCEOF of a CV against a literal class as the VM tests it: the
+ * run-time cache keeps the class; a value that is no object is not an
+ * instance, and an object is one when its class, a parent or an
+ * interface is that class; a reference is looked through. An undefined
+ * variable and an unfilled cache run the helper.
+ */
+bool ZendCompilerX64::instanceof_inline(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	bool frame_operands = node.kind == Adaptor::InstKind::MIR
+		&& !node.has_result && mir.has_value_operation
+		&& operation.source_opcode == ZEND_INSTANCEOF
+		&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		&& zend_mir_id_is_valid(operation.op1_storage_id)
+		&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV)
+		&& zend_mir_id_is_valid(operation.result_storage_id)
+		&& operation.result_storage_id != operation.op1_storage_id
+		&& operation.extended_value <= INT32_MAX - sizeof(void *);
+	/* A CV result releases its previous value: a counted one takes
+	 * the helper. */
+	const bool result_cv =
+		operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV;
+	frame_operands = frame_operands && frame_only_operands(node);
+	const uint64_t value_offset64 =
+		frame_slot_offset(operation.op1_storage_id);
+	const uint64_t result_offset64 =
+		frame_slot_offset(operation.result_storage_id);
+	if (!frame_operands || value_offset64 > INT32_MAX - sizeof(zval)
+			|| result_offset64 > INT32_MAX - sizeof(zval)) {
+		return execute_value_operation(ctx);
+	}
+	const int32_t value_offset = static_cast<int32_t>(value_offset64);
+	const int32_t result_offset = static_cast<int32_t>(result_offset64);
+	const int32_t result_type = result_offset
+		+ static_cast<int32_t>(offsetof(zval, u1.type_info));
+	const auto spilled = spill_before_branch(true);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	{
+		const AsmReg frame_reg = canonical_frame_register();
+		ScratchReg type{this};
+		ScratchReg klass{this};
+		auto type_reg = type.alloc_gp();
+		auto class_reg = klass.alloc_gp();
+		if (result_cv) {
+			ASM(TEST8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				result_offset + static_cast<int32_t>(
+					offsetof(zval, u1.v.type_flags))),
+				IS_TYPE_REFCOUNTED);
+			generate_raw_jump(Jump::jne, slow);
+		}
+		/* The value's zval, behind a reference (a global) too. */
+		ScratchReg value{this};
+		auto value_reg = value.alloc_gp();
+		ASM(LEA64rm, value_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			value_offset));
+		ASM(MOVZXr32m8, type_reg, FE_MEM(value_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		auto dereferenced = text_writer.label_create();
+		ASM(CMP32ri, type_reg, IS_REFERENCE);
+		emit_cold_branch(Jump::je, dereferenced, [&] {
+			ASM(MOV64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG, 0));
+			ASM(LEA64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_reference, val))));
+			ASM(MOVZXr32m8, type_reg, FE_MEM(value_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+		});
+		ASM(CMP32ri, type_reg, IS_OBJECT);
+		auto object = text_writer.label_create();
+		generate_raw_jump(Jump::je, object);
+		/* An undefined CV warns in the helper. */
+		ASM(CMP32ri, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
+			IS_FALSE);
+		generate_raw_jump(Jump::jmp, done);
+		label_place(object);
+		ASM(MOV64rm, class_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_execute_data, run_time_cache))));
+		ASM(TEST64rr, class_reg, class_reg);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV64rm, class_reg, FE_MEM(class_reg, 0, FE_NOREG,
+			static_cast<int32_t>(operation.extended_value)));
+		ASM(TEST64rr, class_reg, class_reg);
+		generate_raw_jump(Jump::je, slow);
+		ASM(MOV64rm, type_reg, FE_MEM(value_reg, 0, FE_NOREG, 0));
+		ASM(MOV64rm, type_reg, FE_MEM(type_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_object, ce))));
+		auto instance = text_writer.label_create();
+		auto not_instance = text_writer.label_create();
+		ASM(CMP64rr, class_reg, type_reg);
+		generate_raw_jump(Jump::je, instance);
+		/* instanceof_function_slow(): the interfaces of a linked class,
+		 * else its parent chain. */
+		{
+			ScratchReg index{this};
+			auto index_reg = index.alloc_gp();
+			auto parent_loop = text_writer.label_create();
+			auto interface_loop = text_writer.label_create();
+			ASM(TEST32mi, FE_MEM(class_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_class_entry,
+					ce_flags))), ZEND_ACC_INTERFACE);
+			auto parents = text_writer.label_create();
+			generate_raw_jump(Jump::je, parents);
+			ASM(MOV32rm, index_reg, FE_MEM(type_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_class_entry,
+					num_interfaces))));
+			ASM(MOV64rm, type_reg, FE_MEM(type_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_class_entry,
+					interfaces))));
+			label_place(interface_loop);
+			ASM(SUB32ri, index_reg, 1);
+			generate_raw_jump(Jump::jb, not_instance);
+			ASM(CMP64rm, class_reg, FE_MEM(type_reg, 8, index_reg, 0));
+			generate_raw_jump(Jump::je, instance);
+			generate_raw_jump(Jump::jmp, interface_loop);
+			label_place(parents);
+			label_place(parent_loop);
+			ASM(MOV64rm, type_reg, FE_MEM(type_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_class_entry,
+					parent))));
+			ASM(CMP64rr, class_reg, type_reg);
+			generate_raw_jump(Jump::je, instance);
+			ASM(TEST64rr, type_reg, type_reg);
+			generate_raw_jump(Jump::jne, parent_loop);
+		}
+		label_place(not_instance);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
+			IS_FALSE);
+		generate_raw_jump(Jump::jmp, done);
+		label_place(instance);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
+			IS_TRUE);
+		generate_raw_jump(Jump::jmp, done);
+	}
+	label_place(slow);
+	if (!execute_value_operation(ctx)) {
+		return false;
+	}
+	label_place(done);
+	release_spilled_regs(spilled);
+	return true;
+}
+
+bool ZendCompilerX64::dynamic_fetch_read(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	zend_tpde_dynamic_fetch_read layout;
+
+	if (!zend_tpde_dynamic_fetch_read_at(mir, &layout)) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (!node.has_result) {
+		return branch_to_guarded_cold(ctx);
+	}
+	/* DYNAMIC_FETCH_R is always guarded (see
+	 * freeze_machine_control_flow()); a name without a direct CV takes
+	 * the cold path. */
+	ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
+	const auto guarded_successors = guarded_successors_of(node);
+	if (layout.cv_index == UINT32_MAX) {
+		return branch_to_guarded_cold(ctx);
+	}
+	if (layout.direct_long) {
+		const uint64_t value_offset =
+			frame_slot_offset(layout.cv_index);
+		if (value_offset > INT32_MAX - sizeof(zval)
+				|| adaptor->representation(node.result)
+					!= ZEND_MIR_REPRESENTATION_I64
+				|| adaptor->exact_type(node.result)
+					!= ZEND_MIR_SCALAR_TYPE_I64
+				|| adaptor->machine_kind(node.result)
+					!= ZEND_TPDE_MACHINE_VALUE_I64) {
+			return false;
+		}
+		if (node.operands.size() == 2) {
+			auto [name_ref, name_value] =
+				val_ref_single(node.operands[0]);
+			(void) name_ref;
+			(void) name_value;
+		}
+		auto [frame_ref, frame] =
+			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+		auto frame_reg = frame.load_to_reg();
+		auto [result_ref, result] = result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		ASM(MOV64rm, result_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(value_offset)));
+		result.set_modified();
+		generate_branch_to_block(Jump::jmp,
+			IRBlockRef{node.continuation_block}, false, true);
+		return true;
+	}
+	const uint64_t cv_offset =
+		frame_slot_offset(layout.cv_index);
+	if (cv_offset > INT32_MAX - sizeof(zval)) {
+		return false;
+	}
+	auto slow = text_writer.label_create();
+	auto not_indirect = text_writer.label_create();
+	auto not_reference = text_writer.label_create();
+	auto done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg slot{this};
+	ScratchReg type{this};
+	ScratchReg decision{this};
+	auto slot_reg = slot.alloc_gp();
+	auto type_reg = type.alloc_gp();
+	auto decision_reg = decision.alloc_gp();
+
+	ASM(LEA64rm, slot_reg,
+		FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(cv_offset)));
+	ASM(MOV32rm, type_reg,
+		FE_MEM(slot_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+	ASM(CMP8ri, type_reg, IS_INDIRECT);
+	generate_raw_jump(Jump::jne, not_indirect);
+	ASM(MOV64rm, slot_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+	ASM(MOV32rm, type_reg,
+		FE_MEM(slot_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+	label_place(not_indirect);
+	/* FETCH_R copies the referenced value. */
+	ASM(CMP8ri, type_reg, IS_REFERENCE);
+	generate_raw_jump(Jump::jne, not_reference);
+	ASM(MOV64rm, slot_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
+	ASM(LEA64rm, slot_reg,
+		FE_MEM(slot_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_reference, val))));
+	ASM(MOV32rm, type_reg,
+		FE_MEM(slot_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))));
+	label_place(not_reference);
+	ASM(CMP8ri, type_reg, IS_UNDEF);
+	generate_raw_jump(Jump::je, slow);
+
+	ASM(MOV32ri, decision_reg, 0);
+	if (adaptor->machine_kind(node.result)
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		auto result = result_ref(node.result);
+		auto payload = result.part(0);
+		auto type_info = result.part(1);
+		auto payload_reg = payload.alloc_reg();
+		auto type_info_reg = type_info.alloc_reg();
+		ASM(MOV64rm, payload_reg,
+			FE_MEM(slot_reg, 0, FE_NOREG, 0));
+		ASM(MOV32rr, type_info_reg, type_reg);
+		payload.set_modified();
+		type_info.set_modified();
+		ASM(TEST32ri, type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::je, done);
+		ASM(ADD32mi,
+			FE_MEM(payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(zend_refcounted_h, refcount))),
+			1);
+	} else {
+		auto [result_ref, result] =
+			result_ref_single(node.result);
+		auto result_reg = result.alloc_reg();
+		switch (adaptor->exact_type(node.result)) {
+			case ZEND_MIR_SCALAR_TYPE_I1:
+				ASM(CMP32ri, type_reg, IS_TRUE);
+				generate_raw_set(Jump::je, result_reg);
+				break;
+			case ZEND_MIR_SCALAR_TYPE_I64:
+				ASM(MOV64rm, result_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				break;
+			case ZEND_MIR_SCALAR_TYPE_F64:
+				ASM(SSE_MOVSDrm, result_reg,
+					FE_MEM(slot_reg, 0, FE_NOREG, 0));
+				break;
+			default:
+				switch (adaptor->machine_kind(node.result)) {
+					case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
+					case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
+						ASM(MOV64rm, result_reg,
+							FE_MEM(slot_reg, 0, FE_NOREG, 0));
+						break;
+					default:
+						return false;
+				}
+		}
+		result.set_modified();
+	}
+	generate_raw_jump(Jump::jmp, done);
+
+	label_place(slow);
+	slot.reset();
+	type.reset();
+	ASM(MOV32ri, decision_reg, 1);
+	label_place(done);
+	generate_guarded_decision_branch(
+		std::move(decision), guarded_successors[1],
+		guarded_successors[0]);
+	return true;
+}
+
 bool ZendCompilerX64::compile_inst_impl(
 	IRInstRef instruction, InstRange remaining_instructions) {
 	const Adaptor::InstNode &node = adaptor->node(instruction);
@@ -10845,6 +18542,8 @@ bool ZendCompilerX64::compile_inst_impl(
 	const zend_tpde_instruction &mir = adaptor->mir_instruction(instruction);
 	const zend_mir_instruction_record record =
 		adaptor->instruction_record(instruction);
+	ctx.mir = &mir;
+	ctx.record = record;
 	if (!zend_mir_id_is_valid(record.id)) {
 		return false;
 	}
@@ -10856,7523 +18555,30 @@ bool ZendCompilerX64::compile_inst_impl(
 		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_SOURCE_PROBE));
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
-		if (mir.zval_store_lazy_scalar
-				&& node.kind == Adaptor::InstKind::MIR) {
-			if (node.operands.size() != 1
-					|| node.operands[0]
-						!= IRValueRef{Adaptor::FRAME_VALUE}) {
-				return false;
-			}
-			auto frame_value = val_ref(node.operands[0]);
-			(void) frame_value;
-			return true;
-		}
-		/* A lazy store the adaptor kept eager overwrites a non-counted
-		 * value, as a plain store does. */
-		if (mir.zval_store_plain || mir.zval_store_lazy_scalar) {
-			const zend_mir_storage_id storage = mir.zval_store_storage_id;
-			const uint64_t offset =
-				frame_slot_offset(storage);
-			if (node.operands.size() != 2
-					|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
-					|| !zend_mir_id_is_valid(storage)
-					|| offset > INT32_MAX - sizeof(zval)) {
-				return false;
-			}
-			const IRValueRef input = node.operands[0];
-			const zend_mir_scalar_type_mask exact_type =
-				adaptor->exact_type(input);
-			auto frame_value = val_ref(node.operands[1]);
-			(void) frame_value;
-			const int32_t payload_offset = static_cast<int32_t>(offset);
-			const int32_t type_offset = static_cast<int32_t>(
-				offset + offsetof(zval, u1.type_info));
-			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-				ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-					type_offset), IS_NULL);
-				return true;
-			}
-			if (!zend_mir_scalar_type_is_exact(exact_type)) {
-				return false;
-			}
-			auto [value_ref, value] = val_ref_single(input);
-			auto value_reg = value.load_to_reg();
-			if (val_parts(input).bank == tpde::x64::PlatformConfig::FP_BANK) {
-				ASM(SSE_MOVSDmr, FE_MEM(canonical_frame_register(), 0,
-					FE_NOREG, payload_offset), value_reg);
-			} else {
-				ASM(MOV64mr, FE_MEM(canonical_frame_register(), 0,
-					FE_NOREG, payload_offset), value_reg);
-			}
-			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				ScratchReg kind{this};
-				auto kind_reg = kind.alloc_gp();
-				ASM(LEA32rm, kind_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-				ASM(MOV32mr, FE_MEM(canonical_frame_register(), 0,
-					FE_NOREG, type_offset), kind_reg);
-			} else {
-				ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0,
-					FE_NOREG, type_offset),
-					static_cast<int32_t>(zval_type(exact_type)));
-			}
-			return true;
-		}
-		if (node.operands.size() != 2
-				|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
-				|| node.continuation_block == UINT32_MAX) {
-			return false;
-		}
-		const IRValueRef input = node.operands[0];
-		const zend_mir_storage_id storage = mir.zval_store_storage_id;
-		const zend_mir_scalar_type_mask exact_type =
-			adaptor->exact_type(input);
-		const uint64_t offset =
-			frame_slot_offset(storage);
-		if (!zend_mir_id_is_valid(storage)
-				|| !zend_mir_scalar_type_is_exact(exact_type)
-				|| mir.runtime_helper
-					!= ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW
-				|| offset > INT32_MAX
-				|| offset + offsetof(zval, u1.type_info) > INT32_MAX) {
-			return false;
-		}
-		if (node.kind == Adaptor::InstKind::GuardedCold) {
-			auto input_value = val_ref(node.operands[0]);
-			auto frame_value = val_ref(node.operands[1]);
-			ScratchReg slot_argument{this};
-			auto slot_argument_reg = slot_argument.alloc_gp();
-			ASM(MOV64rr, slot_argument_reg, canonical_frame_register());
-			ASM(ADD64ri, slot_argument_reg, static_cast<int32_t>(offset));
-			ValuePart slot_pointer{
-				tpde::x64::PlatformConfig::GP_BANK, 8};
-			slot_pointer.set_value(this, std::move(slot_argument));
-			tpde::x64::CCAssignerSysV assigner{false};
-			CallBuilder builder{*this, assigner};
-			builder.add_arg(
-				std::move(slot_pointer), tpde::CCAssignment{});
-			builder.call(runtime_symbol(mir.runtime_helper));
-			ScratchReg store_slot{this};
-			ScratchReg store_type{this};
-			auto store_slot_reg = store_slot.alloc_gp();
-			auto store_type_reg = store_type.alloc_gp();
-			ASM(MOV64rr, store_slot_reg, canonical_frame_register());
-			ASM(ADD64ri, store_slot_reg, static_cast<int32_t>(offset));
-			ASM(MOV32rm, store_type_reg,
-				FE_MEM(store_slot_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			auto store_slot_resolved = text_writer.label_create();
-			ASM(CMP32ri, store_type_reg, IS_REFERENCE_EX);
-			generate_raw_jump(Jump::jne, store_slot_resolved);
-			emit_deref_address(store_slot_reg);
-			label_place(store_slot_resolved);
-			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-				ASM(MOV64mi,
-					FE_MEM(store_slot_reg, 0, FE_NOREG, 0), 0);
-				ASM(MOV32mi,
-					FE_MEM(store_slot_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					IS_NULL);
-			} else {
-				auto input = input_value.part(0);
-				auto input_reg = input.load_to_reg();
-				if (val_parts(node.operands[0]).bank
-						== tpde::x64::PlatformConfig::FP_BANK) {
-					ASM(SSE_MOVSDmr,
-						FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
-						input_reg);
-				} else {
-					ASM(MOV64mr,
-						FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
-						input_reg);
-				}
-				if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-					ASM(LEA32rm, store_type_reg, FE_MEM(input_reg, 0, FE_NOREG, IS_FALSE));
-					ASM(MOV32mr,
-						FE_MEM(store_slot_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))),
-						store_type_reg);
-				} else {
-					ASM(MOV32mi,
-						FE_MEM(store_slot_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))),
-						static_cast<int32_t>(zval_type(exact_type)));
-				}
-			}
-			generate_uncond_branch(
-				IRBlockRef{node.continuation_block});
-			return true;
-		}
-		if (node.kind != Adaptor::InstKind::GuardedFast) {
-			return false;
-		}
-		if (node.control_block == UINT32_MAX) {
-			return false;
-		}
-		const auto successors = guarded_successors_of(node);
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_reg = frame.load_to_reg();
-		auto slow_release = text_writer.label_create();
-		auto store_value = text_writer.label_create();
-		auto slot_resolved = text_writer.label_create();
-		auto finished = text_writer.label_create();
-		ScratchReg old_type{this};
-		ScratchReg slot{this};
-		ScratchReg counted{this};
-		ScratchReg decision{this};
-		auto slot_reg = slot.alloc_gp();
-		auto old_type_reg = old_type.alloc_gp();
-		auto counted_reg = counted.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-		/* The old value is released first (no destructor runs here: a
-		 * last reference or a collectable one takes the cold path), then
-		 * the scalar is stored into the resolved slot. */
-		ASM(LEA64rm, slot_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(offset)));
-		ASM(MOV32rm, old_type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, old_type_reg, IS_REFERENCE_EX);
-		generate_raw_jump(Jump::jne, slot_resolved);
-		emit_deref_address(slot_reg);
-		ASM(MOV32rm, old_type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		label_place(slot_resolved);
-		ASM(TEST32ri, old_type_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		generate_raw_jump(Jump::je, store_value);
-		ASM(TEST32ri, old_type_reg,
-			IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
-		generate_raw_jump(Jump::jne, slow_release);
-		ASM(MOV64rm, counted_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
-		ASM(CMP32mi,
-			FE_MEM(counted_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
-			1);
-		generate_raw_jump(Jump::jbe, slow_release);
-		ASM(SUB32mi,
-			FE_MEM(counted_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
-			1);
-
-		label_place(store_value);
-		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-			ASM(MOV64mi, FE_MEM(slot_reg, 0, FE_NOREG, 0), 0);
-			ASM(MOV32mi,
-				FE_MEM(slot_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				IS_NULL);
-		} else {
-			auto [value_ref, value] = val_ref_single(input);
-			auto value_reg = value.load_to_reg();
-			if (val_parts(input).bank
-					== tpde::x64::PlatformConfig::FP_BANK) {
-				ASM(SSE_MOVSDmr, FE_MEM(slot_reg, 0, FE_NOREG, 0),
-					value_reg);
-			} else {
-				ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), value_reg);
-			}
-			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				ASM(LEA32rm, old_type_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-				ASM(MOV32mr,
-					FE_MEM(slot_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					old_type_reg);
-			} else {
-				ASM(MOV32mi,
-					FE_MEM(slot_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					static_cast<int32_t>(zval_type(exact_type)));
-			}
-		}
-		old_type.reset();
-		slot.reset();
-		counted.reset();
-		/* The slow path jumps before any release: the cold block may
-		 * take it directly. */
-		finish_guarded(slow_release, finished, std::move(decision), frame,
-			successors);
-		return true;
+		return compile_zval_store(ctx);
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
-		zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
-		if (!zend_mir_scalar_type_is_exact(exact_type)
-				|| node.operands.empty()) {
-			return false;
-		}
-		tpde::x64::CCAssignerSysV assigner;
-		CallBuilder builder{*this, assigner};
-		builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-		if (exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
-			builder.add_arg(CallArg{node.operands[0]});
-			builder.call(runtime_symbol(mir.runtime_helper));
-		} else {
-			if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-				builder.add_arg(ValuePart{uint64_t{0}, 8,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			} else {
-				builder.add_arg(CallArg{node.operands[0]});
-			}
-			add_const_arg(builder, static_cast<uint32_t>(exact_type), 4);
-			builder.call(runtime_symbol(mir.runtime_helper));
-		}
-		return true;
+		return compile_echo_scalar(ctx);
 	}
-	auto unary = [&]() {
-		return val_ref_single(node.operands[0]);
-	};
-	auto binary = [&]() {
-		return std::pair{val_ref_single(node.operands[0]),
-			val_ref_single(node.operands[1])};
-	};
-	auto copy_result = [&]() {
-		if (adaptor->machine_kind(node.result)
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			auto source_value = val_ref(node.operands[0]);
-			auto result_value = result_ref(node.result);
-			const ValueParts parts = val_parts(node.result);
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto source = source_value.part(part);
-				auto result = result_value.part(part);
-				auto source_reg = source.load_to_reg();
-				auto result_reg = result.alloc_try_reuse(source);
-				if (source_reg != result_reg) {
-					mov(result_reg, source_reg, parts.size_bytes(part));
-				}
-				result.set_modified();
-			}
-			return true;
-		}
-		auto [source_ref, source] = unary();
-		auto [result_ref, result] = result_ref_single(node.result);
-		auto source_reg = source.load_to_reg();
-		auto result_reg = result.alloc_try_reuse(source);
-		if (source_reg != result_reg) {
-			mov(result_reg, source_reg, 8);
-		}
-		result.set_modified();
-		return true;
-	};
-	auto encode_binary = [&](auto encode) {
-		auto left = val_ref(node.operands[0]);
-		auto right = val_ref(node.operands[1]);
-		auto result = result_ref(node.result);
-		return encode(left.part(0), right.part(0), result.part(0));
-	};
-	auto can_fuse_compare_branch = [&]() {
-		if (remaining_instructions.from == remaining_instructions.to) {
-			return false;
-		}
-		const IRInstRef next = *remaining_instructions.from;
-		const Adaptor::InstNode &consumer = adaptor->node(next);
-		/* A generator continuation's terminal reloads its resume values;
-		 * a fused branch would never run that reload. */
-		return consumer.kind == Adaptor::InstKind::MIR
-			&& consumer.operands.size() == 1
-			&& consumer.operands[0] == node.result
-			&& adaptor->instruction_record(next).opcode
-				== ZEND_MIR_OPCODE_COND_BRANCH
-			&& adaptor->generator_resume_values(next).empty()
-			&& this->analyzer.liveness_info(
-				adaptor->val_local_idx(node.result)).ref_count == 2;
-	};
-	auto fuse_compare_branch = [&](Jump condition) {
-		if (!can_fuse_compare_branch()) {
-			return false;
-		}
-		const IRInstRef next = *remaining_instructions.from;
-		const Adaptor::InstNode &consumer = adaptor->node(next);
-		const auto &successors = adaptor->block_succs(
-			IRBlockRef{consumer.control_block});
-		if (successors.size() != 2) {
-			return false;
-		}
-		generate_cond_branch(condition, successors[0], successors[1]);
-		adaptor->mark_fused(next);
-		return true;
-	};
-	auto integer_compare = [&](Jump condition) {
-		auto [left_pair, right_pair] = binary();
-		auto &[left_ref, left] = left_pair;
-		auto &[right_ref, right] = right_pair;
-		uint64_t immediate_bits;
-		auto left_reg = left.load_to_reg();
-		if (adaptor->constant(node.operands[1], &immediate_bits)
-				&& static_cast<int64_t>(immediate_bits) >= INT32_MIN
-				&& static_cast<int64_t>(immediate_bits) <= INT32_MAX) {
-			ASM(CMP64ri, left_reg,
-				static_cast<int32_t>(
-					static_cast<int64_t>(immediate_bits)));
-		} else {
-			ASM(CMP64rr, left_reg, right.load_to_reg());
-		}
-		if (fuse_compare_branch(condition)) {
-			return true;
-		}
-		auto [result_ref, result] = result_ref_single(node.result);
-		auto result_reg = result.alloc_reg();
-		generate_raw_set(condition, result_reg);
-		result.set_modified();
-		return true;
-	};
-	/*
-	 * PHP compares doubles with IEEE semantics: an unordered (NaN) operand
-	 * makes <, <= and == false. UCOMISD sets ZF, PF and CF when unordered,
-	 * so order the operands to test "above" and check parity for equality.
-	 */
-	auto floating_compare = [&](zend_mir_opcode opcode) {
-		auto [left_pair, right_pair] = binary();
-		auto &[left_ref, left] = left_pair;
-		auto &[right_ref, right] = right_pair;
-		if (opcode == ZEND_MIR_OPCODE_F64_EQ) {
-			ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
-			auto [result_ref, result] = result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			ScratchReg ordered{this};
-			auto ordered_reg = ordered.alloc_gp();
-			generate_raw_set(Jump::je, result_reg);
-			generate_raw_set(Jump::jnp, ordered_reg);
-			ASM(AND32rr, result_reg, ordered_reg);
-			result.set_modified();
-			return true;
-		}
-		const Jump condition = opcode == ZEND_MIR_OPCODE_F64_LT
-			? Jump::ja : Jump::jae;
-		auto left_reg = left.load_to_reg();
-		auto right_reg = right.load_to_reg();
-		ASM(SSE_UCOMISDrr, right_reg, left_reg);
-		if (fuse_compare_branch(condition)) {
-			return true;
-		}
-		auto [result_ref, result] = result_ref_single(node.result);
-		auto result_reg = result.alloc_reg();
-		generate_raw_set(condition, result_reg);
-		result.set_modified();
-		return true;
-	};
-	auto materialize_boxed_boundary_operand = [&](uint32_t operand_index,
-			zend_mir_storage_id storage) {
-		if (operand_index == UINT32_MAX) {
-			return true;
-		}
-		if (!zend_mir_id_is_valid(storage)
-				|| operand_index >= node.liveness_operands.size()) {
-			return false;
-		}
-		const uint64_t offset =
-			frame_slot_offset(storage);
-		if (offset > INT32_MAX - sizeof(zval)) {
-			return false;
-		}
-		const IRValueRef operand = node.liveness_operands[operand_index];
-		if (adaptor->machine_kind(operand)
-				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			return false;
-		}
-		auto boxed = val_ref(operand);
-		auto payload = boxed.part(0);
-		auto type_info = boxed.part(1);
-		const bool cold = node.kind == Adaptor::InstKind::GuardedCold;
-		store_boxed_part(payload, AsmReg{}, static_cast<int32_t>(offset), 8,
-			cold);
-		store_boxed_part(type_info, AsmReg{},
-			static_cast<int32_t>(offset + offsetof(zval, u1.type_info)),
-			4, cold);
-		return true;
-	};
-	auto execute_value_operation_with = [&](ValuePart *frame_argument,
-			zend_native_runtime_helper_id helper, uint32_t source_opcode) {
-		/*
-		 * A guarded fast node must never execute the generic helper itself.
-		 * The adaptor exposes that call as a distinct allocator-visible cold
-		 * block. Executing it here would consume temporary operands once and
-		 * then execute the same operation again in GuardedCold.
-		 */
-		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			if (frame_argument != nullptr
-					|| node.argument_index == UINT32_MAX) {
-				return false;
-			}
-			consume_operands(node);
-			if (node.has_result) {
-				auto unreachable_definition = result_ref(node.result);
-				unreachable_definition.reset();
-			}
-			if (node.continuation_block != UINT32_MAX
-					&& node.control_block != UINT32_MAX) {
-				for (IRValueRef phi : adaptor->block_phis(
-						IRBlockRef{node.continuation_block})) {
-					const IRValueRef incoming = adaptor->val_as_phi(phi)
-						.incoming_val_for_block(IRBlockRef{node.control_block});
-					auto unreachable_phi_definition = result_ref(phi);
-					auto unreachable_phi_input = val_ref(incoming);
-					unreachable_phi_definition.reset();
-					unreachable_phi_input.reset();
-				}
-			}
-			generate_branch_to_block(Jump::jmp,
-				IRBlockRef{node.argument_index}, false, true);
-			continuation_edge_emitted_ = true;
-			return true;
-		}
-		const bool explicit_object_operands =
-			zend_tpde_helper_has_unused_operand_payloads(helper);
-		const bool explicit_auxiliary =
-			zend_tpde_helper_has_explicit_auxiliary(helper);
-		if (node.operands.empty()
-				|| node.operands.back()
-					!= IRValueRef{Adaptor::FRAME_VALUE}
-				|| !zend_tpde_helper_has_explicit_operands(helper)
-				|| !mir.has_value_operation) {
-			return false;
-		}
-		const zend_mir_executable_value_ref &operation =
-			mir.value_operation;
-		if (!materialize_boxed_boundary_operand(
-				node.boxed_op1_boundary_operand_index,
-				operation.op1_storage_id)
-				|| !materialize_boxed_boundary_operand(
-					node.boxed_op2_boundary_operand_index,
-					operation.op2_storage_id)) {
-			return false;
-		}
-		const bool const_include_once =
-			helper == ZEND_NATIVE_HELPER_DYNAMIC_INCLUDE_OR_EVAL
-			&& operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& operation.result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
-			&& (operation.extended_value == ZEND_INCLUDE_ONCE
-				|| operation.extended_value == ZEND_REQUIRE_ONCE);
-		/* CHECK_FUNC_ARG of a positional argument among the first
-		 * MAX_ARG_FLAG_NUM: the VM's quick test of the pending call's
-		 * function, which cannot fail. */
-		if (helper == ZEND_NATIVE_HELPER_VALUE_CHECK_FUNC_ARG
-				&& frame_argument == nullptr && !node.has_result
-				&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
-				&& operation.op2_unused_payload >= 1
-				&& operation.op2_unused_payload <= MAX_ARG_FLAG_NUM) {
-			static_assert(ZEND_CALL_SEND_ARG_BY_REF == UINT32_C(1) << 31);
-			auto frame_use = val_ref(node.operands.back());
-			(void) frame_use;
-			const uint32_t mask = uint32_t{ZEND_SEND_BY_REF
-				| ZEND_SEND_PREFER_REF}
-				<< ((operation.op2_unused_payload + 3) * 2);
-			const int32_t call_info = static_cast<int32_t>(
-				offsetof(zend_execute_data, This)
-					+ offsetof(zval, u1.type_info));
-			ScratchReg call{this};
-			ScratchReg by_reference{this};
-			ScratchReg info{this};
-			auto call_reg = call.alloc_gp();
-			auto by_reference_reg = by_reference.alloc_gp();
-			auto info_reg = info.alloc_gp();
-			ASM(MOV64rm, call_reg, FE_MEM(canonical_frame_register(), 0,
-				FE_NOREG, static_cast<int32_t>(
-					offsetof(zend_execute_data, call))));
-			ASM(MOV64rm, by_reference_reg, FE_MEM(call_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_execute_data, func))));
-			ASM(TEST32mi, FE_MEM(by_reference_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_function, quick_arg_flags))),
-				static_cast<int32_t>(mask));
-			generate_raw_set(Jump::jne, by_reference_reg);
-			ASM(SHL32ri, by_reference_reg, 31);
-			ASM(MOV32rm, info_reg, FE_MEM(call_reg, 0, FE_NOREG, call_info));
-			ASM(AND32ri, info_reg, INT32_MAX);
-			ASM(OR32rr, info_reg, by_reference_reg);
-			ASM(MOV32mr, FE_MEM(call_reg, 0, FE_NOREG, call_info), info_reg);
-			return true;
-		}
-		if (!emit_deopt_stress_transfer(node.mir_instruction_index)) {
-			return false;
-		}
-		/* CHECK_UNDEF_ARGS: only a pending frame flagged as possibly
-		 * holding undefined arguments needs the helper. */
-		if (helper == ZEND_NATIVE_HELPER_VALUE_CHECK_UNDEF_ARGS
-				&& frame_argument == nullptr && !node.has_result) {
-			{
-				auto frame_use = val_ref(node.operands.back());
-				(void) frame_use;
-			}
-			const AsmReg frame_reg = canonical_frame_register();
-			ScratchReg status_scratch{this};
-			ScratchReg pending{this};
-			const AsmReg status_reg = status_scratch.alloc_gp();
-			const AsmReg pending_reg = pending.alloc_gp();
-			auto undefined = text_writer.label_create();
-			auto checked = text_writer.label_create();
-			ASM(MOV64rm, pending_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_execute_data, call))));
-			ASM(TEST32mi, FE_MEM(pending_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_execute_data, This)
-					+ offsetof(zval, u1.type_info))),
-				static_cast<int32_t>(ZEND_CALL_MAY_HAVE_UNDEF));
-			generate_raw_jump(Jump::jne, undefined);
-			cold_begin();
-			label_place(undefined);
-			emit_preserving_call(register_file.used
-					& ~(uint64_t{1} << status_reg.id()),
-				ZEND_NATIVE_HELPER_CALL_CHECK_UNDEF_FRAME,
-				[&] { ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG, 0)); },
-				[&] { ASM(MOV32rr, status_reg, FE_AX); });
-			/* Only the helper reports a status. */
-			emit_inline_status_check(status_reg, mir.exception_block_id,
-				checked);
-			cold_end();
-			label_place(checked);
-			pending.reset();
-			return true;
-		}
-		if ((helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
-					|| helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT)
-				&& frame_argument == nullptr && !node.has_result
-				&& node.operands.size() == 1) {
-			bool handled = false;
-			if (!emit_array_element_primitive(node, mir, operation,
-					helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY,
-					&handled)) {
-				return false;
-			}
-			if (handled) {
-				return true;
-			}
-		}
-		if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
-					|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
-				&& frame_argument == nullptr && !node.has_result
-				&& node.operands.size() == 1) {
-			zend_tpde_concat_direct strings{};
-			if (zend_tpde_concat_direct_at(mir, &strings)) {
-				bool handled = false;
-				if (!emit_concat_strings_primitive(node, mir, operation,
-						helper, strings, &handled)) {
-					return false;
-				}
-				if (handled) {
-					return true;
-				}
-			}
-		}
-		tpde::x64::CCAssignerSysV assigner{false};
-		CallBuilder builder{*this, assigner};
-		zend_tpde_frameless_direct frameless_direct{};
-		const bool frameless_direct_form =
-			helper == ZEND_NATIVE_HELPER_CALL_FRAMELESS_INTERNAL
-			&& zend_tpde_frameless_direct_at(mir, &frameless_direct);
-		const bool frameless_inline = frameless_direct_form
-			&& frame_argument == nullptr
-			&& frameless_inline_allowed(operation, frameless_direct);
-		std::optional<ScratchReg> frameless_status;
-		zend_tpde_concat_assign_direct concat_assign_direct{};
-		zend_tpde_concat_direct concat_direct{};
-		zend_tpde_dim_direct dim_direct{};
-		/* An inline frameless call stores null into the same slot. */
-		if (!frameless_inline
-				&& zend_tpde_helper_requires_undef_result(helper, operation)) {
-			const uint64_t result_offset =
-				frame_slot_offset(operation.result_storage_id)
-				+ offsetof(zval, u1.type_info);
-			if (result_offset > INT32_MAX - sizeof(uint32_t)) {
-				return false;
-			}
-			ASM(MOV32mi,
-				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-					static_cast<int32_t>(result_offset)),
-				IS_UNDEF);
-		}
-		if (frameless_inline) {
-			/* The handler takes no frame. */
-			auto frame_use = val_ref(node.operands.back());
-			(void) frame_use;
-		} else if (frame_argument != nullptr) {
-			builder.add_arg(
-				std::move(*frame_argument), tpde::CCAssignment{});
-		} else {
-			builder.add_arg(CallArg{node.operands.back()});
-		}
-		auto encode_operand = [&](const zend_mir_source_operand_ref &operand,
-				uint32_t unused_payload) {
-			return explicit_object_operands
-				? encode_source_operand(operand, unused_payload)
-				: encode_source_operand(operand);
-		};
-		/* ASSIGN_DIM takes the addresses of its container slot, key and
-		 * value: the helper decodes nothing. */
-		const bool assign_dim_address =
-			helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM
-			&& zend_tpde_dim_direct_at(mir, &dim_direct);
-		/* So does a two- or three-argument frameless call. */
-		const bool frameless_address = frameless_direct_form
-			&& (source_opcode == ZEND_FRAMELESS_ICALL_2
-				|| source_opcode == ZEND_FRAMELESS_ICALL_3);
-		/* INIT_ARRAY and ADD_ARRAY_ELEMENT of literal, CV and temporary
-		 * operands take addresses too. */
-		struct ValueAddress {
-			uint32_t kind;
-			uint64_t value;
-		};
-		auto value_address = [&](const zend_mir_source_operand_ref &operand,
-				zend_mir_storage_id storage, ValueAddress *out) {
-			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-				*out = {ZEND_NATIVE_DIM_DIRECT_UNUSED, 0};
-				return true;
-			}
-			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-				*out = {ZEND_NATIVE_DIM_DIRECT_CONST, operand.index};
-				return uint64_t{operand.index} * sizeof(zval) <= INT32_MAX;
-			}
-			if ((operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-						&& operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
-					|| !zend_mir_id_is_valid(storage)
-					|| (operand.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-						&& operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)) {
-				return false;
-			}
-			const uint64_t offset =
-				frame_slot_offset(storage);
-			*out = {operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-					? uint32_t{ZEND_NATIVE_DIM_DIRECT_CV}
-					: uint32_t{ZEND_NATIVE_DIM_DIRECT_TMP},
-				offset};
-			return offset <= INT32_MAX - sizeof(zval);
-		};
-		ValueAddress address_op1{}, address_op2{}, address_result{};
-		const zend_native_runtime_helper_id address_helper =
-			helper == ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY
-				? ZEND_NATIVE_HELPER_VALUE_INIT_ARRAY_ADDRESS
-			: helper == ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT
-				? ZEND_NATIVE_HELPER_VALUE_ADD_ARRAY_ELEMENT_ADDRESS
-			: ZEND_NATIVE_HELPER_COUNT;
-		const bool array_address =
-			address_helper != ZEND_NATIVE_HELPER_COUNT
-			&& value_address(operation.op1, operation.op1_storage_id,
-				&address_op1)
-			&& value_address(operation.op2, operation.op2_storage_id,
-				&address_op2)
-			&& value_address(operation.result, operation.result_storage_id,
-				&address_result)
-			&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_UNUSED
-			&& address_result.kind != ZEND_NATIVE_DIM_DIRECT_CONST;
-		/* The generic form takes the encoded operands; the direct and
-		 * address forms below take offsets or addresses instead. */
-		auto add_encoded_op1 = [&] {
-			add_const_arg(builder,
-				encode_operand( operation.op1, operation.op1_unused_payload), 8);
-		};
-		if (frameless_inline) {
-			/*
-			 * zend_native_call_frameless_*(): the opline for warnings, a
-			 * null result, then the handler from the context's table on the
-			 * result and each argument's (dereferenced) address.
-			 */
-			const uint64_t descriptor = frameless_direct.descriptor;
-			const uint32_t count =
-				operation.source_opcode - ZEND_FRAMELESS_ICALL_0;
-			const uint32_t handler = static_cast<uint32_t>(descriptor & 0xffff);
-			const AsmReg frame_reg = canonical_frame_register();
-			const AsmReg context_reg = canonical_value_register(
-				IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
-			const uint32_t result_offset =
-				static_cast<uint32_t>(frameless_direct.slots);
-			/*
-			 * The literal table of literal arguments, from the EX(func) the
-			 * opline publication loads: held in a free register that no
-			 * argument takes (none of RAX, R10, R11 is one), until the last
-			 * argument. Without one free, each literal loads it.
-			 */
-			std::optional<ScratchReg> literals;
-			AsmReg literals_reg = AsmReg::make_invalid();
-			if (((descriptor >> ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT)
-					& ((uint64_t{1} << count) - 1)) != 0) {
-				for (const AsmReg candidate :
-						{AsmReg{AsmReg::AX}, AsmReg{AsmReg::R10},
-							AsmReg{AsmReg::R11}}) {
-					if (!register_file.is_used(candidate)
-							&& ((register_file.allocatable
-								>> candidate.id()) & 1) != 0) {
-						literals.emplace(this);
-						literals_reg = literals->alloc_specific(candidate);
-						break;
-					}
-				}
-			}
-			{
-				ScratchReg opline{this};
-				const AsmReg opline_reg = opline.alloc_gp();
-				const uint64_t opline_offset =
-					uint64_t{operation.source_position_id} * sizeof(zend_op);
-				if (literals_reg.valid()) {
-					ASM(MOV64rm, literals_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_execute_data, func))));
-					ASM(MOV64rm, opline_reg, FE_MEM(literals_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_op_array, opcodes))));
-					if (opline_offset != 0) {
-						ASM(ADD64ri, opline_reg,
-							static_cast<int32_t>(opline_offset));
-					}
-					ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_execute_data, opline))), opline_reg);
-					ASM(MOV64rm, literals_reg, FE_MEM(literals_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_op_array, literals))));
-				} else {
-					emit_publish_opline(frame_reg, opline_reg,
-						static_cast<int32_t>(opline_offset));
-				}
-				ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
-						+ offsetof(zval, u1.type_info))), IS_NULL);
-			}
-			auto address_arg = [&](uint32_t offset, bool literal,
-					bool may_be_reference) {
-				/* Built in its argument register when that is free: the
-				 * call then moves nothing. */
-				ScratchReg address{this};
-				const AsmReg argument = next_gp_argument(&assigner);
-				const AsmReg address_reg = argument.valid()
-						&& !register_file.is_used(argument)
-						&& ((register_file.allocatable >> argument.id()) & 1)
-							!= 0
-					? address.alloc_specific(argument) : address.alloc_gp();
-				if (literal && literals_reg.valid()) {
-					ASM(LEA64rm, address_reg, FE_MEM(literals_reg, 0,
-						FE_NOREG, static_cast<int32_t>(
-							offset * sizeof(zval))));
-				} else if (literal) {
-					emit_literal_base(address_reg, frame_reg);
-					ASM(LEA64rm, address_reg, FE_MEM(address_reg, 0,
-						FE_NOREG, static_cast<int32_t>(
-							offset * sizeof(zval))));
-				} else {
-					ASM(LEA64rm, address_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offset)));
-					if (may_be_reference) {
-						auto direct = text_writer.label_create();
-						ASM(CMP8mi, FE_MEM(address_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.v.type))), IS_REFERENCE);
-						emit_cold_branch(Jump::je, direct, [&] {
-							emit_deref_address(address_reg);
-						});
-					}
-				}
-				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-				value.set_value(this, std::move(address));
-				builder.add_arg(std::move(value), tpde::CCAssignment{});
-			};
-			address_arg(result_offset, false, false);
-			const uint32_t offsets[3] = {
-				static_cast<uint32_t>(frameless_direct.slots >> 32),
-				static_cast<uint32_t>(frameless_direct.more_slots),
-				static_cast<uint32_t>(frameless_direct.more_slots >> 32)};
-			for (uint32_t index = 0; index < count; ++index) {
-				const bool literal = ((descriptor
-					>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
-					!= 0;
-				const zend_tpde_source_opcode &source =
-					adaptor->plan()->source_opcodes[
-						operation.source_position_id + (index == 2 ? 1 : 0)];
-				const uint32_t may_be = index == 1
-					? source.op2_may_be : source.op1_may_be;
-				if (!literal && offsets[index] > INT32_MAX - sizeof(zval)) {
-					return false;
-				}
-				address_arg(offsets[index], literal,
-					!literal && (may_be & MAY_BE_REF) != 0);
-			}
-			if (literals.has_value()) {
-				literals->reset();
-			}
-			/* After the arguments, which hold the argument registers. */
-			ScratchReg target{this};
-			const AsmReg target_reg = target.alloc_gp();
-			ASM(MOV64rm, target_reg, FE_MEM(context_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(
-					zend_native_execution_context, frameless_handlers))));
-			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG,
-				static_cast<int32_t>(handler * sizeof(void *))));
-			ValuePart target_part{tpde::x64::PlatformConfig::GP_BANK, 8};
-			target_part.set_value(this, std::move(target));
-			builder.call(std::move(target_part));
-			/* The handler returns nothing: an exception leaves from the
-			 * cold area. The context stays in its callee-saved register. */
-			frameless_status.emplace(this);
-			const AsmReg exception_reg = frameless_status->alloc_gp();
-			ASM(MOV64rm, exception_reg, FE_MEM(context_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(
-					zend_native_execution_context, exception))));
-			ASM(CMP64mi, FE_MEM(exception_reg, 0, FE_NOREG, 0), 0);
-			frameless_status->reset();
-			auto thrown = text_writer.label_create();
-			generate_raw_jump(Jump::jne, thrown);
-			cold_begin();
-			label_place(thrown);
-			if (zend_mir_id_is_valid(mir.exception_block_id)) {
-				generate_exception_branch(
-					adaptor->block_ref(mir.exception_block_id));
-			} else {
-				RetBuilder return_builder{*this, *cur_cc_assigner()};
-				return_builder.add(ValuePart{
-					static_cast<uint32_t>(ZEND_NATIVE_EXCEPTION), 4,
-					tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-				return_builder.ret_local_path();
-			}
-			cold_end();
-		} else if (array_address) {
-			for (const ValueAddress *operand :
-					{&address_op1, &address_op2, &address_result}) {
-				ScratchReg address{this};
-				const AsmReg address_reg = address.alloc_gp();
-				if (operand->kind == ZEND_NATIVE_DIM_DIRECT_UNUSED) {
-					ASM(XOR32rr, address_reg, address_reg);
-				} else if (operand->kind == ZEND_NATIVE_DIM_DIRECT_CONST) {
-					emit_literal_base(address_reg, canonical_frame_register());
-					ASM(LEA64rm, address_reg,
-						FE_MEM(address_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								operand->value * sizeof(zval))));
-				} else {
-					ASM(LEA64rm, address_reg,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(operand->value)));
-				}
-				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-				value.set_value(this, std::move(address));
-				builder.add_arg(std::move(value), tpde::CCAssignment{});
-			}
-			add_const_arg(builder, operation.extended_value, 4);
-			builder.add_arg(ValuePart{
-				uint64_t{address_op1.kind} | (uint64_t{address_op2.kind} << 2)
-					| (uint64_t{address_result.kind} << 4)
-					| (uint64_t{source_opcode & 0xff} << 8)
-					| (uint64_t{operation.source_position_id} << 32),
-				8, tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-			builder.call(runtime_symbol(address_helper));
-		} else if (frameless_address) {
-			/* The result slot, then each argument from its literal or
-			 * frame slot (the descriptor's CONST bits). */
-			auto slot_arg = [&](bool literal, uint32_t offset) {
-				ScratchReg address{this};
-				const AsmReg address_reg = address.alloc_gp();
-				if (literal) {
-					emit_literal_base(address_reg, canonical_frame_register());
-					ASM(LEA64rm, address_reg,
-						FE_MEM(address_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offset * sizeof(zval))));
-				} else {
-					ASM(LEA64rm, address_reg,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(offset)));
-				}
-				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-				value.set_value(this, std::move(address));
-				builder.add_arg(std::move(value), tpde::CCAssignment{});
-			};
-			const uint64_t descriptor = frameless_direct.descriptor;
-			auto literal_argument = [&](uint32_t index) {
-				return ((descriptor
-					>> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index)) & 1)
-					!= 0;
-			};
-			slot_arg(false, static_cast<uint32_t>(frameless_direct.slots));
-			slot_arg(literal_argument(0),
-				static_cast<uint32_t>(frameless_direct.slots >> 32));
-			slot_arg(literal_argument(1),
-				static_cast<uint32_t>(frameless_direct.more_slots));
-			if (source_opcode == ZEND_FRAMELESS_ICALL_3) {
-				slot_arg(literal_argument(2),
-					static_cast<uint32_t>(frameless_direct.more_slots >> 32));
-			}
-			add_const_arg(builder, descriptor, 8);
-			builder.call(runtime_symbol(
-				source_opcode == ZEND_FRAMELESS_ICALL_3
-					? ZEND_NATIVE_HELPER_CALL_FRAMELESS_3_ADDRESS
-					: ZEND_NATIVE_HELPER_CALL_FRAMELESS_2_ADDRESS));
-		} else if (assign_dim_address) {
-			auto address_arg = [&](uint32_t kind, uint32_t offset) {
-				ScratchReg address{this};
-				const AsmReg address_reg = address.alloc_gp();
-				if (kind == ZEND_NATIVE_DIM_DIRECT_CONST) {
-					emit_literal_base(address_reg, canonical_frame_register());
-					ASM(LEA64rm, address_reg,
-						FE_MEM(address_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offset * sizeof(zval))));
-				} else if (kind == ZEND_NATIVE_DIM_DIRECT_UNUSED) {
-					ASM(XOR32rr, address_reg, address_reg);
-				} else {
-					ASM(LEA64rm, address_reg,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(offset)));
-				}
-				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-				value.set_value(this, std::move(address));
-				builder.add_arg(std::move(value), tpde::CCAssignment{});
-			};
-			address_arg(ZEND_NATIVE_DIM_DIRECT_CV,
-				static_cast<uint32_t>(dim_direct.slots));
-			address_arg(static_cast<uint32_t>(dim_direct.descriptor & 3),
-				static_cast<uint32_t>(dim_direct.slots >> 32));
-			address_arg(static_cast<uint32_t>((dim_direct.descriptor >> 2) & 3),
-				static_cast<uint32_t>(dim_direct.more_slots));
-			add_const_arg(builder, dim_direct.descriptor, 8);
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_VALUE_ASSIGN_DIM_ADDRESS));
-		} else if (const_include_once) {
-			add_encoded_op1();
-			add_const_arg(builder, operation.extended_value, 4);
-			add_const_arg(builder, operation.source_position_id, 4);
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_CONST_INCLUDE_ONCE));
-		} else if (frameless_direct_form) {
-			/* Only ICALL_0 and ICALL_1 get here; ICALL_2 and ICALL_3 take
-			 * the address form above. */
-			add_const_arg(builder, frameless_direct.descriptor, 8);
-			add_const_arg(builder, frameless_direct.slots, 8);
-			add_const_arg(builder, frameless_direct.more_slots, 8);
-			builder.call(runtime_symbol(
-				source_opcode == ZEND_FRAMELESS_ICALL_1
-					? ZEND_NATIVE_HELPER_CALL_FRAMELESS_1
-					: ZEND_NATIVE_HELPER_CALL_FRAMELESS_DIRECT));
-		} else if ((helper == ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
-					|| helper == ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM)
-				&& zend_tpde_dim_direct_at(mir, &dim_direct)) {
-			add_const_arg(builder, dim_direct.descriptor, 8);
-			add_const_arg(builder, dim_direct.slots, 8);
-			add_const_arg(builder, dim_direct.more_slots, 8);
-			builder.call(runtime_symbol(
-				helper == ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R
-					? ZEND_NATIVE_HELPER_VALUE_FETCH_DIM_R_DIRECT
-					: ZEND_NATIVE_HELPER_VALUE_ISSET_ISEMPTY_DIM_DIRECT));
-		} else if (helper == ZEND_NATIVE_HELPER_VALUE_BINARY_OP
-				&& zend_tpde_identical_direct_at(mir, &concat_direct)) {
-			add_const_arg(builder, concat_direct.descriptor, 8);
-			add_const_arg(builder, concat_direct.slots, 8);
-			add_const_arg(builder, concat_direct.result_offset, 8);
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_VALUE_IDENTICAL_DIRECT));
-		} else if ((helper == ZEND_NATIVE_HELPER_VALUE_CONCAT
-					|| helper == ZEND_NATIVE_HELPER_VALUE_FAST_CONCAT)
-				&& zend_tpde_concat_direct_at(mir, &concat_direct)) {
-			add_const_arg(builder, concat_direct.descriptor, 8);
-			add_const_arg(builder, concat_direct.slots, 8);
-			add_const_arg(builder, concat_direct.result_offset, 8);
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_VALUE_CONCAT_DIRECT));
-		} else if (helper == ZEND_NATIVE_HELPER_VALUE_ASSIGN_OP
-				&& zend_tpde_concat_assign_direct_at(
-					mir, &concat_assign_direct)) {
-			add_const_arg(builder, concat_assign_direct.descriptor, 8);
-			add_const_arg(builder, concat_assign_direct.slots, 8);
-			builder.call(runtime_symbol(
-				ZEND_NATIVE_HELPER_VALUE_CONCAT_ASSIGN_DIRECT));
-		} else if (helper == ZEND_NATIVE_HELPER_THROW_SOURCE_ZVAL) {
-			add_encoded_op1();
-			add_const_arg(builder, source_opcode, 4);
-			add_const_arg(builder, operation.source_position_id, 4);
-			builder.call(runtime_symbol(helper));
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-			builder.add_ret(status, tpde::CCAssignment{});
-			if (zend_mir_id_is_valid(mir.exception_block_id)) {
-				generate_exception_branch(
-					adaptor->block_ref(mir.exception_block_id));
-				status.reset(this);
-				return true;
-			}
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(std::move(status), tpde::CCAssignment{});
-			return_builder.ret();
-			return true;
-		} else {
-			add_encoded_op1();
-			add_const_arg(builder,
-				encode_operand( operation.op2, operation.op2_unused_payload), 8);
-			add_const_arg(builder,
-				encode_operand( operation.result, operation.result_unused_payload), 8);
-			if (explicit_auxiliary) {
-				add_const_arg(builder,
-					encode_operand(operation.auxiliary, operation.auxiliary_unused_payload)
-						| zend_tpde_auxiliary_cache_bits(helper, operation), 8);
-			}
-			add_const_arg(builder, operation.extended_value, 4);
-			add_const_arg(builder, source_opcode, 4);
-			add_const_arg(builder, operation.source_position_id, 4);
-			builder.call(runtime_symbol(helper));
-		}
-		if (!frameless_inline) {
-			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
-			builder.add_ret(status, tpde::CCAssignment{});
-			emit_status_tail(std::move(status),
-				mir.exception_block_id, true);
-		}
-		/*
-		 * Some canonical value operations, such as COUNT, execute only
-		 * through this helper path. When the adaptor selected a boxed machine
-		 * result for an optimized direct-call argument, snapshot the complete
-		 * result before OPcache reuses the temporary frame slot.
-		 */
-		if (node.kind != Adaptor::InstKind::GuardedCold && node.has_result
-				&& adaptor->machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			const zend_mir_storage_id storage = node.mutation_result
-				? operation.op1_storage_id : operation.result_storage_id;
-			const uint64_t frame_offset =
-				frame_slot_offset(storage);
-			if (!zend_mir_id_is_valid(storage)
-					|| frame_offset > INT32_MAX - sizeof(zval)) {
-				return false;
-			}
-			auto result = result_ref(node.result);
-			const ValueParts parts = val_parts(node.result);
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto value = result.part(part);
-				auto value_reg = value.alloc_reg();
-				const zend_tpde_machine_part_role role =
-					parts.representation.parts[part].semantic_role;
-				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
-					ASM(MOV64rm, value_reg,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(frame_offset)));
-				} else if (role == ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-					ASM(MOV32rm, value_reg,
-						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-							static_cast<int32_t>(frame_offset
-								+ offsetof(zval, u1.type_info))));
-				} else {
-					return false;
-				}
-				value.set_modified();
-			}
-		}
-		return true;
-	};
-	/*
-	 * ROPE_INIT/ROPE_ADD of a literal piece, which is a string: the piece,
-	 * copied unless interned, goes into the rope's slot as the VM stores
-	 * it. The literal comes from the executing op array.
-	 */
-	auto rope_literal_inline = [&]() -> bool {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		const zend_tpde_plan *plan = adaptor->plan();
-		if (!mir.has_value_operation || node.has_result
-				|| operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-				|| plan->source_literals == nullptr
-				|| Z_TYPE(plan->source_literals[operation.op2.index])
-					!= IS_STRING
-				|| (operation.source_opcode != ZEND_ROPE_INIT
-					&& operation.source_opcode != ZEND_ROPE_ADD)) {
-			return false;
-		}
-		const bool initialize = operation.source_opcode == ZEND_ROPE_INIT;
-		const zend_mir_storage_id rope_storage = initialize
-			? operation.result_storage_id : operation.op1_storage_id;
-		if (!zend_mir_id_is_valid(rope_storage)) {
-			return false;
-		}
-		if (!frame_only_operands(node)) {
-			return false;
-		}
-		const uint64_t piece_offset =
-			frame_slot_offset(rope_storage)
-			+ (initialize ? 0 : uint64_t{operation.extended_value})
-				* sizeof(zend_string *);
-		const uint64_t literal_offset =
-			uint64_t{operation.op2.index} * sizeof(zval);
-		if (piece_offset > INT32_MAX - sizeof(void *)
-				|| literal_offset > INT32_MAX - sizeof(zval)) {
-			return false;
-		}
-		consume_operands(node);
-		const AsmReg frame_reg = canonical_frame_register();
-		ScratchReg piece{this};
-		const AsmReg piece_reg = piece.alloc_gp();
-		auto interned = text_writer.label_create();
-		emit_literal_base(piece_reg, frame_reg);
-		ASM(MOV64rm, piece_reg, FE_MEM(piece_reg, 0, FE_NOREG,
-			static_cast<int32_t>(literal_offset)));
-		ASM(TEST32mi, FE_MEM(piece_reg, 0, FE_NOREG,
-			static_cast<int32_t>(offsetof(zend_refcounted_h, u.type_info))),
-			static_cast<int32_t>(IS_STR_INTERNED << GC_FLAGS_SHIFT));
-		generate_raw_jump(Jump::jne, interned);
-		ASM(ADD32mi, FE_MEM(piece_reg, 0, FE_NOREG,
-			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))), 1);
-		label_place(interned);
-		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
-			static_cast<int32_t>(piece_offset)), piece_reg);
-		return true;
-	};
-	auto execute_value_operation = [&]() {
-		return execute_value_operation_with(
-			nullptr, mir.runtime_helper,
-			mir.has_value_operation
-				? mir.value_operation.source_opcode : UINT32_MAX);
-	};
-	/*
-	 * Publish a machine value to its canonical frame slot for a helper that
-	 * reads the slot, consuming the value. A cold block reloads parts whose
-	 * stack copy is valid instead of trusting the register.
-	 */
-	auto materialize_cold_operand = [&](
-			IRValueRef operand, zend_mir_storage_id storage) {
-		if (!zend_mir_id_is_valid(storage)
-				|| zend_tpde_reference_cv_operand_slot(mir, storage)) {
-			auto consumed = val_ref(operand);
-			(void) consumed;
-			return true;
-		}
-		const uint64_t offset =
-			frame_slot_offset(storage);
-		if (offset > INT32_MAX - sizeof(zval)) {
-			return false;
-		}
-		const zend_tpde_machine_value_kind kind =
-			adaptor->machine_kind(operand);
-		auto value = val_ref(operand);
-		const ValueParts parts = val_parts(operand);
-		std::vector<ValuePartRef> locked_parts;
-		locked_parts.reserve(parts.count());
-		AsmReg payload_reg{};
-		bool have_payload = false;
-		for (uint32_t part = 0; part < parts.count(); ++part) {
-			locked_parts.emplace_back(value.part(part));
-			auto &part_value = locked_parts.back();
-			AsmReg part_reg;
-			ScratchReg stack_reload{this};
-			if (node.kind == Adaptor::InstKind::GuardedCold
-					&& part_value.has_assignment()
-					&& part_value.assignment().stack_valid()) {
-				auto assignment = part_value.assignment();
-				part_reg = stack_reload.alloc_gp();
-				load_from_stack(part_reg, assignment.frame_off(),
-					assignment.part_size());
-			} else {
-				part_reg = part_value.load_to_reg();
-			}
-			const zend_tpde_machine_part_role role =
-				parts.representation.parts[part].semantic_role;
-			if (role == ZEND_TPDE_MACHINE_PART_VALUE
-					|| role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
-				payload_reg = part_reg;
-				have_payload = true;
-				if (kind == ZEND_TPDE_MACHINE_VALUE_F64) {
-					ASM(SSE_MOVSDmr,
-						FE_MEM(canonical_frame_register(), 0,
-							FE_NOREG, static_cast<int32_t>(offset)),
-						part_reg);
-				} else {
-					ASM(MOV64mr,
-						FE_MEM(canonical_frame_register(), 0,
-							FE_NOREG, static_cast<int32_t>(offset)),
-						part_reg);
-				}
-			} else if (role
-					== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-				ASM(MOV32mr,
-					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-						static_cast<int32_t>(
-							offset + offsetof(zval, u1.type_info))),
-					part_reg);
-			} else {
-				return false;
-			}
-		}
-		if (!have_payload) {
-			return false;
-		}
-		if (kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-				ScratchReg type_info{this};
-				auto type_info_reg = type_info.alloc_gp();
-				ASM(LEA32rm, type_info_reg, FE_MEM(payload_reg, 0, FE_NOREG, IS_FALSE));
-				ASM(MOV32mr,
-					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-						static_cast<int32_t>(
-							offset + offsetof(zval, u1.type_info))),
-					type_info_reg);
-			} else {
-				ScratchReg type_info{this};
-				auto type_info_reg = type_info.alloc_gp();
-				if (!emit_machine_zval_type_info(
-						kind, payload_reg, type_info_reg)) {
-					return false;
-				}
-				ASM(MOV32mr,
-					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-						static_cast<int32_t>(
-							offset + offsetof(zval, u1.type_info))),
-					type_info_reg);
-			}
-		}
-		return true;
-	};
 	if (node.kind == Adaptor::InstKind::GuardedCold
 			&& record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
-		/* Boundary operands are published by execute_value_operation. */
-		auto materialize_cold_operand_unless_boundary = [&](
-				IRValueRef operand, zend_mir_storage_id storage,
-				uint32_t boundary_operand_index) {
-			return boundary_operand_index != UINT32_MAX
-				|| materialize_cold_operand(operand, storage);
-		};
-		if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
-				&& node.operands.size() >= 2
-				&& (!materialize_cold_operand_unless_boundary(node.operands[0],
-						mir.value_operation.op1_storage_id,
-						node.boxed_op1_boundary_operand_index)
-					|| !materialize_cold_operand_unless_boundary(node.operands[1],
-						mir.value_operation.op2_storage_id,
-						node.boxed_op2_boundary_operand_index))) {
-			return false;
-		}
-		if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
-				&& node.assign_op_right_operand_index
-					< node.operands.size()
-				&& node.operands[node.assign_op_right_operand_index]
-					!= IRValueRef{Adaptor::FRAME_VALUE}
-				&& !materialize_cold_operand_unless_boundary(
-					node.operands[node.assign_op_right_operand_index],
-					mir.value_operation.op2_storage_id,
-					node.boxed_op2_boundary_operand_index)) {
-			return false;
-		}
-		if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN_OP
-				&& node.assign_op_left_operand_index
-					< node.operands.size()
-				&& node.operands[node.assign_op_left_operand_index]
-					!= IRValueRef{Adaptor::FRAME_VALUE}
-				&& !materialize_cold_operand_unless_boundary(
-					node.operands[node.assign_op_left_operand_index],
-					mir.value_operation.op1_storage_id,
-					node.boxed_op1_boundary_operand_index)) {
-			return false;
-		}
-		if (node.continuation_block == UINT32_MAX
-				|| !execute_value_operation()) {
-			return false;
-		}
-		if (record.source_position_id
-					< user_opcode_result_reload_labels_.size()
-				&& adaptor->user_opcode_result_reload_source(
-					record.source_position_id)) {
-			label_place(user_opcode_result_reload_labels_[
-				record.source_position_id]);
-		}
-		if (node.has_result) {
-			const zend_mir_storage_id storage =
-				node.mutation_result
-					? mir.value_operation.op1_storage_id
-					: mir.value_operation.result_storage_id;
-			const uint64_t frame_offset =
-				frame_slot_offset(storage);
-			if (!zend_mir_id_is_valid(storage)
-					|| frame_offset > INT32_MAX - sizeof(zval)
-					|| (node.mutation_result
-						? !((adaptor->representation(node.result)
-									== ZEND_MIR_REPRESENTATION_I64
-								&& adaptor->exact_type(node.result)
-									== ZEND_MIR_SCALAR_TYPE_I64
-								&& adaptor->machine_kind(node.result)
-									== ZEND_TPDE_MACHINE_VALUE_I64)
-							|| (adaptor->representation(node.result)
-									== ZEND_MIR_REPRESENTATION_ZVAL
-								&& adaptor->machine_kind(node.result)
-									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))
-						: !((adaptor->representation(node.result)
-										== ZEND_MIR_REPRESENTATION_I64
-									&& adaptor->exact_type(node.result)
-										== ZEND_MIR_SCALAR_TYPE_I64
-									&& adaptor->machine_kind(node.result)
-										== ZEND_TPDE_MACHINE_VALUE_I64)
-								|| (adaptor->representation(node.result)
-										== ZEND_MIR_REPRESENTATION_I1
-									&& adaptor->exact_type(node.result)
-										== ZEND_MIR_SCALAR_TYPE_I1
-									&& adaptor->machine_kind(node.result)
-										== ZEND_TPDE_MACHINE_VALUE_BOOL)
-								|| adaptor->machine_kind(node.result)
-									== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL))) {
-				return false;
-			}
-			if (adaptor->machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_I64
-					|| adaptor->machine_kind(node.result)
-						== ZEND_TPDE_MACHINE_VALUE_BOOL) {
-				auto [result_ref, result] =
-					result_ref_single(node.result);
-				auto result_reg = result.alloc_reg();
-				load_slot_scalar(result_reg, adaptor->machine_kind(node.result),
-					frame_offset);
-				result.set_modified();
-				generate_branch_to_block(Jump::jmp,
-					IRBlockRef{node.continuation_block}, false, true);
-				return true;
-			}
-			auto result = result_ref(node.result);
-			const ValueParts parts = val_parts(node.result);
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto value = result.part(part);
-				auto value_reg = value.alloc_reg();
-				const zend_tpde_machine_part_role role =
-					parts.representation.parts[part].semantic_role;
-				if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
-					ASM(MOV64rm, value_reg,
-						FE_MEM(canonical_frame_register(), 0,
-							FE_NOREG,
-							static_cast<int32_t>(frame_offset)));
-				} else if (role
-						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-					ASM(MOV32rm, value_reg,
-						FE_MEM(canonical_frame_register(), 0,
-							FE_NOREG,
-							static_cast<int32_t>(
-								frame_offset
-									+ offsetof(zval, u1.type_info))));
-				} else {
-					return false;
-				}
-				value.set_modified();
-			}
-		}
-		generate_branch_to_block(Jump::jmp,
-			IRBlockRef{node.continuation_block}, false, true);
-		return true;
+		return compile_guarded_cold(ctx);
 	}
-	auto branch_to_guarded_cold = [&]() {
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| node.argument_index == UINT32_MAX) {
-			return false;
-		}
-		for (IRValueRef operand : node.operands) {
-			if (adaptor->machine_reference(operand, nullptr)) {
-				continue;
-			}
-			auto consumed = val_ref(operand);
-			(void) consumed;
-		}
-		if (node.has_result && mir.deopt_exit_resume_plus_one != 0
-				&& !adaptor->typed_body()) {
-			/*
-			 * A deoptimization exit's continuation copies the fast result
-			 * (no PHI). The fast path always exits here; define the
-			 * unreachable result so the continuation compiles.
-			 */
-			auto result = result_ref(node.result);
-			const ValueParts parts = val_parts(node.result);
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto value = result.part(part);
-				const AsmReg value_reg = value.alloc_reg();
-				if (value.bank() == tpde::x64::PlatformConfig::FP_BANK) {
-					ASM(SSE_XORPDrr, value_reg, value_reg);
-				} else {
-					ASM(XOR32rr, value_reg, value_reg);
-				}
-				value.set_modified();
-			}
-		} else if (node.has_result) {
-			/*
-			 * Selection rejected the nominal fast implementation, so this
-			 * block has no executable edge to the continuation PHI. Retire
-			 * the unreachable fast definition in TPDE's compile-time
-			 * liveness without emitting a value.
-			 */
-			auto unreachable_definition = result_ref(node.result);
-			unreachable_definition.reset();
-		}
-		if (node.continuation_block != UINT32_MAX
-				&& node.control_block != UINT32_MAX) {
-			for (IRValueRef phi : adaptor->block_phis(
-					IRBlockRef{node.continuation_block})) {
-				auto unreachable_phi_definition = result_ref(phi);
-				auto unreachable_phi_input = val_ref(
-					adaptor->val_as_phi(phi).incoming_val_for_block(
-						IRBlockRef{node.control_block}));
-				unreachable_phi_definition.reset();
-				unreachable_phi_input.reset();
-			}
-		}
-		generate_branch_to_block(Jump::jmp,
-			IRBlockRef{node.argument_index}, false, true);
-		continuation_edge_emitted_ = true;
-		return true;
-	};
 	/* A guarded operation of a very large component emits no fast
 	 * sequence: it branches to its cold block, which calls the
 	 * operation's runtime helper. */
 	if (adaptor->compact_guarded_value_operation(instruction)) {
-		return branch_to_guarded_cold();
+		return branch_to_guarded_cold(ctx);
 	}
-	auto operation_machine_reference =
-		[&](zend_tpde_machine_reference_kind expected)
-			-> const zend_tpde_machine_reference * {
-			const zend_tpde_machine_reference *reference = nullptr;
-			return adaptor->operation_machine_reference(
-						node.mir_instruction_index, &reference)
-					&& reference->kind == expected
-				? reference : nullptr;
-		};
-	auto copy_slot = [&](
-			const zend_mir_source_operand_ref &source_operand,
-			zend_mir_storage_id source_storage,
-			zend_mir_storage_id target_storage,
-			zend_mir_storage_id result_storage,
-			bool move_source, bool fresh_target = false) {
-		/* A literal source is copied from the literal table, as
-		 * ZEND_ASSIGN copies a CONST operand. A fresh target, the result
-		 * temporary of QM_ASSIGN, holds nothing to release, as the VM's
-		 * QM_ASSIGN overwrites it. */
-		const bool literal_source =
-			source_operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		const uint64_t literal_offset =
-			uint64_t{source_operand.index} * sizeof(zval);
-		if (literal_source) {
-			move_source = false;
-		}
-		if ((literal_source
-				? literal_offset > INT32_MAX - sizeof(zval)
-				: source_storage == ZEND_MIR_ID_INVALID)
-				|| target_storage == ZEND_MIR_ID_INVALID
-				|| source_storage == target_storage
-				|| (result_storage != ZEND_MIR_ID_INVALID
-					&& (result_storage == source_storage
-						|| result_storage == target_storage))) {
-			return branch_to_guarded_cold();
-		}
-		const uint64_t source_offset = literal_source ? 0
-			: frame_slot_offset(source_storage);
-		const uint64_t target_offset =
-			frame_slot_offset(target_storage);
-		const uint64_t result_offset = result_storage == ZEND_MIR_ID_INVALID
-			? 0 : frame_slot_offset(result_storage);
-		if (source_offset > INT32_MAX - sizeof(zval)
-				|| target_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return branch_to_guarded_cold();
-		}
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
-			return false;
-		}
-		const auto successors = guarded_successors_of(node);
-
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg source_type{this};
-		ScratchReg target_type{this};
-		ScratchReg source_payload{this};
-		ScratchReg low_word{this};
-		ScratchReg probe{this};
-		ScratchReg decision{this};
-		ScratchReg target_address{this};
-		auto source_type_reg = source_type.alloc_gp();
-		auto target_type_reg = target_type.alloc_gp();
-		auto source_payload_reg = source_payload.alloc_gp();
-		auto low_word_reg = low_word.alloc_gp();
-		auto probe_reg = probe.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-		auto target_reg = target_address.alloc_gp();
-
-		const bool register_source = !literal_source
-			&& !node.operands.empty()
-			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-			&& adaptor->machine_value_is_register_authoritative(
-				node.operands[0]);
-		/* A register long, double or boolean is defined, no reference
-		 * and owns nothing: its type tests are decided here. */
-		const bool scalar_source = register_source
-			&& (adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_I64
-				|| adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_F64
-				|| adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_BOOL);
-
-		if (register_source) {
-			const zend_tpde_machine_value_kind source_kind =
-				adaptor->machine_kind(node.operands[0]);
-			if (source_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				auto source = val_ref(node.operands[0]);
-				const ValueParts parts = val_parts(node.operands[0]);
-				if (parts.count() != 2) {
-					return false;
-				}
-				for (uint32_t part = 0; part < parts.count(); ++part) {
-					auto value = source.part(part);
-					auto value_reg = value.load_to_reg();
-					switch (parts.representation.parts[part].semantic_role) {
-						case ZEND_TPDE_MACHINE_PART_PAYLOAD:
-							ASM(MOV64rr, source_payload_reg,
-								value_reg);
-							break;
-						case ZEND_TPDE_MACHINE_PART_TYPE_INFO:
-							ASM(MOV32rr, source_type_reg,
-								value_reg);
-							break;
-						default:
-							return false;
-					}
-				}
-			} else {
-				auto [source_ref, source] =
-					val_ref_single(node.operands[0]);
-				if (source_kind == ZEND_TPDE_MACHINE_VALUE_F64) {
-					ASM(SSE_MOVQ_X2Grr, source_payload_reg,
-						source.load_to_reg());
-				} else {
-					ASM(MOV64rr, source_payload_reg,
-						source.load_to_reg());
-				}
-				if (source_kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-					ASM(LEA32rm, source_type_reg, FE_MEM(source_payload_reg, 0, FE_NOREG, IS_FALSE));
-				} else {
-					if (!emit_machine_zval_type_info(
-							source_kind, source_payload_reg,
-							source_type_reg)) {
-						return false;
-					}
-				}
-			}
-		} else if (literal_source) {
-			emit_literal_base(probe_reg, frame_reg);
-			ASM(MOV64rm, source_payload_reg,
-				FE_MEM(probe_reg, 0, FE_NOREG,
-					static_cast<int32_t>(literal_offset)));
-			ASM(MOV32rm, source_type_reg,
-				FE_MEM(probe_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						literal_offset + offsetof(zval, u1.type_info))));
-		} else {
-			ASM(MOV32rm, source_type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						source_offset + offsetof(zval, u1.type_info))));
-			ASM(MOV64rm, source_payload_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(source_offset)));
-		}
-		if (!literal_source && !scalar_source
-				&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			ASM(CMP32ri, source_type_reg, IS_UNDEF);
-			generate_raw_jump(Jump::je, slow);
-		}
-		if (!literal_source && !register_source && !move_source
-				&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			/* A CV bound by global, static or & is read through its
-			 * reference and copied, as ZEND_ASSIGN dereferences it. */
-			ASM(CMP8ri, source_type_reg, IS_REFERENCE);
-			emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
-				emit_deref_value(source_type_reg, source_payload_reg, false);
-				ASM(CMP8ri, source_type_reg, IS_UNDEF);
-				generate_raw_jump(Jump::je, slow);
-				/* The target may be the same reference, whose release must
-				 * not free the value copied: the helper handles that. */
-				if (!fresh_target) {
-					ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(target_offset
-							+ offsetof(zval, u1.v.type))), IS_REFERENCE);
-					generate_raw_jump(Jump::je, slow);
-				}
-			});
-		} else if (!literal_source && !scalar_source
-				&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-					|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
-			ASM(CMP8ri, source_type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::je, slow);
-		}
-		/*
-		 * An immutable counted value must not get a refcount write and is
-		 * duplicated as the VM does it: the cold path copies it.
-		 */
-		if (!scalar_source) {
-			ASM(TEST32ri, source_type_reg,
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			auto source_mutable = text_writer.label_create();
-			generate_raw_jump(Jump::je, source_mutable);
-			ASM(TEST32mi,
-				FE_MEM(source_payload_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, u.type_info))),
-				GC_IMMUTABLE);
-			generate_raw_jump(Jump::jne, slow);
-			label_place(source_mutable);
-		}
-		if (result_storage != ZEND_MIR_ID_INVALID) {
-			ASM(CMP32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						result_offset + offsetof(zval, u1.type_info))),
-				IS_DOUBLE);
-			generate_raw_jump(Jump::ja, slow);
-		}
-		ASM(LEA64rm, target_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(target_offset)));
-		auto target_released = text_writer.label_create();
-		if (!fresh_target) {
-			/* A CV bound by global, static or & is written through its
-			 * reference, like zend_assign_to_variable(); a reference with
-			 * typed property sources needs the helper's coercion. */
-			ASM(MOV32rm, target_type_reg,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			ASM(CMP8ri, target_type_reg, IS_REFERENCE);
-			auto target_plain = text_writer.label_create();
-			auto target_reference = text_writer.label_create();
-			generate_raw_jump(Jump::je, target_reference);
-			/* The reference is followed out of the hot code. */
-			const bool cold_reference = !text_writer.in_cold_area();
-			if (cold_reference) {
-				cold_begin();
-			} else {
-				generate_raw_jump(Jump::jmp, target_plain);
-			}
-			label_place(target_reference);
-			ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
-			ASM(CMP64mi,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_reference, sources.ptr))),
-				0);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(ADD64ri, target_reg,
-				static_cast<int32_t>(offsetof(zend_reference, val)));
-			ASM(MOV32rm, target_type_reg,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			if (cold_reference) {
-				generate_raw_jump(Jump::jmp, target_plain);
-				cold_end();
-			}
-			label_place(target_plain);
-			ASM(TEST32ri, target_type_reg,
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::je, target_released);
-			/*
-			 * The old value keeps another owner, so only its refcount
-			 * drops. GC_DTOR_NO_REF() must still purple a shared
-			 * collectable value that may leak; one already buffered or not
-			 * collectable needs nothing more. The helper does the rest.
-			 * This is the last check: the release follows directly.
-			 * A string's last owner frees it out of line, which runs no
-			 * code and raises nothing, before the store.
-			 */
-			auto release = text_writer.label_create();
-			ASM(MOV64rm, low_word_reg,
-				FE_MEM(target_reg, 0, FE_NOREG, 0));
-			ASM(MOV32rm, probe_reg,
-				FE_MEM(low_word_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, refcount))));
-			ASM(CMP32ri, probe_reg, 1);
-			{
-				auto last_owner = text_writer.label_create();
-				generate_raw_jump(Jump::jle, last_owner);
-				const bool cold_free = !text_writer.in_cold_area();
-				auto freed_join = text_writer.label_create();
-				if (cold_free) {
-					cold_begin();
-				} else {
-					generate_raw_jump(Jump::jmp, freed_join);
-				}
-				label_place(last_owner);
-				ASM(CMP8ri, target_type_reg, IS_STRING);
-				generate_raw_jump(Jump::jne, slow);
-				emit_preserving_call(static_cast<uint64_t>(
-						register_file.used),
-					ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW, [&] {
-						ASM(MOV64rr, FE_DI, target_reg);
-					}, [] {});
-				generate_raw_jump(Jump::jmp, target_released);
-				if (cold_free) {
-					cold_end();
-				}
-				label_place(freed_join);
-			}
-			ASM(TEST32ri, target_type_reg,
-				IS_TYPE_COLLECTABLE << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::je, release);
-			ASM(TEST32mi,
-				FE_MEM(low_word_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, u.type_info))),
-				static_cast<int32_t>(
-					GC_INFO_MASK | (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
-			generate_raw_jump(Jump::je, slow);
-			label_place(release);
-			ASM(SUB32mi,
-				FE_MEM(low_word_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, refcount))),
-				1);
-		}
-		label_place(target_released);
-		const uint32_t source_refcount_increments =
-			(!move_source ? 1 : 0)
-			+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
-		if (source_refcount_increments != 0 && !scalar_source) {
-			emit_try_addref(source_type_reg, source_payload_reg,
-				static_cast<int32_t>(source_refcount_increments));
-		}
-		ASM(MOV64mr,
-			FE_MEM(target_reg, 0, FE_NOREG, 0),
-			source_payload_reg);
-		ASM(MOV32mr,
-			FE_MEM(target_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))),
-			source_type_reg);
-		if (result_storage != ZEND_MIR_ID_INVALID) {
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset)),
-				source_payload_reg);
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						result_offset + offsetof(zval, u1.type_info))),
-				source_type_reg);
-		}
-		if (move_source) {
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-					source_offset + offsetof(zval, u1.type_info))),
-				IS_UNDEF);
-		}
-		if (!register_source) {
-			/* Nothing to publish on the cold edge: leave directly. */
-			source_type.reset();
-			target_type.reset();
-			source_payload.reset();
-			low_word.reset();
-			probe.reset();
-			target_address.reset();
-			if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
-				decision.reset();
-				frame_scratch.reset();
-				generate_guarded_direct_exit(
-					slow, successors[1], successors[0]);
-				return true;
-			}
-		}
-		ASM(MOV32ri, decision_reg, 0);
-		cold_begin();
-		label_place(slow);
-		if (register_source) {
-			/*
-			 * The helper consumes canonical Zend slots.  Keep the source
-			 * register-authoritative on the hot edge and materialize it only
-			 * when the generated guard actually selects the cold edge.
-			 */
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(source_offset)),
-				source_payload_reg);
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						source_offset + offsetof(zval, u1.type_info))),
-				source_type_reg);
-		}
-		ASM(MOV32ri, decision_reg, 1);
-		generate_raw_jump(Jump::jmp, done);
-		cold_end();
-		label_place(done);
-		source_type.reset();
-		target_type.reset();
-		source_payload.reset();
-		low_word.reset();
-		probe.reset();
-		target_address.reset();
-		frame_scratch.reset();
-		generate_guarded_decision_branch(
-			std::move(decision), successors[1], successors[0]);
-		return true;
-	};
-	auto copy_temporary_slot = [&]() {
-		const zend_mir_storage_id source_storage =
-			mir.value_operation.op1_storage_id;
-		const zend_mir_storage_id result_storage =
-			mir.value_operation.result_storage_id;
-		if (source_storage == ZEND_MIR_ID_INVALID
-				|| result_storage == ZEND_MIR_ID_INVALID
-				|| source_storage == result_storage) {
-			return branch_to_guarded_cold();
-		}
-		const uint64_t source_offset =
-			frame_slot_offset(source_storage);
-		const uint64_t result_offset =
-			frame_slot_offset(result_storage);
-		if (source_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return branch_to_guarded_cold();
-		}
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_reg = frame.load_to_reg();
-		ScratchReg type{this};
-		ScratchReg value{this};
-		ScratchReg probe{this};
-		auto type_reg = type.alloc_gp();
-		auto value_reg = value.alloc_gp();
-		auto probe_reg = probe.alloc_gp();
-
-		ASM(MOV32rm, type_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					source_offset + offsetof(zval, u1.type_info))));
-		ASM(MOV64rm, value_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(source_offset)));
-		emit_try_addref(type_reg, value_reg);
-		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset)),
-			value_reg);
-		ASM(MOV32mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					result_offset + offsetof(zval, u1.type_info))),
-			type_reg);
-		return true;
-	};
-	auto free_temporary_slot = [&]() {
-		const zend_mir_storage_id source_storage =
-			mir.value_operation.op1_storage_id;
-		if (source_storage == ZEND_MIR_ID_INVALID) {
-			return branch_to_guarded_cold();
-		}
-		const uint64_t source_offset =
-			frame_slot_offset(source_storage);
-		if (source_offset > INT32_MAX - sizeof(zval)) {
-			return branch_to_guarded_cold();
-		}
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
-			return false;
-		}
-		const auto successors = guarded_successors_of(node);
-		auto slow = text_writer.label_create();
-		auto released = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg type{this};
-		ScratchReg value{this};
-		ScratchReg probe{this};
-		ScratchReg decision{this};
-		auto type_reg = type.alloc_gp();
-		auto value_reg = value.alloc_gp();
-		auto probe_reg = probe.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-
-		ASM(MOV32rm, type_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					source_offset + offsetof(zval, u1.type_info))));
-		ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		generate_raw_jump(Jump::je, released);
-		ASM(MOV64rm, value_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(source_offset)));
-		ASM(CMP32mi,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))),
-			1);
-		generate_raw_jump(Jump::jle, slow);
-		ASM(SUB32mi,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))),
-			1);
-		label_place(released);
-		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					source_offset + offsetof(zval, u1.type_info))),
-			IS_UNDEF);
-		auto done = text_writer.label_create();
-		type.reset();
-		value.reset();
-		probe.reset();
-		/* The slow path jumps before any release: the cold block may
-		 * take it directly. */
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return true;
-	};
-	/* Coalesce is FETCH_DIM_IS: a read whose missing key or scalar
-	 * container yields null without a diagnostic. Write is FETCH_DIM_W, RW
-	 * and UNSET, which return the INDIRECT of an existing element of an
-	 * unshared array. */
-	enum class ElementAccess : uint8_t {
-		Read, Coalesce, Write, Isset, Empty, Assign
-	};
-	/* The read of an isset's element (lookup_reuse_consumer()). */
-	IRInstRef reuse_read{UINT32_MAX};
-	/*
-	 * FETCH_DIM_R, FETCH_DIM_IS (??), isset() and empty() of an array
-	 * element whose container, key and result live in frame slots or
-	 * literals, composed of EncodeGen snippets:
-	 * zend_native_array_find_literal() or _find_key() probe the element
-	 * without changing anything, a temporary container is consumed only
-	 * when another owner keeps it alive, and every undecided probe takes
-	 * the guarded cold block, whose helper repeats the whole operation.
-	 * Returns 1 when emitted, 0 when the form does not apply and -1 on an
-	 * encoding failure.
-	 */
-	auto array_element = [&](ElementAccess access) -> int {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| !mir.has_value_operation
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
-			return 0;
-		}
-		/* A read's integer key may be a register value that its frame
-		 * slot does not canonically hold: the first operand, an exact
-		 * integer, used from its register. */
-		const bool register_key = (access == ElementAccess::Read
-				|| access == ElementAccess::Coalesce
-				|| access == ElementAccess::Write)
-			&& operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& !node.operands.empty()
-			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-			&& !zend_mir_id_is_valid(
-				adaptor->canonical_storage(node.operands[0]))
-			&& adaptor->machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_I64
-			&& adaptor->exact_type(node.operands[0])
-				== ZEND_MIR_SCALAR_TYPE_I64
-			&& adaptor->representation(node.operands[0])
-				== ZEND_MIR_REPRESENTATION_I64;
-		/* A container or key held as a machine value is published to its
-		 * frame slot first, as the helper of the cold block reads it. */
-		std::vector<std::pair<IRValueRef, zend_mir_storage_id>> published;
-		for (IRValueRef operand : node.operands) {
-			if (operand == IRValueRef{Adaptor::FRAME_VALUE}
-					|| operand == IRValueRef{
-						Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
-				continue;
-			}
-			/* An element reference only describes the packed form; the
-			 * constant of a literal integer key is read from the literal
-			 * table. */
-			uint64_t constant_bits = 0;
-			if ((register_key && operand == node.operands[0])
-					|| adaptor->machine_reference(operand, nullptr)
-					|| (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-						&& adaptor->constant(operand, &constant_bits)
-						&& adaptor->plan()->source_literals != nullptr
-						&& operation.op2.index
-							< adaptor->plan()->source_literal_count
-						&& Z_TYPE(adaptor->plan()->source_literals[
-							operation.op2.index]) == IS_LONG
-						&& static_cast<zend_long>(constant_bits)
-							== Z_LVAL(adaptor->plan()->source_literals[
-								operation.op2.index]))) {
-				continue;
-			}
-			const zend_mir_storage_id storage =
-				adaptor->canonical_storage(operand);
-			const zend_tpde_machine_value_kind kind =
-				adaptor->machine_kind(operand);
-			if (!zend_mir_id_is_valid(storage)
-					|| (storage != operation.op1_storage_id
-						&& storage != operation.op2_storage_id
-						&& !(access == ElementAccess::Assign
-							&& storage == operation.auxiliary_storage_id))
-					|| (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						? val_parts(operand).count() != 2
-						: kind != ZEND_TPDE_MACHINE_VALUE_BOOL
-							&& kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-							&& kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-							&& zend_tpde_machine_value_zval_type_info(kind)
-								== IS_UNDEF)) {
-				return 0;
-			}
-			for (const auto &[other, other_storage] : published) {
-				if (other_storage == storage) {
-					return 0;
-				}
-			}
-			published.emplace_back(operand, storage);
-		}
-		const auto successors = guarded_successors_of(node);
-		auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
-			return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-					|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
-				? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
-		};
-		const bool reads = access == ElementAccess::Read
-			|| access == ElementAccess::Coalesce;
-		const bool tests = access == ElementAccess::Isset
-			|| access == ElementAccess::Empty;
-		/* An assignment replaces an existing element in place: the write
-		 * fetch's lookup, then the value. */
-		const bool assigns = access == ElementAccess::Assign;
-		const bool writes = access == ElementAccess::Write || assigns;
-		const bool container_literal =
-			operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		const bool container_temporary =
-			slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_TMP;
-		/* The VAR of a write fetch holds a previous fetch's INDIRECT. */
-		const bool container_var = writes
-			&& slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_VAR;
-		const bool key_literal =
-			operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		if ((!container_literal && !container_temporary && !container_var
-					&& slot_kind(operation.op1) != ZEND_MIR_SOURCE_SLOT_CV)
-				|| (writes && (container_literal || container_temporary
-					|| node.has_result))
-				|| (!key_literal
-					&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_CV
-					&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_TMP)
-				|| (!assigns
-					&& slot_kind(operation.result) != ZEND_MIR_SOURCE_SLOT_TMP
-					&& slot_kind(operation.result)
-						!= ZEND_MIR_SOURCE_SLOT_VAR)
-				|| (assigns
-					&& (operation.result.kind
-							!= ZEND_MIR_SOURCE_OPERAND_UNUSED
-						|| (operation.auxiliary.kind
-								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
-							&& slot_kind(operation.auxiliary)
-								!= ZEND_MIR_SOURCE_SLOT_CV
-							&& slot_kind(operation.auxiliary)
-								!= ZEND_MIR_SOURCE_SLOT_TMP)
-						|| (operation.auxiliary.kind
-								!= ZEND_MIR_SOURCE_OPERAND_LITERAL
-							&& (!zend_mir_id_is_valid(
-									operation.auxiliary_storage_id)
-								|| operation.auxiliary_storage_id
-									== operation.op1_storage_id))))
-				|| (!container_literal
-					&& !zend_mir_id_is_valid(operation.op1_storage_id))
-				|| (!key_literal && !register_key
-					&& !zend_mir_id_is_valid(operation.op2_storage_id))
-				|| (!assigns
-					&& (!zend_mir_id_is_valid(operation.result_storage_id)
-						|| operation.result_storage_id
-							== operation.op1_storage_id
-						|| operation.result_storage_id
-							== operation.op2_storage_id))
-				|| (node.has_result && reads
-					&& !((adaptor->machine_kind(node.result)
-								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-							&& val_parts(node.result).count() == 2)
-						|| (adaptor->machine_kind(node.result)
-								== ZEND_TPDE_MACHINE_VALUE_I64
-							&& adaptor->exact_type(node.result)
-								== ZEND_MIR_SCALAR_TYPE_I64
-							&& val_parts(node.result).count() == 1)))
-				|| (node.has_result && tests
-					&& val_parts(node.result).count() != 1)
-				|| (node.has_result && access == ElementAccess::Coalesce
-					&& adaptor->machine_kind(node.result)
-						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
-			return 0;
-		}
-		auto frame_offset = [](zend_mir_storage_id storage) {
-			return frame_slot_offset(storage);
-		};
-		const uint64_t container_offset = container_literal
-			? uint64_t{operation.op1.index} * sizeof(zval)
-			: frame_offset(operation.op1_storage_id);
-		const uint64_t key_offset = key_literal
-			? uint64_t{operation.op2.index} * sizeof(zval)
-			: !zend_mir_id_is_valid(operation.op2_storage_id) ? 0
-			: frame_offset(operation.op2_storage_id);
-		const uint64_t result_offset = assigns
-			? 0 : frame_offset(operation.result_storage_id);
-		const bool value_literal = assigns
-			&& operation.auxiliary.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		/* An assignment's literal key is an integer or a string with its
-		 * hash, which the compiler made non-numeric. */
-		if (assigns && key_literal
-				&& (adaptor->plan()->source_literals == nullptr
-					|| operation.op2.index
-						>= adaptor->plan()->source_literal_count
-					|| (Z_TYPE(adaptor->plan()->source_literals[
-							operation.op2.index]) != IS_LONG
-						&& (Z_TYPE(adaptor->plan()->source_literals[
-								operation.op2.index]) != IS_STRING
-							|| ZSTR_H(Z_STR(adaptor->plan()->source_literals[
-								operation.op2.index])) == 0)))) {
-			return 0;
-		}
-		const uint64_t value_offset = !assigns ? 0
-			: value_literal
-				? uint64_t{operation.auxiliary.index} * sizeof(zval)
-				: frame_offset(operation.auxiliary_storage_id);
-		/* A CV container Zend's type inference proves to be an array,
-		 * neither undefined nor a reference: the known_* lookups take its
-		 * table without testing the zval. Some of them need one scratch
-		 * register more than the general lookups. */
-		const bool known_array = [&] {
-			const zend_tpde_plan *plan = adaptor->plan();
-			if (container_literal || container_temporary || container_var
-					|| unlocked_gp_registers() < 10
-					|| plan->source_opcodes == nullptr
-					|| operation.source_position_id
-						>= plan->source_opcode_count) {
-				return false;
-			}
-			const zend_tpde_source_opcode &source =
-				plan->source_opcodes[operation.source_position_id];
-			return source.op1_type == IS_CV
-				&& source.op1_var == container_offset
-				&& (source.op1_may_be & (MAY_BE_ANY | MAY_BE_UNDEF
-						| MAY_BE_REF | MAY_BE_INDIRECT)) == MAY_BE_ARRAY;
-		}();
-		/* The lookup snippets use up to seven scratch registers; with the
-		 * literal register held across them, one stays spare. */
-		if (container_offset > INT32_MAX - sizeof(zval)
-				|| key_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)
-				|| value_offset > INT32_MAX - sizeof(zval)
-				|| unlocked_gp_registers() < 9) {
-			return 0;
-		}
-		for (const auto &[operand, storage] : published) {
-			if (!materialize_cold_operand(operand, storage)) {
-				return -1;
-			}
-		}
-
-		auto slow = text_writer.label_create();
-		auto absent = text_writer.label_create();
-		auto answered = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg decision{this};
-		ScratchReg answer{this};
-		/* A literal key the compiler can read is passed as what it is: an
-		 * integer index, or a string with its hash. A runtime key Zend's
-		 * type inference proves may be an integer and never a string is
-		 * passed as an index read from its slot; unless it is proven an
-		 * integer (neither undefined nor a reference), any other type
-		 * takes the helper. */
-		enum class LiteralKey { None, Index, String, Register };
-		LiteralKey literal_key = LiteralKey::None;
-		uint64_t literal_key_value = 0;
-		bool register_key_checked = false;
-		{
-			const zend_tpde_plan *plan = adaptor->plan();
-			if (register_key) {
-				literal_key = LiteralKey::Register;
-			} else if (!key_literal && unlocked_gp_registers() >= 10
-					&& plan->source_opcodes != nullptr
-					&& operation.source_position_id
-						< plan->source_opcode_count) {
-				const zend_tpde_source_opcode &source =
-					plan->source_opcodes[operation.source_position_id];
-				const uint32_t may_be = source.op2_may_be
-					& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF
-						| MAY_BE_INDIRECT);
-				if (source.op2_type != IS_CONST
-						&& source.op2_var == key_offset
-						&& source.op2_may_be != UINT32_MAX
-						&& (may_be & MAY_BE_LONG) != 0
-						&& (may_be & MAY_BE_STRING) == 0) {
-					literal_key = LiteralKey::Register;
-					register_key_checked = may_be != MAY_BE_LONG;
-				}
-			}
-			if (key_literal && plan->source_literals != nullptr
-					&& operation.op2.index < plan->source_literal_count) {
-				const zval *literal =
-					&plan->source_literals[operation.op2.index];
-				if (Z_TYPE_P(literal) == IS_LONG) {
-					literal_key = LiteralKey::Index;
-					literal_key_value =
-						static_cast<uint64_t>(Z_LVAL_P(literal));
-				} else if (Z_TYPE_P(literal) == IS_STRING
-						&& ZSTR_H(Z_STR_P(literal)) != 0) {
-					literal_key = LiteralKey::String;
-					literal_key_value = ZSTR_H(Z_STR_P(literal));
-				}
-			}
-		}
-		ScratchReg literals{this};
-		AsmReg literals_reg = frame_reg;
-		if (container_literal || value_literal
-				|| (key_literal && literal_key != LiteralKey::Index)) {
-			literals_reg = literals.alloc_gp();
-			emit_literal_base(literals_reg, frame_reg);
-		}
-		auto address = [](AsmReg base, uint64_t offset) {
-			return GenericValuePart{GenericValuePart::Expr{
-				base, static_cast<int64_t>(offset)}};
-		};
-		/* The operation consumes a temporary key: one that needs a release
-		 * (a counted string) takes the helper. */
-		if (slot_kind(operation.op2) == ZEND_MIR_SOURCE_SLOT_TMP
-				&& !register_key) {
-			emit_counted_check(frame_reg, static_cast<int32_t>(key_offset),
-				slow);
-		}
-		/* An assignment may insert into the array before it stores the
-		 * value, so the value is checked first: defined and not a
-		 * reference. An array value is copied after the insertion as
-		 * ZEND_ASSIGN_DIM copies it: only the container's own zval holds
-		 * the unshared array, which is another storage (see above) or the
-		 * target of a VAR's INDIRECT, where the VM stores it the same. */
-		if (assigns && !value_literal) {
-			ScratchReg value_type{this};
-			const AsmReg type_reg = value_type.alloc_gp();
-			ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(value_offset
-					+ offsetof(zval, u1.v.type))));
-			ASM(CMP32ri, type_reg, IS_UNDEF);
-			generate_raw_jump(Jump::je, slow);
-			ASM(CMP32ri, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::je, slow);
-		}
-		const AsmReg container_base =
-			container_literal ? literals_reg : frame_reg;
-		ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
-		auto container_address = address(container_base, container_offset);
-		auto key_address = key_literal
-			? address(literals_reg, key_offset)
-			: address(frame_reg, key_offset);
-		/*
-		 * A probe that cannot decide a key (a string without its hash, a
-		 * bucket key of the same hash that is another string, a numeric
-		 * string) finds the element in C out of the hot code, with the
-		 * probe's result encoding, before anything takes the helper.
-		 */
-		static_assert(ZEND_NATIVE_FIND_UNKNOWN == ZEND_NATIVE_ELEMENT_UNKNOWN
-			&& ZEND_NATIVE_FIND_ABSENT == ZEND_NATIVE_ELEMENT_ABSENT
-			&& ZEND_NATIVE_FIND_ISSET_UNKNOWN == ZEND_NATIVE_ISSET_UNKNOWN);
-		const bool find_element = !writes && !register_key
-			&& literal_key != LiteralKey::Index
-			&& literal_key != LiteralKey::Register
-			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
-		auto find_element_filter = [&](tpde::Label undecided) {
-			emit_find_element_filter(container_base,
-				static_cast<int32_t>(container_offset),
-				key_literal ? literals_reg : frame_reg,
-				static_cast<int32_t>(key_offset), undecided);
-		};
-		auto find_element_call = [&](AsmReg out_reg, uint64_t mode) {
-			emit_find_element_call(out_reg, mode, frame_reg, container_base,
-				static_cast<int32_t>(container_offset),
-				key_literal ? literals_reg : frame_reg,
-				static_cast<int32_t>(key_offset));
-		};
-		/*
-		 * A runtime key: a string looks up inline, any other key (an
-		 * integer, a reference) out of line, both into one register. Only
-		 * with a register to spare, so that neither lookup evicts.
-		 */
-		const bool split_string_key = !key_literal
-			&& unlocked_gp_registers() >= 10;
-		auto string_key_split = [&](auto &&string_lookup,
-				auto &&general_lookup, ValuePart &out) -> bool {
-			ScratchReg common{this};
-			const AsmReg common_reg = common.alloc_gp();
-			auto other = text_writer.label_create();
-			auto joined = text_writer.label_create();
-			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(key_offset
-					+ offsetof(zval, u1.v.type))), IS_STRING);
-			generate_raw_jump(Jump::jne, other);
-			{
-				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-				if (!string_lookup(value)) {
-					return false;
-				}
-				mov(common_reg, value.cur_reg_or_load(this), 8);
-				value.reset(this);
-			}
-			const bool cold_other = !text_writer.in_cold_area();
-			if (cold_other) {
-				cold_begin();
-			} else {
-				generate_raw_jump(Jump::jmp, joined);
-			}
-			label_place(other);
-			{
-				ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-				if (!general_lookup(value)) {
-					return false;
-				}
-				mov(common_reg, value.cur_reg_or_load(this), 8);
-				value.reset(this);
-			}
-			if (cold_other) {
-				generate_raw_jump(Jump::jmp, joined);
-				cold_end();
-			}
-			label_place(joined);
-			out.set_value(this, std::move(common));
-			return true;
-		};
-		/* An isset whose element a read reuses finds it in the general
-		 * form, which also leaves its address; a read that reuses one skips
-		 * its own lookup. */
-		const bool reuse_store = access == ElementAccess::Isset
-			&& reuse_read != IRInstRef{UINT32_MAX} && !container_temporary
-			&& !register_key && literal_key != LiteralKey::Register;
-		const bool reuse_load = (access == ElementAccess::Read
-				|| (access == ElementAccess::Write && !container_var))
-			&& lookup_reuse_armed(instruction) && !register_key
-			&& literal_key != LiteralKey::Register
-			&& unlocked_gp_registers() >= 10;
-		/* isset() of an array element decides in one snippet: set, not
-		 * set, or the helper's. */
-		if (access == ElementAccess::Isset && !container_temporary
-				&& !reuse_store) {
-			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-			bool tested;
-			if (literal_key == LiteralKey::Index) {
-				tested = (known_array
-				? EncodeBase::encode_zend_native_known_isset_idx(
-					std::move(container_address),
-					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-						tpde::x64::PlatformConfig::GP_BANK}}, value)
-				: EncodeBase::encode_zend_native_array_isset_idx(
-					std::move(container_address),
-					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-						tpde::x64::PlatformConfig::GP_BANK}}, value));
-			} else if (literal_key == LiteralKey::String) {
-				ScratchReg name{this};
-				ASM(MOV64rm, name.alloc_gp(),
-					FE_MEM(literals_reg, 0, FE_NOREG,
-						static_cast<int32_t>(key_offset)));
-				tested = (known_array
-				? EncodeBase::encode_zend_native_known_isset_str(
-					std::move(container_address),
-					GenericValuePart{std::move(name)},
-					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-						tpde::x64::PlatformConfig::GP_BANK}}, value)
-				: EncodeBase::encode_zend_native_array_isset_str(
-					std::move(container_address),
-					GenericValuePart{std::move(name)},
-					GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-						tpde::x64::PlatformConfig::GP_BANK}}, value));
-			} else if (key_literal) {
-				tested = (known_array
-				? EncodeBase::encode_zend_native_known_isset_literal(
-					std::move(container_address), std::move(key_address),
-					value)
-				: EncodeBase::encode_zend_native_array_isset_literal(
-					std::move(container_address), std::move(key_address),
-					value));
-			} else if (split_string_key) {
-				tested = string_key_split(
-					[&](ValuePart &out) {
-						return (known_array
-				? EncodeBase::encode_zend_native_known_isset_string_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out)
-				: EncodeBase::encode_zend_native_array_isset_string_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out));
-					},
-					[&](ValuePart &out) {
-						return (known_array
-				? EncodeBase::encode_zend_native_known_isset_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out)
-				: EncodeBase::encode_zend_native_array_isset_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out));
-					}, value);
-			} else {
-				tested = (known_array
-				? EncodeBase::encode_zend_native_known_isset_key(
-					std::move(container_address), std::move(key_address),
-					value)
-				: EncodeBase::encode_zend_native_array_isset_key(
-					std::move(container_address), std::move(key_address),
-					value));
-			}
-			if (!tested) {
-				return -1;
-			}
-			auto decision_reg = decision.alloc_gp();
-			auto answer_reg = answer.alloc_gp();
-			mov(answer_reg, value.cur_reg_or_load(this), 8);
-			value.reset(this);
-			ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
-			if (find_element) {
-				auto complete = text_writer.label_create();
-				auto known = text_writer.label_create();
-				generate_raw_jump(Jump::je, complete);
-				const bool cold_find = !text_writer.in_cold_area();
-				if (cold_find) {
-					cold_begin();
-				} else {
-					generate_raw_jump(Jump::jmp, known);
-				}
-				label_place(complete);
-				find_element_filter(slow);
-				find_element_call(answer_reg,
-					ZEND_NATIVE_FIND_TEST | ZEND_NATIVE_FIND_ISSET);
-				ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
-				generate_raw_jump(Jump::je, slow);
-				generate_raw_jump(Jump::jmp, known);
-				if (cold_find) {
-					cold_end();
-				}
-				label_place(known);
-			} else {
-				generate_raw_jump(Jump::je, slow);
-			}
-			literals.reset();
-			if (node.has_result) {
-				auto [result_ref, result] = result_ref_single(node.result);
-				mov(result.alloc_reg(), answer_reg, 8);
-				result.set_modified();
-			} else {
-				/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
-				ASM(ADD32ri, answer_reg, IS_FALSE);
-				ASM(MOV32mr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(result_offset
-							+ offsetof(zval, u1.type_info))),
-					answer_reg);
-			}
-			answer.reset();
-			finish_guarded(slow, done, std::move(decision), frame_scratch,
-				successors);
-			return 1;
-		}
-		auto reuse_cached = text_writer.label_create();
-		auto reuse_joined = text_writer.label_create();
-		if (reuse_store) {
-			ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
-		} else if (reuse_load) {
-			/* A write fetch changes the found element in place only in an
-			 * array without another owner (zend_native_probe_array_w()); the
-			 * isset found it, so the CV holds an array, maybe through a
-			 * reference. */
-			auto shared = text_writer.label_create();
-			if (writes) {
-				ScratchReg table{this};
-				const AsmReg table_reg = table.alloc_gp();
-				auto direct = text_writer.label_create();
-				ASM(MOV64rm, table_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(container_offset)));
-				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(container_offset
-						+ offsetof(zval, u1.v.type))), IS_REFERENCE);
-				emit_cold_branch(Jump::je, direct, [&] {
-					ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_reference, val))));
-				});
-				ASM(CMP32mi, FE_MEM(table_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_refcounted_h,
-						refcount))), 1);
-				generate_raw_jump(Jump::jne, shared);
-			}
-			ASM(CMP64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
-			generate_raw_jump(Jump::jne, reuse_cached);
-			label_place(shared);
-		}
-		/*
-		 * An assignment under a string key, or a key of unknown type, looks
-		 * its element up, or inserts it, in one call of
-		 * zend_native_array_assign_lookup() rather than repeating
-		 * zend_hash_lookup() inline at every site. NULL (UNKNOWN) takes the
-		 * helper.
-		 */
-		const bool lookup_call = assigns
-			&& literal_key != LiteralKey::Index
-			&& literal_key != LiteralKey::Register;
-		bool found;
-		if (lookup_call) {
-			if (container_var) {
-				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(container_offset
-						+ offsetof(zval, u1.v.type))), IS_INDIRECT);
-				generate_raw_jump(Jump::jne, slow);
-			}
-			ScratchReg looked{this};
-			const AsmReg looked_reg = looked.alloc_gp();
-			const uint64_t live_registers = static_cast<uint64_t>(
-				register_file.used) & ~(uint64_t{1} << looked_reg.id());
-			emit_preserving_call(live_registers,
-				ZEND_NATIVE_HELPER_ARRAY_ASSIGN_LOOKUP, [&] {
-					/* The key's address first, through a caller-saved
-					 * register neither base uses, as the frame or the
-					 * literals may sit in either argument register. */
-					const AsmReg key_base =
-						key_literal ? literals_reg : frame_reg;
-					FeRegGP key_temp = FE_AX;
-					for (const auto &[id, reg] : {std::pair{AsmReg::AX, FE_AX},
-							std::pair{AsmReg::CX, FE_CX},
-							std::pair{AsmReg::DX, FE_DX}}) {
-						if (frame_reg.id() != id && key_base.id() != id) {
-							key_temp = reg;
-							break;
-						}
-					}
-					ASM(LEA64rm, key_temp, FE_MEM(key_base, 0, FE_NOREG,
-						static_cast<int32_t>(key_offset)));
-					/* The container's zval: the CV, or the target of the
-					 * VAR's INDIRECT. */
-					if (container_var) {
-						ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(container_offset)));
-					} else {
-						ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(container_offset)));
-					}
-					ASM(MOV64rr, FE_SI, key_temp);
-				}, [&] {
-					ASM(MOV64rr, looked_reg, FE_AX);
-				});
-			element.set_value(this, std::move(looked));
-			found = true;
-		} else if (literal_key != LiteralKey::None) {
-			ScratchReg key_index{this};
-			if (register_key_checked) {
-				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(key_offset
-						+ offsetof(zval, u1.v.type))), IS_LONG);
-				generate_raw_jump(Jump::jne, slow);
-			}
-			if (register_key) {
-				auto [key_ref, key_part] = val_ref_single(node.operands[0]);
-				ASM(MOV64rr, key_index.alloc_gp(), key_part.load_to_reg());
-			} else if (literal_key == LiteralKey::Register) {
-				ASM(MOV64rm, key_index.alloc_gp(), FE_MEM(frame_reg, 0,
-					FE_NOREG, static_cast<int32_t>(key_offset)));
-			}
-			auto constant = [&]() {
-				return literal_key == LiteralKey::Register
-					? GenericValuePart{std::move(key_index)}
-					: GenericValuePart{ValuePartRef{this, literal_key_value,
-						8, tpde::x64::PlatformConfig::GP_BANK}};
-			};
-			const bool index = literal_key == LiteralKey::Index
-				|| literal_key == LiteralKey::Register;
-			ScratchReg name{this};
-			if (!index) {
-				ASM(MOV64rm, name.alloc_gp(),
-					FE_MEM(literals_reg, 0, FE_NOREG,
-						static_cast<int32_t>(key_offset)));
-			}
-			auto name_part = [&]() {
-				return GenericValuePart{std::move(name)};
-			};
-			if (assigns && !index) {
-				return -1;
-			} else if (assigns) {
-				found = container_var
-					? EncodeBase::encode_zend_native_indirect_assign_idx(
-						std::move(container_address), constant(), element)
-					: EncodeBase::encode_zend_native_array_assign_idx(
-						std::move(container_address), constant(), element);
-			} else if (container_var) {
-				found = index
-					? EncodeBase::encode_zend_native_indirect_find_idx_w(
-						std::move(container_address), constant(), element)
-					: EncodeBase::encode_zend_native_indirect_find_str_w(
-						std::move(container_address), name_part(),
-						constant(), element);
-			} else if (writes) {
-				found = index
-					? (known_array
-				? EncodeBase::encode_zend_native_known_find_idx_w(
-						std::move(container_address), constant(), element)
-				: EncodeBase::encode_zend_native_array_find_idx_w(
-						std::move(container_address), constant(), element))
-					: (known_array
-				? EncodeBase::encode_zend_native_known_find_str_w(
-						std::move(container_address), name_part(),
-						constant(), element)
-				: EncodeBase::encode_zend_native_array_find_str_w(
-						std::move(container_address), name_part(),
-						constant(), element));
-			} else if (tests || access == ElementAccess::Coalesce) {
-				found = index
-					? (known_array
-				? EncodeBase::encode_zend_native_known_find_idx(
-						std::move(container_address), constant(), element)
-				: EncodeBase::encode_zend_native_array_test_idx(
-						std::move(container_address), constant(), element))
-					: (known_array
-				? EncodeBase::encode_zend_native_known_find_str(
-						std::move(container_address), name_part(),
-						constant(), element)
-				: EncodeBase::encode_zend_native_array_test_str(
-						std::move(container_address), name_part(),
-						constant(), element));
-			} else {
-				found = index
-					? (known_array
-				? EncodeBase::encode_zend_native_known_find_idx(
-						std::move(container_address), constant(), element)
-				: EncodeBase::encode_zend_native_array_find_idx(
-						std::move(container_address), constant(), element))
-					: (known_array
-				? EncodeBase::encode_zend_native_known_find_str(
-						std::move(container_address), name_part(),
-						constant(), element)
-				: EncodeBase::encode_zend_native_array_find_str(
-						std::move(container_address), name_part(),
-						constant(), element));
-			}
-		} else
-		{
-			/* Keyed assignments take lookup_call. */
-			ZEND_ASSERT(!assigns);
-			if (container_var) {
-				found = key_literal
-					? EncodeBase::encode_zend_native_indirect_find_literal_w(
-						std::move(container_address), std::move(key_address),
-						element)
-					: EncodeBase::encode_zend_native_indirect_find_key_w(
-						std::move(container_address), std::move(key_address),
-						element);
-			} else if (writes) {
-				found = key_literal
-					? (known_array
-				? EncodeBase::encode_zend_native_known_find_literal_w(
-						std::move(container_address), std::move(key_address),
-						element)
-				: EncodeBase::encode_zend_native_array_find_literal_w(
-						std::move(container_address), std::move(key_address),
-						element))
-					: (known_array
-				? EncodeBase::encode_zend_native_known_find_key_w(
-						std::move(container_address), std::move(key_address),
-						element)
-				: EncodeBase::encode_zend_native_array_find_key_w(
-						std::move(container_address), std::move(key_address),
-						element));
-			} else if (split_string_key) {
-				const bool testing = tests || access == ElementAccess::Coalesce;
-				found = string_key_split(
-					[&](ValuePart &out) {
-						return testing
-							? (known_array
-				? EncodeBase::encode_zend_native_known_find_string_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out)
-				: EncodeBase::encode_zend_native_array_test_string_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out))
-							: (known_array
-				? EncodeBase::encode_zend_native_known_find_string_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out)
-				: EncodeBase::encode_zend_native_array_find_string_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out));
-					},
-					[&](ValuePart &out) {
-						return testing
-							? (known_array
-				? EncodeBase::encode_zend_native_known_find_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out)
-				: EncodeBase::encode_zend_native_array_test_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out))
-							: (known_array
-				? EncodeBase::encode_zend_native_known_find_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out)
-				: EncodeBase::encode_zend_native_array_find_key(
-								address(container_base, container_offset),
-								address(frame_reg, key_offset), out));
-					}, element);
-			} else if (tests || access == ElementAccess::Coalesce) {
-				/* An undefined or null container has no element to test. */
-				found = key_literal
-					? (known_array
-				? EncodeBase::encode_zend_native_known_find_literal(
-						std::move(container_address), std::move(key_address),
-						element)
-				: EncodeBase::encode_zend_native_array_test_literal(
-						std::move(container_address), std::move(key_address),
-						element))
-					: (known_array
-				? EncodeBase::encode_zend_native_known_find_key(
-						std::move(container_address), std::move(key_address),
-						element)
-				: EncodeBase::encode_zend_native_array_test_key(
-						std::move(container_address), std::move(key_address),
-						element));
-			} else {
-				found = key_literal
-					? (known_array
-				? EncodeBase::encode_zend_native_known_find_literal(
-						std::move(container_address), std::move(key_address),
-						element)
-				: EncodeBase::encode_zend_native_array_find_literal(
-						std::move(container_address), std::move(key_address),
-						element))
-					: (known_array
-				? EncodeBase::encode_zend_native_known_find_key(
-						std::move(container_address), std::move(key_address),
-						element)
-				: EncodeBase::encode_zend_native_array_find_key(
-						std::move(container_address), std::move(key_address),
-						element));
-			}
-		}
-		if (!found) {
-			return -1;
-		}
-		const AsmReg element_reg = element.cur_reg_or_load(this);
-		/* The isset stored only an element it found: its reuse skips the
-		 * probe's answer tests. */
-		auto element_ready = text_writer.label_create();
-		if (reuse_load) {
-			generate_raw_jump(Jump::jmp, reuse_joined);
-			label_place(reuse_cached);
-			ASM(MOV64rm, element_reg,
-				FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()));
-			generate_raw_jump(Jump::jmp, element_ready);
-			label_place(reuse_joined);
-		}
-		/* Held from here on; the lookup needed the registers before. */
-		auto decision_reg = decision.alloc_gp();
-		auto answer_reg = answer.alloc_gp();
-		auto unknown = text_writer.label_create();
-		/* A read of a CV that is not an array may be a string offset: the
-		 * one-character string, looked up out of the hot code. */
-		const bool string_reads = access == ElementAccess::Read
-			&& !known_array && !container_literal && !container_temporary
-			&& !register_key
-			&& (literal_key == LiteralKey::Index || !key_literal);
-		auto string_offset = text_writer.label_create();
-		auto element_found = text_writer.label_create();
-		const auto undecided = access == ElementAccess::Coalesce ? unknown
-			: string_reads ? string_offset : slow;
-		auto decide = text_writer.label_create();
-		label_place(decide);
-		ASM(CMP64ri, element_reg,
-			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
-		if (find_element) {
-			/* The C lookup's answer passes the same test again; one it
-			 * cannot decide either goes where the probe's would. */
-			auto complete = text_writer.label_create();
-			auto decided = text_writer.label_create();
-			generate_raw_jump(Jump::jb, complete);
-			const bool cold_find = !text_writer.in_cold_area();
-			if (cold_find) {
-				cold_begin();
-			} else {
-				generate_raw_jump(Jump::jmp, decided);
-			}
-			label_place(complete);
-			find_element_filter(undecided);
-			find_element_call(element_reg,
-				tests || access == ElementAccess::Coalesce
-					? ZEND_NATIVE_FIND_TEST : 0);
-			ASM(CMP64ri, element_reg,
-				static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
-			generate_raw_jump(Jump::jb, undecided);
-			generate_raw_jump(Jump::jmp, decide);
-			if (cold_find) {
-				cold_end();
-			}
-			label_place(decided);
-		} else {
-			generate_raw_jump(Jump::jb, undecided);
-		}
-		/* A read of a missing key warns and a write fetch inserts it; the
-		 * helper does that. An assignment under an integer key into a CV's
-		 * unshared array inserts the null element out of line instead and
-		 * stores into it as into an existing one. */
-		const bool insert_index = assigns && !container_var
-			&& !container_temporary && !container_literal
-			&& (literal_key == LiteralKey::Index
-				|| literal_key == LiteralKey::Register)
-			/* A register key of a string-key assignment has no helper. */
-			&& runtime_symbol(ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX).valid();
-		auto insert = text_writer.label_create();
-		auto inserted = text_writer.label_create();
-		generate_raw_jump(Jump::je, insert_index ? insert
-			: access == ElementAccess::Read || writes ? slow : absent);
-		label_place(element_ready);
-		if (reuse_store) {
-			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
-				element_reg);
-			lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse_read));
-		}
-		if (insert_index) {
-			const bool cold_insert = !text_writer.in_cold_area();
-			if (cold_insert) {
-				cold_begin();
-			} else {
-				generate_raw_jump(Jump::jmp, inserted);
-			}
-			label_place(insert);
-			const uint64_t live_registers = static_cast<uint64_t>(
-				register_file.used) & ~(uint64_t{1} << element_reg.id());
-			emit_preserving_call(live_registers,
-				ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX, [&] {
-					const auto key_to_si = [&] {
-						if (literal_key == LiteralKey::Index) {
-							ASM(MOV64ri, FE_SI,
-								static_cast<int64_t>(literal_key_value));
-						} else {
-							ASM(MOV64rm, FE_SI, FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(key_offset)));
-						}
-					};
-					/* The frame may sit in either argument register. */
-					if (frame_reg.id() == AsmReg{AsmReg::DI}.id()) {
-						key_to_si();
-						ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(container_offset)));
-					} else {
-						ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(container_offset)));
-						key_to_si();
-					}
-				}, [&] {
-					ASM(MOV64rr, element_reg, FE_AX);
-				});
-			generate_raw_jump(Jump::jmp, inserted);
-			if (cold_insert) {
-				cold_end();
-			}
-			label_place(inserted);
-		}
-		if (string_reads) {
-			const bool cold_string = !text_writer.in_cold_area();
-			if (cold_string) {
-				cold_begin();
-			} else {
-				generate_raw_jump(Jump::jmp, element_found);
-			}
-			label_place(string_offset);
-			ValuePart chars = image_symbol_value(
-				ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
-				ZEND_NATIVE_HELPER_CHAR_STRINGS);
-			if (!chars.has_reg()) {
-				generate_raw_jump(Jump::jmp, slow);
-			} else {
-				auto chars_scratch = std::move(chars).into_scratch(this);
-				ValuePart offset_element{
-					tpde::x64::PlatformConfig::GP_BANK, 8};
-				const bool encoded = literal_key == LiteralKey::Index
-					? EncodeBase::encode_zend_native_string_offset_idx(
-						address(container_base, container_offset),
-						GenericValuePart{ValuePartRef{this, literal_key_value,
-							8, tpde::x64::PlatformConfig::GP_BANK}},
-						GenericValuePart{std::move(chars_scratch)}, offset_element)
-					: EncodeBase::encode_zend_native_string_offset_key(
-						address(container_base, container_offset),
-						address(frame_reg, key_offset),
-						GenericValuePart{std::move(chars_scratch)}, offset_element);
-				if (!encoded) {
-					return -1;
-				}
-				mov(element_reg, offset_element.cur_reg_or_load(this), 8);
-				offset_element.reset(this);
-				ASM(TEST64rr, element_reg, element_reg);
-				generate_raw_jump(Jump::je, slow);
-				generate_raw_jump(Jump::jmp, element_found);
-			}
-			if (cold_string) {
-				cold_end();
-			}
-			label_place(element_found);
-		}
-		if (container_temporary) {
-			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_container_shared(
-					address(frame_reg, container_offset), shared)) {
-				return -1;
-			}
-			const AsmReg shared_reg = shared.cur_reg_or_load(this);
-			ASM(TEST64rr, shared_reg, shared_reg);
-			shared.reset(this);
-			generate_raw_jump(Jump::je, slow);
-		}
-		if (access == ElementAccess::Read && node.has_result
-				&& adaptor->machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_I64) {
-			/* An integer result needs an integer element
-			 * (zend_native_zval_is_long()), tested in memory. */
-			ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			auto [result_ref, result] = result_ref_single(node.result);
-			if (!EncodeBase::encode_zend_native_load_u64(
-					address(element_reg, 0), result)) {
-				return -1;
-			}
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset)),
-				result.load_to_reg());
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_LONG);
-		} else if (reads) {
-			ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
-			ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_zval_copy_deref(
-					address(element_reg, 0), payload, type_info)) {
-				return -1;
-			}
-			const AsmReg payload_reg = payload.cur_reg_or_load(this);
-			const AsmReg type_info_reg = type_info.cur_reg_or_load(this);
-			/* The owned copy lives in the result temporary; a boxed register
-			 * result mirrors it, as the cold path reloads it. */
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset)),
-				payload_reg);
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
-						+ offsetof(zval, u1.type_info))),
-				type_info_reg);
-			if (node.has_result && access == ElementAccess::Read) {
-				auto result = result_ref(node.result);
-				auto result_payload = result.part(0);
-				auto result_type = result.part(1);
-				mov(result_payload.alloc_reg(), payload_reg, 8);
-				mov(result_type.alloc_reg(), type_info_reg, 4);
-				result_payload.set_modified();
-				result_type.set_modified();
-			}
-			payload.reset(this);
-			type_info.reset(this);
-			if (access == ElementAccess::Coalesce) {
-				generate_raw_jump(Jump::jmp, answered);
-				/* Not an array: a scalar container reads as null. */
-				label_place(unknown);
-				ValuePart scalar{tpde::x64::PlatformConfig::GP_BANK, 8};
-				if (!EncodeBase::encode_zend_native_zval_is_scalar(
-						address(container_base, container_offset), scalar)) {
-					return -1;
-				}
-				const AsmReg scalar_reg = scalar.cur_reg_or_load(this);
-				ASM(TEST64rr, scalar_reg, scalar_reg);
-				scalar.reset(this);
-				generate_raw_jump(Jump::je, slow);
-				label_place(absent);
-				if (container_temporary) {
-					ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-					if (!EncodeBase::encode_zend_native_container_shared(
-							address(frame_reg, container_offset), shared)) {
-						return -1;
-					}
-					const AsmReg shared_reg = shared.cur_reg_or_load(this);
-					ASM(TEST64rr, shared_reg, shared_reg);
-					shared.reset(this);
-					generate_raw_jump(Jump::je, slow);
-				}
-				ASM(MOV32mi,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(result_offset
-							+ offsetof(zval, u1.type_info))),
-					IS_NULL);
-				label_place(answered);
-			}
-		} else if (assigns) {
-			/* The element's old value needs no release (an appended
-			 * element reads as null), or is a string, whose release runs
-			 * no code: dropped before the store, freed out of line by its
-			 * last owner. Anything else takes the helper. The value,
-			 * checked above, is copied, a temporary moved. A literal is
-			 * counted without opcache. */
-			const int32_t type_offset =
-				static_cast<int32_t>(offsetof(zval, u1.type_info));
-			const AsmReg value_base = value_literal ? literals_reg : frame_reg;
-			ScratchReg value_type{this};
-			ScratchReg value_payload{this};
-			const AsmReg type_reg = value_type.alloc_gp();
-			const AsmReg payload_reg = value_payload.alloc_gp();
-			{
-				auto released = text_writer.label_create();
-				auto last_owner = text_writer.label_create();
-				ASM(MOV32rm, type_reg,
-					FE_MEM(element_reg, 0, FE_NOREG, type_offset));
-				ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
-				generate_raw_jump(Jump::je, released);
-				ASM(CMP8ri, type_reg, IS_STRING);
-				generate_raw_jump(Jump::jne, slow);
-				ASM(MOV64rm, payload_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
-				ASM(CMP32mi, FE_MEM(payload_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
-					1);
-				generate_raw_jump(Jump::jle, last_owner);
-				ASM(SUB32mi, FE_MEM(payload_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
-					1);
-				const bool cold_free = !text_writer.in_cold_area();
-				if (cold_free) {
-					cold_begin();
-				} else {
-					generate_raw_jump(Jump::jmp, released);
-				}
-				label_place(last_owner);
-				emit_preserving_call(static_cast<uint64_t>(register_file.used),
-					ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW, [&] {
-						ASM(MOV64rr, FE_DI, element_reg);
-					}, [] {});
-				generate_raw_jump(Jump::jmp, released);
-				if (cold_free) {
-					cold_end();
-				}
-				label_place(released);
-			}
-			ASM(MOV32rm, type_reg, FE_MEM(value_base, 0, FE_NOREG,
-				static_cast<int32_t>(value_offset) + type_offset));
-			ASM(MOV64rm, payload_reg, FE_MEM(value_base, 0, FE_NOREG,
-				static_cast<int32_t>(value_offset)));
-			const zend_tpde_plan *value_plan = adaptor->plan();
-			const bool counted_literal = value_literal
-				&& (value_plan->source_literals == nullptr
-					|| operation.auxiliary.index
-						>= value_plan->source_literal_count
-					|| Z_REFCOUNTED(value_plan->source_literals[
-						operation.auxiliary.index]));
-			if (counted_literal || (!value_literal
-					&& slot_kind(operation.auxiliary)
-						== ZEND_MIR_SOURCE_SLOT_CV)) {
-				auto uncounted = text_writer.label_create();
-				ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
-				generate_raw_jump(Jump::je, uncounted);
-				ASM(ADD32mi, FE_MEM(payload_reg, 0, FE_NOREG, 0), 1);
-				label_place(uncounted);
-			}
-			ASM(MOV64mr, FE_MEM(element_reg, 0, FE_NOREG, 0), payload_reg);
-			ASM(MOV32mr, FE_MEM(element_reg, 0, FE_NOREG, type_offset),
-				type_reg);
-		} else if (writes) {
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset)),
-				element_reg);
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_INDIRECT);
-		} else {
-			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-			const bool tested = access == ElementAccess::Isset
-				? EncodeBase::encode_zend_native_zval_isset(
-					address(element_reg, 0), value)
-				: EncodeBase::encode_zend_native_zval_empty(
-					address(element_reg, 0), value);
-			if (!tested) {
-				return -1;
-			}
-			mov(answer_reg, value.cur_reg_or_load(this), 8);
-			value.reset(this);
-			if (access == ElementAccess::Empty) {
-				ASM(CMP64ri, answer_reg, ZEND_NATIVE_EMPTY_UNKNOWN);
-				generate_raw_jump(Jump::je, slow);
-			}
-			generate_raw_jump(Jump::jmp, answered);
-			label_place(absent);
-			ASM(MOV64ri, answer_reg,
-				access == ElementAccess::Empty ? 1 : 0);
-			if (container_temporary) {
-				ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
-				if (!EncodeBase::encode_zend_native_container_shared(
-						address(frame_reg, container_offset), shared)) {
-					return -1;
-				}
-				const AsmReg shared_reg = shared.cur_reg_or_load(this);
-				ASM(TEST64rr, shared_reg, shared_reg);
-				shared.reset(this);
-				generate_raw_jump(Jump::je, slow);
-			}
-			label_place(answered);
-		}
-		element.reset(this);
-		literals.reset();
-		if (container_temporary) {
-			if (!EncodeBase::encode_zend_native_release_shared(
-					address(frame_reg, container_offset))) {
-				return -1;
-			}
-		}
-		if (access == ElementAccess::Coalesce && node.has_result) {
-			/* Both answers are in the result temporary. */
-			auto result = result_ref(node.result);
-			auto result_payload = result.part(0);
-			auto result_type = result.part(1);
-			ASM(MOV64rm, result_payload.alloc_reg(),
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset)));
-			ASM(MOV32rm, result_type.alloc_reg(),
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
-						+ offsetof(zval, u1.type_info))));
-			result_payload.set_modified();
-			result_type.set_modified();
-		} else if (tests && node.has_result) {
-			auto [result_ref, result] = result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			mov(result_reg, answer_reg, 8);
-			result.set_modified();
-		} else if (tests) {
-			/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
-			ASM(ADD32ri, answer_reg, IS_FALSE);
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
-						+ offsetof(zval, u1.type_info))),
-				answer_reg);
-		}
-		answer.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
-	};
-	/*
-	 * FETCH_DIM_R whose key, and possibly container, are SSA values and whose
-	 * result is an integer or a boxed value, composed of EncodeGen snippets:
-	 * the container's array (zend_native_zval_table, _boxed_table or an
-	 * array pointer), the element under an integer, string or boxed key
-	 * (zend_native_table_find_*), and the result. Every undecided probe
-	 * takes the guarded cold block. Returns 1 when emitted, 0 when the form
-	 * does not apply and -1 on an encoding failure.
-	 */
-	auto array_element_register = [&]() -> int {
-		zend_tpde_array_read layout;
-		const zend_tpde_machine_reference *element_reference =
-			operation_machine_reference(
-				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
-		if (node.kind != Adaptor::InstKind::GuardedFast || !node.has_result
-				|| node.operands.empty()
-				|| !zend_tpde_array_read_at(mir, &layout, true)
-				|| element_reference == nullptr
-				|| (!layout.container_literal
-					&& !zend_mir_id_is_valid(
-						element_reference->base_value_id))
-				|| !zend_mir_id_is_valid(element_reference->index_value_id)
-				|| element_reference->scale != sizeof(zval)
-				|| element_reference->access_width != sizeof(zval)
-				|| layout.container_offset > INT32_MAX - 8
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
-			return 0;
-		}
-		const auto successors = guarded_successors_of(node);
-		const IRValueRef key_value = node.operands[0];
-		const zend_tpde_machine_value_kind key_kind =
-			adaptor->machine_kind(key_value);
-		const bool key_long = key_kind == ZEND_TPDE_MACHINE_VALUE_I64
-			&& adaptor->exact_type(key_value) == ZEND_MIR_SCALAR_TYPE_I64
-			&& adaptor->representation(key_value)
-				== ZEND_MIR_REPRESENTATION_I64;
-		const bool key_string =
-			key_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
-		const bool key_boxed = key_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			&& adaptor->representation(key_value)
-				== ZEND_MIR_REPRESENTATION_ZVAL
-			&& val_parts(key_value).count() == 2;
-		const bool result_long =
-			adaptor->machine_kind(node.result) == ZEND_TPDE_MACHINE_VALUE_I64
-			&& adaptor->exact_type(node.result) == ZEND_MIR_SCALAR_TYPE_I64
-			&& adaptor->representation(node.result)
-				== ZEND_MIR_REPRESENTATION_I64;
-		const bool result_boxed = adaptor->machine_kind(node.result)
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			&& adaptor->representation(node.result)
-				== ZEND_MIR_REPRESENTATION_ZVAL
-			&& val_parts(node.result).count() == 2;
-		/* A temporary key is consumed by the read: only an integer, which
-		 * needs no release, stays here. */
-		const bool temporary_key =
-			mir.value_operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-			|| mir.value_operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR;
-		if ((!key_long && !key_string && !key_boxed)
-				|| (!result_long && !result_boxed)
-				|| (temporary_key && !key_long)) {
-			return 0;
-		}
-		const bool register_receiver = node.operands.size() > 1
-			&& node.machine_reference_operand_index != 1
-			&& (adaptor->machine_kind(node.operands[1])
-					== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-				|| (adaptor->machine_kind(node.operands[1])
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-					&& adaptor->representation(node.operands[1])
-						== ZEND_MIR_REPRESENTATION_ZVAL
-					&& val_parts(node.operands[1]).count() == 2));
-		if (!register_receiver && layout.container_literal
-				&& node.machine_reference_operand_index
-					>= node.operands.size()) {
-			return 0;
-		}
-		if (!register_receiver && !layout.container_literal
-				&& mir.value_operation.op1.slot_kind
-					!= ZEND_MIR_SOURCE_SLOT_CV) {
-			return 0;
-		}
-		/* The lookup snippets use up to six scratch registers, with the
-		 * array and the key parts held across them. */
-		if (unlocked_gp_registers() < (key_boxed ? 10u : 9u)) {
-			return 0;
-		}
-		auto part_index = [&](IRValueRef value,
-				zend_tpde_machine_part_role role) -> uint32_t {
-			const ValueParts parts = val_parts(value);
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				if (parts.representation.parts[part].semantic_role == role) {
-					return part;
-				}
-			}
-			return UINT32_MAX;
-		};
-
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg decision{this};
-		/* The container's array, or null. */
-		ValuePart table{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (register_receiver) {
-			auto receiver = val_ref(node.operands[1]);
-			if (adaptor->machine_kind(node.operands[1])
-					== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR) {
-				mov(table.alloc_reg(this), receiver.part(0).load_to_reg(), 8);
-			} else {
-				const uint32_t payload = part_index(node.operands[1],
-					ZEND_TPDE_MACHINE_PART_PAYLOAD);
-				const uint32_t type_info = part_index(node.operands[1],
-					ZEND_TPDE_MACHINE_PART_TYPE_INFO);
-				if (payload == UINT32_MAX || type_info == UINT32_MAX
-						|| !EncodeBase::encode_zend_native_boxed_table(
-							receiver.part(payload), receiver.part(type_info),
-							table)) {
-					return -1;
-				}
-			}
-		} else if (layout.container_literal) {
-			auto [literal_ref, literal] = val_ref_single(
-				node.operands[node.machine_reference_operand_index]);
-			if (!EncodeBase::encode_zend_native_zval_table(
-					GenericValuePart{GenericValuePart::Expr{
-						literal.load_to_reg(), 0}},
-					table)) {
-				return -1;
-			}
-		} else if (!EncodeBase::encode_zend_native_zval_table(
-				GenericValuePart{GenericValuePart::Expr{frame_reg,
-					static_cast<int64_t>(layout.container_offset)}},
-				table)) {
-			return -1;
-		}
-		const AsmReg table_reg = table.cur_reg_or_load(this);
-		ASM(TEST64rr, table_reg, table_reg);
-		generate_raw_jump(Jump::je, slow);
-		ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
-		{
-			auto key = val_ref(key_value);
-			GenericValuePart table_value{
-				GenericValuePart::Expr{table_reg, 0}};
-			bool found;
-			if (key_long) {
-				found = EncodeBase::encode_zend_native_table_find_long(
-					std::move(table_value), key.part(0), element);
-			} else if (key_string) {
-				found = EncodeBase::encode_zend_native_table_find_string(
-					std::move(table_value), key.part(0), element);
-			} else {
-				const uint32_t payload = part_index(key_value,
-					ZEND_TPDE_MACHINE_PART_PAYLOAD);
-				const uint32_t type_info = part_index(key_value,
-					ZEND_TPDE_MACHINE_PART_TYPE_INFO);
-				found = payload != UINT32_MAX && type_info != UINT32_MAX
-					&& EncodeBase::encode_zend_native_table_find_boxed(
-						std::move(table_value), key.part(payload),
-						key.part(type_info), element);
-			}
-			if (!found) {
-				return -1;
-			}
-		}
-		table.reset(this);
-		const AsmReg element_reg = element.cur_reg_or_load(this);
-		auto decision_reg = decision.alloc_gp();
-		/* A missing key warns and an undecided probe needs the helper. */
-		ASM(CMP64ri, element_reg,
-			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
-		generate_raw_jump(Jump::jbe, slow);
-		const zend_mir_executable_value_ref &read = mir.value_operation;
-		const uint64_t result_offset =
-			frame_slot_offset(read.result_storage_id);
-		const bool publish = zend_mir_id_is_valid(read.result_storage_id)
-			&& (read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-				|| read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
-			&& result_offset <= INT32_MAX - sizeof(zval);
-		auto result = result_ref(node.result);
-		if (result_long) {
-			/* zend_native_zval_is_long(), tested in memory. */
-			ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			auto value = result.part(0);
-			if (!EncodeBase::encode_zend_native_load_u64(
-					GenericValuePart{GenericValuePart::Expr{element_reg, 0}},
-					value)) {
-				return -1;
-			}
-			if (publish) {
-				ASM(MOV64mr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(result_offset)),
-					value.load_to_reg());
-				ASM(MOV32mi,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(result_offset
-							+ offsetof(zval, u1.type_info))),
-					IS_LONG);
-			}
-		} else {
-			/* An owned copy; frame-slot consumers read it there. */
-			const uint32_t payload =
-				part_index(node.result, ZEND_TPDE_MACHINE_PART_PAYLOAD);
-			const uint32_t type_info =
-				part_index(node.result, ZEND_TPDE_MACHINE_PART_TYPE_INFO);
-			if (payload == UINT32_MAX || type_info == UINT32_MAX) {
-				return -1;
-			}
-			auto result_payload = result.part(payload);
-			auto result_type = result.part(type_info);
-			if (!EncodeBase::encode_zend_native_zval_copy_deref(
-					GenericValuePart{GenericValuePart::Expr{element_reg, 0}},
-					result_payload, result_type)) {
-				return -1;
-			}
-			if (publish) {
-				ASM(MOV64mr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(result_offset)),
-					result_payload.load_to_reg());
-				ASM(MOV32mr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(result_offset
-							+ offsetof(zval, u1.type_info))),
-					result_type.load_to_reg());
-			}
-		}
-		element.reset(this);
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
-	};
-	auto read_array = [&]() {
-		if (const int element = array_element(ElementAccess::Read);
-				element != 0) {
-			return element > 0;
-		}
-		if (const int element = array_element_register(); element != 0) {
-			return element > 0;
-		}
-		return branch_to_guarded_cold();
-	};
-	/*
-	 * A comparison or TYPE_CHECK fused into the following branch (see
-	 * freeze_fused_compare_branches): the branch evaluates it. Its operands,
-	 * including boundary transports, are dead; statepoint materializations
-	 * were consumed already.
-	 */
-	auto fused_into_branch_placeholder = [&]() -> bool {
-		/* A register-held operand, whether a node operand or a
-		 * liveness-only register result such as a property read, is
-		 * published to its slot, which the branch reads. */
-		const zend_mir_executable_value_ref &compare_operation =
-			mir.value_operation;
-		for (size_t index = 0;
-				index < node.liveness_operands.size(); ++index) {
-			if (materialized_operand(instruction, index)) {
-				continue;
-			}
-			const IRValueRef operand = node.liveness_operands[index];
-			const zend_mir_storage_id storage =
-				operand == IRValueRef{Adaptor::FRAME_VALUE}
-					|| operand == IRValueRef{
-						Adaptor::EXECUTION_CONTEXT_ARGUMENT}
-				? ZEND_MIR_ID_INVALID
-				: adaptor->canonical_storage(operand);
-			if (zend_mir_id_is_valid(storage)
-					&& (storage == compare_operation.op1_storage_id
-						|| storage
-							== compare_operation.op2_storage_id)) {
-				if (!materialize_cold_operand(operand, storage)) {
-					return false;
-				}
-				continue;
-			}
-			auto consumed = val_ref(operand);
-			(void) consumed;
-		}
-		if (node.has_result) {
-			auto result = result_ref(node.result);
-			for (uint32_t part = 0;
-					part < val_parts(node.result).count(); ++part) {
-				auto value = result.part(part);
-				ASM(MOV32ri, value.alloc_reg(), IS_FALSE);
-				value.set_modified();
-			}
-		}
-		return true;
-	};
-	/*
-	 * TYPE_CHECK of a CV or temporary through zend_native_zval_type_check():
-	 * the bool lands in the result temporary and a register result; a
-	 * temporary is consumed only when another owner keeps it alive. An
-	 * undefined variable, which warns, and a resource check, which asks the
-	 * resource list, take the guarded cold block. Returns 1 when emitted, 0
-	 * when the form does not apply and -1 on an encoding failure.
-	 */
-	auto type_check_inline = [&]() -> int {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		const bool temporary = is_frame_slot(operation.op1)
-			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| !mir.has_value_operation
-				|| operation.source_opcode != ZEND_TYPE_CHECK
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| operation.extended_value == MAY_BE_RESOURCE
-				|| !is_frame_slot(operation.op1)
-				|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-					&& !temporary)
-				|| operation.result_storage_id == operation.op1_storage_id
-				|| !zend_mir_id_is_valid(operation.op1_storage_id)
-				|| !is_frame_slot(operation.result)
-				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_CV)
-				|| !zend_mir_id_is_valid(operation.result_storage_id)
-				|| (node.has_result && val_parts(node.result).count() > 2)
-				|| unlocked_gp_registers() < 6) {
-			return 0;
-		}
-		if (!frame_only_operands(node)) {
-			return 0;
-		}
-		const auto successors = guarded_successors_of(node);
-		const uint64_t value_offset =
-			frame_slot_offset(operation.op1_storage_id);
-		const uint64_t result_offset =
-			frame_slot_offset(operation.result_storage_id);
-		if (value_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return 0;
-		}
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg mask{this};
-		ASM(MOV32ri, mask.alloc_gp(),
-			static_cast<int32_t>(operation.extended_value));
-		ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (!EncodeBase::encode_zend_native_zval_type_check(
-				GenericValuePart{GenericValuePart::Expr{frame_reg,
-					static_cast<int64_t>(value_offset)}},
-				GenericValuePart{std::move(mask)}, matched)) {
-			return -1;
-		}
-		const AsmReg matched_reg = matched.cur_reg_or_load(this);
-		ScratchReg decision{this};
-		ScratchReg type{this};
-		auto decision_reg = decision.alloc_gp();
-		auto type_reg = type.alloc_gp();
-		ASM(CMP64ri, matched_reg, ZEND_NATIVE_TYPE_CHECK_UNDEFINED);
-		generate_raw_jump(Jump::je, slow);
-		/* A CV result is overwritten: its old value must need no
-		 * release (a counted one takes the helper). */
-		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
-				slow);
-		}
-		if (temporary) {
-			emit_consume_shared(frame_reg,
-				static_cast<int32_t>(value_offset), slow);
-		}
-		store_bool_result(node, frame_reg, result_offset, matched_reg,
-			type_reg);
-		matched.reset(this);
-		type.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
-	};
-	/*
-	 * === and !== of a CV or temporary and a literal through
-	 * zend_native_zval_identical(): the bool lands in the result temporary
-	 * and a register result; a temporary is consumed only when another
-	 * owner keeps it alive. An undefined variable, doubles, arrays and
-	 * objects take the guarded cold block. Returns 1 when emitted, 0 when the
-	 * form does not apply and -1 on an encoding failure.
-	 */
-	auto identical_literal = [&]() -> int {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		const bool negated = operation.source_opcode == ZEND_IS_NOT_IDENTICAL;
-		const bool temporary = is_frame_slot(operation.op1)
-			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
-		/* The second operand: a literal, or a CV or temporary compared
-		 * through zend_native_zval_identical_any(); a temporary is
-		 * consumed as the first one. */
-		const bool other_temporary = is_frame_slot(operation.op2)
-			&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
-		const bool variable_other = is_frame_slot(operation.op2)
-			&& (operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-				|| other_temporary)
-			&& zend_mir_id_is_valid(operation.op2_storage_id)
-			&& operation.op2_storage_id != operation.result_storage_id
-			&& operation.op2_storage_id != operation.op1_storage_id;
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| !mir.has_value_operation
-				|| mir.fused_into_branch
-				|| (operation.source_opcode != ZEND_IS_IDENTICAL && !negated)
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| (operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-					&& !variable_other)
-				|| !is_frame_slot(operation.op1)
-				|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-					&& !temporary)
-				|| !zend_mir_id_is_valid(operation.op1_storage_id)
-				|| !is_frame_slot(operation.result)
-				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_CV)
-				|| !zend_mir_id_is_valid(operation.result_storage_id)
-				|| operation.result_storage_id == operation.op1_storage_id
-				|| (variable_other && operation.result_storage_id
-					== operation.op2_storage_id)
-				|| (node.has_result && val_parts(node.result).count() > 2)
-				/* The snippet's seven scratch registers, the frame and the
-				 * literals. */
-				|| unlocked_gp_registers() < 9) {
-			return 0;
-		}
-		/* A temporary may be held boxed in registers: it is stored into its
-		 * slot first, and a register copy of the literal is not needed. */
-		const bool register_temporary = temporary && !variable_other
-			&& node.operands.size() == 3
-			&& node.materialization_count == 0
-			&& node.operands[2] == IRValueRef{Adaptor::FRAME_VALUE}
-			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-			&& adaptor->machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			&& val_parts(node.operands[0]).count() == 2;
-		if (!register_temporary) {
-			if (!frame_only_operands(node)) {
-				return 0;
-			}
-		}
-		const auto successors = guarded_successors_of(node);
-		const uint64_t value_offset =
-			frame_slot_offset(operation.op1_storage_id);
-		const uint64_t literal_offset = variable_other
-			? frame_slot_offset(operation.op2_storage_id)
-			: uint64_t{operation.op2.index} * sizeof(zval);
-		const uint64_t result_offset =
-			frame_slot_offset(operation.result_storage_id);
-		if (value_offset > INT32_MAX - sizeof(zval)
-				|| literal_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return 0;
-		}
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		if (register_temporary) {
-			auto boxed = val_ref(node.operands[0]);
-			auto payload = boxed.part(0);
-			auto type_info = boxed.part(1);
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(value_offset)),
-				payload.load_to_reg());
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(value_offset
-						+ offsetof(zval, u1.type_info))),
-				type_info.load_to_reg());
-			payload.reset();
-			type_info.reset();
-			if (node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}) {
-				auto literal_copy = val_ref(node.operands[1]);
-				(void) literal_copy;
-			}
-		}
-		ScratchReg literals{this};
-		ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
-		/* A null, bool or integer literal compares by type byte and
-		 * payload; an undefined or referenced operand takes the cold
-		 * block. */
-		const zval *known_literal = !variable_other
-				&& adaptor->plan()->source_literals != nullptr
-				&& operation.op2.index
-					< adaptor->plan()->source_literal_count
-			? &adaptor->plan()->source_literals[operation.op2.index]
-			: nullptr;
-		const bool typed_literal = known_literal != nullptr
-			&& (Z_TYPE_P(known_literal) <= IS_TRUE
-				|| Z_TYPE_P(known_literal) == IS_LONG)
-			&& Z_TYPE_P(known_literal) != IS_UNDEF;
-		if (typed_literal) {
-			const uint32_t may_be = adaptor->plan()->source_opcodes != nullptr
-				? adaptor->plan()->source_opcodes[
-					operation.source_position_id].op1_may_be
-				: UINT32_MAX;
-			ScratchReg match{this};
-			ScratchReg value_type{this};
-			const AsmReg match_reg = match.alloc_gp();
-			const AsmReg value_type_reg = value_type.alloc_gp();
-			auto mismatch = text_writer.label_create();
-			const int32_t value_disp = static_cast<int32_t>(value_offset);
-			const bool may_be_undefined =
-				(may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0;
-			ASM(XOR32rr, match_reg, match_reg);
-			ASM(MOVZXr32m8, value_type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				value_disp + static_cast<int32_t>(
-					offsetof(zval, u1.v.type))));
-			ASM(CMP32ri, value_type_reg, Z_TYPE_P(known_literal));
-			generate_raw_jump(Jump::jne, mismatch);
-			if (Z_TYPE_P(known_literal) == IS_LONG) {
-				const zend_long literal_value = Z_LVAL_P(known_literal);
-				if (literal_value >= INT32_MIN && literal_value <= INT32_MAX) {
-					ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, value_disp),
-						static_cast<int32_t>(literal_value));
-				} else {
-					ASM(MOV64ri, value_type_reg,
-						static_cast<int64_t>(literal_value));
-					ASM(CMP64rm, value_type_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG, value_disp));
-				}
-				generate_raw_set(Jump::je, match_reg, false);
-			} else {
-				ASM(MOV32ri, match_reg, 1);
-			}
-			if (may_be_undefined) {
-				auto decided = text_writer.label_create();
-				generate_raw_jump(Jump::jmp, decided);
-				label_place(mismatch);
-				ASM(TEST32rr, value_type_reg, value_type_reg);
-				generate_raw_jump(Jump::je, slow);
-				ASM(CMP32ri, value_type_reg, IS_REFERENCE);
-				generate_raw_jump(Jump::je, slow);
-				label_place(decided);
-			} else {
-				label_place(mismatch);
-			}
-			value_type.reset();
-			matched.set_value(this, std::move(match));
-		} else if (variable_other) {
-			if (!EncodeBase::encode_zend_native_zval_identical_any(
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(value_offset)}},
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(literal_offset)}},
-					matched)) {
-				return -1;
-			}
-		} else {
-			auto literals_reg = literals.alloc_gp();
-			emit_literal_base(literals_reg, frame_reg);
-			if (!EncodeBase::encode_zend_native_zval_identical(
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(value_offset)}},
-					GenericValuePart{GenericValuePart::Expr{literals_reg,
-						static_cast<int64_t>(literal_offset)}},
-					matched)) {
-				return -1;
-			}
-		}
-		literals.reset();
-		const AsmReg matched_reg = matched.cur_reg_or_load(this);
-		ScratchReg decision{this};
-		ScratchReg type{this};
-		auto decision_reg = decision.alloc_gp();
-		auto type_reg = type.alloc_gp();
-		if (!typed_literal) {
-			ASM(CMP64ri, matched_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
-			generate_raw_jump(Jump::je, slow);
-		}
-		/* A CV result is overwritten: its old value must need no
-		 * release (a counted one takes the helper). */
-		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
-				slow);
-		}
-		/* A temporary second operand must need no release: a counted
-		 * one takes the helper. */
-		if (variable_other && other_temporary) {
-			emit_counted_check(frame_reg, static_cast<int32_t>(literal_offset),
-				slow);
-		}
-		if (temporary) {
-			emit_consume_shared(frame_reg,
-				static_cast<int32_t>(value_offset), slow);
-		}
-		if (negated) {
-			ASM(XOR32ri, matched_reg, 1);
-		}
-		store_bool_result(node, frame_reg, result_offset, matched_reg,
-			type_reg);
-		matched.reset(this);
-		type.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
-	};
-	/*
-	 * array_key_exists() of a literal or CV key in an array CV or temporary
-	 * through the element probes: a found element is true and a certainly
-	 * absent key false, both in the result temporary and a register result;
-	 * a temporary array is consumed only when another owner keeps it alive.
-	 * Undecided probes take the guarded cold block. Returns 1 when emitted, 0
-	 * when the form does not apply and -1 on an encoding failure.
-	 */
-	auto key_exists_inline = [&]() -> int {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		const bool key_literal =
-			operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		const bool temporary = is_frame_slot(operation.op2)
-			&& operation.op2.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| !mir.has_value_operation
-				|| operation.source_opcode != ZEND_ARRAY_KEY_EXISTS
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| (!key_literal
-					&& (!is_frame_slot(operation.op1)
-						|| operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-						|| !zend_mir_id_is_valid(operation.op1_storage_id)))
-				|| !is_frame_slot(operation.op2)
-				|| (operation.op2.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-					&& !temporary)
-				|| !zend_mir_id_is_valid(operation.op2_storage_id)
-				|| !is_frame_slot(operation.result)
-				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_CV)
-				|| !zend_mir_id_is_valid(operation.result_storage_id)
-				|| operation.result_storage_id == operation.op2_storage_id
-				|| (!key_literal
-					&& operation.result_storage_id
-						== operation.op1_storage_id)
-				|| (node.has_result && val_parts(node.result).count() > 2)
-				/* The probe's seven scratch registers, its result and the
-				 * literals, with one to spare. */
-				|| unlocked_gp_registers() < 10) {
-			return 0;
-		}
-		if (!frame_only_operands(node)) {
-			return 0;
-		}
-		const auto successors = guarded_successors_of(node);
-		auto frame_offset = [](zend_mir_storage_id storage) {
-			return frame_slot_offset(storage);
-		};
-		const uint64_t key_offset = key_literal
-			? uint64_t{operation.op1.index} * sizeof(zval)
-			: frame_offset(operation.op1_storage_id);
-		const uint64_t array_offset = frame_offset(operation.op2_storage_id);
-		const uint64_t result_offset =
-			frame_offset(operation.result_storage_id);
-		if (key_offset > INT32_MAX - sizeof(zval)
-				|| array_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return 0;
-		}
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		auto address = [](AsmReg base, uint64_t offset) {
-			return GenericValuePart{GenericValuePart::Expr{
-				base, static_cast<int64_t>(offset)}};
-		};
-		/* A read of the found element reuses it (lookup_reuse_consumer()). */
-		const IRInstRef reuse = temporary
-			? IRInstRef{UINT32_MAX} : lookup_reuse_consumer(instruction);
-		if (reuse != IRInstRef{UINT32_MAX}) {
-			ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
-		}
-		ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
-		{
-			ScratchReg literals{this};
-			AsmReg key_base = frame_reg;
-			if (key_literal) {
-				key_base = literals.alloc_gp();
-				emit_literal_base(key_base, frame_reg);
-			}
-			/* A literal argument keeps a numeric string, which only a
-			 * dimension literal has as an integer: probe it as a runtime
-			 * key. */
-			const bool probed = EncodeBase::encode_zend_native_array_find_key(
-				address(frame_reg, array_offset),
-				address(key_base, key_offset), element);
-			if (!probed) {
-				return -1;
-			}
-		}
-		const AsmReg element_reg = element.cur_reg_or_load(this);
-		ScratchReg decision{this};
-		ScratchReg answer{this};
-		auto decision_reg = decision.alloc_gp();
-		auto answer_reg = answer.alloc_gp();
-		ASM(CMP64ri, element_reg,
-			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
-		generate_raw_jump(Jump::jb, slow);
-		if (reuse != IRInstRef{UINT32_MAX}) {
-			/* ABSENT only reaches the false edge, where nothing reads it. */
-			ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
-				element_reg);
-			lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse));
-		}
-		/* ABSENT is 1 and an element pointer more: exists = element > 1. */
-		generate_raw_set(Jump::ja, answer_reg);
-		element.reset(this);
-		/* A CV result is overwritten: its old value must need no
-		 * release (a counted one takes the helper). */
-		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
-				slow);
-		}
-		if (temporary) {
-			emit_consume_shared(frame_reg,
-				static_cast<int32_t>(array_offset), slow);
-		}
-		{
-			ScratchReg type{this};
-			auto type_reg = type.alloc_gp();
-			store_bool_result(node, frame_reg, result_offset, answer_reg,
-				type_reg);
-		}
-		answer.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
-	};
-	/*
-	 * FE_FREE of an array holder that another owner keeps alive drops one
-	 * reference (zend_native_iterator_shared, _release_shared), as the VM's
-	 * inlined zval_ptr_dtor_nogc does. Object iterators and a last reference
-	 * take the guarded cold block. Returns 1 when emitted, 0 when the form
-	 * does not apply and -1 on an encoding failure.
-	 */
-	auto iterator_free_inline = [&]() -> int {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| !mir.has_value_operation
-				|| operation.source_opcode != ZEND_FE_FREE
-				|| node.has_result
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-					&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
-				|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-					&& operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
-				|| !zend_mir_id_is_valid(operation.op1_storage_id)
-				|| unlocked_gp_registers() < 6) {
-			return 0;
-		}
-		if (!frame_only_operands(node)) {
-			return 0;
-		}
-		const auto successors = guarded_successors_of(node);
-		const uint64_t holder_offset =
-			frame_slot_offset(operation.op1_storage_id);
-		if (holder_offset > INT32_MAX - sizeof(zval)) {
-			return 0;
-		}
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		/* zend_native_iterator_shared() and the release together. */
-		ScratchReg decision{this};
-		decision.alloc_gp();
-		emit_consume_shared(frame_reg,
-			static_cast<int32_t>(holder_offset), slow, true);
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
-	};
-	/*
-	 * QM_ASSIGN of a literal: zend_native_zval_copy() copies it, with its
-	 * reference, into the fresh result temporary and a register result.
-	 * Returns 1 when emitted and 0 when the form does not apply, -1 on an
-	 * encoding failure.
-	 */
-	auto copy_literal = [&]() -> int {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| !mir.has_value_operation
-				|| operation.source_opcode != ZEND_QM_ASSIGN
-				|| operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-					&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
-				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR)
-				|| !zend_mir_id_is_valid(operation.result_storage_id)
-				|| (node.has_result
-					&& (adaptor->machine_kind(node.result)
-							!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						|| val_parts(node.result).count() != 2))
-				|| unlocked_gp_registers() < 6) {
-			return 0;
-		}
-		if (!frame_only_operands(node)) {
-			return 0;
-		}
-		const auto successors = guarded_successors_of(node);
-		const uint64_t literal_offset =
-			uint64_t{operation.op1.index} * sizeof(zval);
-		const uint64_t result_offset =
-			frame_slot_offset(operation.result_storage_id);
-		if (literal_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return 0;
-		}
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg literals{this};
-		auto literals_reg = literals.alloc_gp();
-		emit_literal_base(literals_reg, frame_reg);
-		ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
-		ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (!EncodeBase::encode_zend_native_zval_copy(
-				GenericValuePart{GenericValuePart::Expr{literals_reg,
-					static_cast<int64_t>(literal_offset)}},
-				payload, type_info)) {
-			return -1;
-		}
-		literals.reset();
-		const AsmReg payload_reg = payload.cur_reg_or_load(this);
-		const AsmReg type_info_reg = type_info.cur_reg_or_load(this);
-		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset)),
-			payload_reg);
-		ASM(MOV32mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
-					+ offsetof(zval, u1.type_info))),
-			type_info_reg);
-		if (node.has_result) {
-			auto result = result_ref(node.result);
-			const ValueParts parts = val_parts(node.result);
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto result_part = result.part(part);
-				mov(result_part.alloc_reg(),
-					parts.representation.parts[part].semantic_role
-							== ZEND_TPDE_MACHINE_PART_TYPE_INFO
-						? type_info_reg : payload_reg, 8);
-				result_part.set_modified();
-			}
-		}
-		payload.reset(this);
-		type_info.reset(this);
-		frame_scratch.reset();
-		/* The copy cannot fail: the fast block continues unconditionally. */
-		generate_uncond_branch(successors[0]);
-		return 1;
-	};
-	/*
-	 * count() of an array CV or temporary through
-	 * zend_native_zval_array_count(): the integer lands in the result
-	 * temporary and a register result; a temporary is consumed only when
-	 * another owner keeps it alive. Every other value takes the guarded cold
-	 * block. Returns 1 when emitted, 0 when the form does not apply and -1
-	 * on an encoding failure.
-	 */
-	auto count_inline = [&]() -> int {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		const bool temporary = is_frame_slot(operation.op1)
-			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP;
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| !mir.has_value_operation
-				|| operation.source_opcode != ZEND_COUNT
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| !is_frame_slot(operation.op1)
-				|| (operation.op1.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-					&& !temporary)
-				|| !zend_mir_id_is_valid(operation.op1_storage_id)
-				|| !is_frame_slot(operation.result)
-				|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_VAR
-					&& operation.result.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_CV)
-				|| !zend_mir_id_is_valid(operation.result_storage_id)
-				|| operation.result_storage_id == operation.op1_storage_id
-				|| (node.has_result && val_parts(node.result).count() > 2)
-				|| unlocked_gp_registers() < 6) {
-			return 0;
-		}
-		if (!frame_only_operands(node)) {
-			return 0;
-		}
-		const auto successors = guarded_successors_of(node);
-		const uint64_t value_offset =
-			frame_slot_offset(operation.op1_storage_id);
-		const uint64_t result_offset =
-			frame_slot_offset(operation.result_storage_id);
-		if (value_offset > INT32_MAX - sizeof(zval)
-				|| result_offset > INT32_MAX - sizeof(zval)) {
-			return 0;
-		}
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		auto value_address = [&]() {
-			return GenericValuePart{GenericValuePart::Expr{frame_reg,
-				static_cast<int64_t>(value_offset)}};
-		};
-		ValuePart count{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (!EncodeBase::encode_zend_native_zval_array_count(
-				value_address(), count)) {
-			return -1;
-		}
-		const AsmReg count_reg = count.cur_reg_or_load(this);
-		ScratchReg decision{this};
-		auto decision_reg = decision.alloc_gp();
-		ASM(CMP64ri, count_reg, -1);
-		generate_raw_jump(Jump::je, slow);
-		/* A CV result is overwritten: its old value must need no
-		 * release (a counted one takes the helper). */
-		if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-			emit_counted_check(frame_reg, static_cast<int32_t>(result_offset),
-				slow);
-		}
-		if (temporary) {
-			emit_consume_shared(frame_reg,
-				static_cast<int32_t>(value_offset), slow);
-		}
-		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset)),
-			count_reg);
-		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
-					+ offsetof(zval, u1.type_info))),
-			IS_LONG);
-		if (node.has_result && val_parts(node.result).count() == 1) {
-			auto [result_ref, result] = result_ref_single(node.result);
-			mov(result.alloc_reg(), count_reg, 8);
-			result.set_modified();
-		} else if (node.has_result) {
-			auto result = result_ref(node.result);
-			const ValueParts parts = val_parts(node.result);
-			for (uint32_t part = 0; part < parts.count(); ++part) {
-				auto result_part = result.part(part);
-				if (parts.representation.parts[part].semantic_role
-						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-					ASM(MOV32ri, result_part.alloc_reg(), IS_LONG);
-				} else {
-					mov(result_part.alloc_reg(), count_reg, 8);
-				}
-				result_part.set_modified();
-			}
-		}
-		count.reset(this);
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
-	};
-	auto write_array = [&]() {
-		if (const int element = array_element(ElementAccess::Write);
-				element != 0) {
-			return element > 0;
-		}
-		return branch_to_guarded_cold();
-	};
-	auto coalesce_array = [&]() {
-		if (const int element = array_element(ElementAccess::Coalesce);
-				element != 0) {
-			return element > 0;
-		}
-		return branch_to_guarded_cold();
-	};
-	auto isset_array = [&]() {
-		reuse_read = lookup_reuse_consumer(instruction);
-		const int element = array_element(
-			(mir.value_operation.extended_value & ZEND_ISEMPTY) != 0
-				? ElementAccess::Empty : ElementAccess::Isset);
-		if (element != 0) {
-			return element > 0;
-		}
-		return branch_to_guarded_cold();
-	};
-	auto append_packed_array = [&]() {
-		zend_tpde_packed_array_append layout;
-		const zend_tpde_machine_reference *element_reference =
-			operation_machine_reference(
-				ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT);
-
-		const bool append_layout =
-			zend_tpde_packed_array_append_at(mir, &layout);
-		if (!append_layout
-				|| (!layout.indirect_container
-					&& (element_reference == nullptr
-						|| !zend_mir_id_is_valid(
-							element_reference->base_value_id)
-						|| zend_mir_id_is_valid(
-							element_reference->index_value_id)
-						|| element_reference->scale != sizeof(zval)
-						|| element_reference->access_width
-							!= sizeof(zval)))
-				|| layout.container_offset > INT32_MAX - 8
-				|| layout.value_offset > INT32_MAX - 8
-				|| layout.result_offset > INT32_MAX - 8) {
-			/* A keyed assignment replaces an existing element inline; an
-			 * append without its inline layout calls the helper (see
-			 * freeze_machine_control_flow()). */
-			if (node.kind == Adaptor::InstKind::GuardedFast
-					&& mir.value_operation.op2.kind
-						!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {
-				const int element = array_element(ElementAccess::Assign);
-				if (element != 0) {
-					return element > 0;
-				}
-				return branch_to_guarded_cold();
-			}
-			return execute_value_operation();
-		}
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
-			return false;
-		}
-		const auto successors = guarded_successors_of(node);
-		const bool scalar_value =
-			node.packed_append_value_operand_index < node.operands.size()
-			&& adaptor->representation(node.operands[
-				node.packed_append_value_operand_index])
-				== ZEND_MIR_REPRESENTATION_I64
-			&& adaptor->exact_type(node.operands[
-				node.packed_append_value_operand_index])
-				== ZEND_MIR_SCALAR_TYPE_I64
-			&& adaptor->machine_kind(node.operands[
-				node.packed_append_value_operand_index])
-				== ZEND_TPDE_MACHINE_VALUE_I64;
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		/* Nine scratch registers; see unlocked_gp_registers(). */
-		if (unlocked_gp_registers() < 10) {
-			return branch_to_guarded_cold();
-		}
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg type{this};
-		ScratchReg array{this};
-		ScratchReg count{this};
-		ScratchReg limit{this};
-		ScratchReg element{this};
-		ScratchReg low_word{this};
-		ScratchReg high_word{this};
-		ScratchReg decision{this};
-		auto type_reg = type.alloc_gp();
-		auto array_reg = array.alloc_gp();
-		auto count_reg = count.alloc_gp();
-		auto limit_reg = limit.alloc_gp();
-		auto element_reg = element.alloc_gp();
-		auto low_word_reg = low_word.alloc_gp();
-		auto high_word_reg = high_word.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-
-		if (layout.indirect_container) {
-			/* The VAR addresses the array's zval, as ZEND_FETCH_DIM_W left
-			 * it; the helper handles any other VAR. */
-			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.container_offset
-					+ offsetof(zval, u1.v.type))), IS_INDIRECT);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, element_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.container_offset)));
-			load_array_container(element_reg, 0, type_reg, array_reg, slow);
-		} else {
-			load_array_container(frame_reg,
-				static_cast<int32_t>(layout.container_offset),
-				type_reg, array_reg, slow);
-		}
-		ASM(CMP32mi,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))),
-			1);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(TEST32mi,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_refcounted_h, u))),
-			IS_ARRAY_IMMUTABLE);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(TEST32mi,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, u))),
-			HASH_FLAG_PACKED);
-		generate_raw_jump(Jump::je, slow);
-		ASM(MOV32rm, count_reg,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
-		ASM(CMP32rm, count_reg,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, nTableSize))));
-		generate_raw_jump(Jump::jae, slow);
-		ASM(CMP64rm, count_reg,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(HashTable, nNextFreeElement))));
-		generate_raw_jump(Jump::jne, slow);
-
-		if (!scalar_value) {
-			ASM(MOV32rm, type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.value_offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(CMP8ri, type_reg, IS_UNDEF);
-			generate_raw_jump(Jump::je, slow);
-			ASM(CMP8ri, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::je, slow);
-			ASM(CMP8ri, type_reg, IS_INDIRECT);
-			generate_raw_jump(Jump::je, slow);
-		}
-		if (layout.has_result) {
-			ASM(MOV32rm, limit_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.result_offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, limit_reg, IS_UNDEF);
-			generate_raw_jump(Jump::jne, slow);
-		}
-
-		static_assert(sizeof(zval) == 16);
-		ASM(MOV64rr, element_reg, count_reg);
-		ASM(SHL64ri, element_reg, zval_size_shift);
-		ASM(ADD64rm, element_reg,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, arPacked))));
-		if (scalar_value) {
-			auto [value_ref, value] = val_ref_single(node.operands[
-				node.packed_append_value_operand_index]);
-			auto value_reg = value.load_to_reg();
-			ASM(MOV64rr, low_word_reg, value_reg);
-			ASM(MOV64ri, high_word_reg, IS_LONG);
-		} else {
-			ASM(MOV64rm, low_word_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.value_offset)));
-			ASM(MOV64rm, high_word_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.value_offset + zval_high_word)));
-		}
-		ASM(MOV64mr,
-			FE_MEM(element_reg, 0, FE_NOREG, 0), low_word_reg);
-		ASM(MOV64mr,
-			FE_MEM(element_reg, 0, FE_NOREG, zval_high_word), high_word_reg);
-		if (layout.move_value) {
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.value_offset
-							+ offsetof(zval, u1.type_info))),
-				IS_UNDEF);
-		} else if (!scalar_value) {
-			emit_try_addref(type_reg, low_word_reg);
-		}
-		ASM(ADD32ri, count_reg, 1);
-		ASM(MOV32mr,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, nNumUsed))),
-			count_reg);
-		ASM(ADD32mi,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, nNumOfElements))),
-			1);
-		ASM(MOV64mr,
-			FE_MEM(array_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, nNextFreeElement))),
-			count_reg);
-		if (layout.indirect_container) {
-			/* The consumed VAR, as the helper leaves it. */
-			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.container_offset
-					+ offsetof(zval, u1.type_info))), IS_UNDEF);
-		}
-		if (layout.has_result) {
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset)),
-				low_word_reg);
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset + zval_high_word)),
-				high_word_reg);
-			if (!scalar_value) {
-				emit_try_addref(type_reg, low_word_reg);
-			}
-		}
-		finish_guarded_with(slow, done, std::move(decision), [&] {
-			type.reset();
-			array.reset();
-			count.reset();
-			limit.reset();
-			element.reset();
-			low_word.reset();
-			high_word.reset();
-		}, successors);
-		return true;
-	};
-	auto string_length = [&]() {
-		zend_tpde_string_length layout;
-
-		if (!zend_tpde_string_length_at(mir, &layout, true)) {
-			zend_tpde_bool_unary boolean;
-			const bool boolean_layout =
-				zend_tpde_bool_unary_at(mir, &boolean);
-			const bool register_boolean = boolean_layout
-				&& !node.synthetic
-				&& node.kind == Adaptor::InstKind::MIR
-				&& node.has_result
-				&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-				&& node.operands.size() == 2
-				&& adaptor->exact_type(node.operands[0])
-					== ZEND_MIR_SCALAR_TYPE_I1
-				&& adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_BOOL
-				&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
-			if (register_boolean) {
-				auto [operand_ref, operand] =
-					val_ref_single(node.operands[0]);
-				auto [result_ref, result] = result_ref_single(node.result);
-				auto operand_reg = operand.load_to_reg();
-				auto result_reg = result.alloc_reg();
-				ASM(MOV32rr, result_reg, operand_reg);
-				if (boolean.negate) {
-					ASM(XOR32ri, result_reg, 1);
-				}
-				result.set_modified();
-				return true;
-			}
-			const bool frame_only = node.operands.size() == 1
-				&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE};
-			if (!node.synthetic
-					&& node.kind == Adaptor::InstKind::MIR
-					&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-					&& frame_only
-					&& boolean_layout) {
-				auto [frame_ref, frame] =
-					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-				auto frame_scratch = frame_register(std::move(frame));
-				auto frame_reg = frame_scratch.cur_reg();
-				ScratchReg result{this};
-				auto result_reg = result.alloc_gp();
-				ASM(MOV32rm, result_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(boolean.operand_offset)));
-				if (boolean.negate) {
-					ASM(XOR32ri, result_reg, 1);
-				}
-				ScratchReg type{this};
-				store_boolean_zval(frame_reg,
-					static_cast<int32_t>(boolean.result_offset), result_reg,
-					type.alloc_gp());
-				return true;
-			}
-			/*
-			 * ! and (bool) of an untyped null, boolean, integer, string or
-			 * array decide inline; an undefined variable (which warns), a
-			 * reference, a counted temporary string or array (which the
-			 * operation releases) and any other type take the guarded cold
-			 * block.
-			 */
-			if (boolean_layout && frame_only
-					&& node.kind == Adaptor::InstKind::GuardedFast
-					&& node.control_block != UINT32_MAX
-					&& node.continuation_block != UINT32_MAX
-					&& boolean.operand_offset <= INT32_MAX - sizeof(zval)
-					&& boolean.result_offset <= INT32_MAX - sizeof(zval)
-					&& (!node.has_result
-						|| val_parts(node.result).count() <= 2)) {
-				const auto successors =
-					adaptor->block_succs(IRBlockRef{node.control_block});
-				if (successors.size() >= 2
-						&& static_cast<uint32_t>(successors[0])
-							== node.continuation_block
-						&& static_cast<uint32_t>(successors[1])
-							== node.argument_index) {
-					auto slow = text_writer.label_create();
-					auto done = text_writer.label_create();
-					auto integer = text_writer.label_create();
-					auto decided = text_writer.label_create();
-					auto [frame_ref, frame] =
-						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = frame_register(std::move(frame));
-					auto frame_reg = frame_scratch.cur_reg();
-					ScratchReg decision{this};
-					ScratchReg type{this};
-					ScratchReg truth{this};
-					auto decision_reg = decision.alloc_gp();
-					auto type_reg = type.alloc_gp();
-					auto truth_reg = truth.alloc_gp();
-					const int32_t operand =
-						static_cast<int32_t>(boolean.operand_offset);
-					ASM(MOVZXr32m8, type_reg,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							operand + static_cast<int32_t>(
-								offsetof(zval, u1.type_info))));
-					auto string = text_writer.label_create();
-					auto array = text_writer.label_create();
-					ASM(XOR32rr, truth_reg, truth_reg);
-					ASM(CMP32ri, type_reg, IS_LONG);
-					generate_raw_jump(Jump::je, integer);
-					ASM(CMP32ri, type_reg, IS_STRING);
-					generate_raw_jump(Jump::je, string);
-					ASM(CMP32ri, type_reg, IS_ARRAY);
-					generate_raw_jump(Jump::je, array);
-					ASM(CMP32ri, type_reg, IS_TRUE);
-					generate_raw_jump(Jump::ja, slow);
-					generate_raw_set(Jump::je, truth_reg, false);
-					ASM(TEST32rr, type_reg, type_reg);
-					generate_raw_jump(Jump::je, slow);
-					generate_raw_jump(Jump::jmp, decided);
-					const bool releases_operand =
-						mir.value_operation.op1.slot_kind
-							!= ZEND_MIR_SOURCE_SLOT_CV;
-					label_place(string);
-					if (releases_operand) {
-						ASM(TEST8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-							operand + static_cast<int32_t>(
-								offsetof(zval, u1.v.type_flags))),
-							IS_TYPE_REFCOUNTED);
-						generate_raw_jump(Jump::jne, slow);
-					}
-					/* A string is true unless empty or "0". */
-					ASM(MOV64rm, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-						operand));
-					ASM(CMP64mi, FE_MEM(type_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_string, len))), 1);
-					generate_raw_set(Jump::ja, truth_reg, false);
-					generate_raw_jump(Jump::jne, decided);
-					ASM(CMP8mi, FE_MEM(type_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_string, val))), '0');
-					generate_raw_set(Jump::jne, truth_reg, false);
-					generate_raw_jump(Jump::jmp, decided);
-					label_place(array);
-					if (releases_operand) {
-						ASM(TEST8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-							operand + static_cast<int32_t>(
-								offsetof(zval, u1.v.type_flags))),
-							IS_TYPE_REFCOUNTED);
-						generate_raw_jump(Jump::jne, slow);
-					}
-					ASM(MOV64rm, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-						operand));
-					ASM(CMP32mi, FE_MEM(type_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(HashTable,
-							nNumOfElements))), 0);
-					generate_raw_set(Jump::jne, truth_reg, false);
-					generate_raw_jump(Jump::jmp, decided);
-					label_place(integer);
-					ASM(CMP64mi, FE_MEM(frame_reg, 0, FE_NOREG, operand), 0);
-					generate_raw_set(Jump::jne, truth_reg, false);
-					label_place(decided);
-					if (boolean.negate) {
-						ASM(XOR32ri, truth_reg, 1);
-					}
-					/* IS_FALSE + truth is IS_FALSE or IS_TRUE. */
-					store_bool_result(node, frame_reg, boolean.result_offset,
-						truth_reg, type_reg);
-					truth.reset();
-					type.reset();
-					finish_guarded(slow, done, std::move(decision), frame_scratch,
-						successors);
-					return true;
-				}
-			}
-			return execute_value_operation();
-		}
-		const bool frame_only = node.operands.size() == 1
-			&& node.operands[0] == IRValueRef{Adaptor::FRAME_VALUE};
-		const bool register_string = node.operands.size() == 2
-			&& adaptor->machine_kind(node.operands[0])
-				== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
-		const bool normal_register_string = register_string
-			&& !node.synthetic
-			&& node.kind == Adaptor::InstKind::MIR
-			&& node.has_result
-			&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I64;
-		const bool normal_frame_string = frame_only
-			&& !node.synthetic
-			&& node.kind == Adaptor::InstKind::MIR
-			&& node.has_result
-			&& node.exact_type == ZEND_MIR_SCALAR_TYPE_I64;
-		if (layout.operand_offset > INT32_MAX - 8
-				|| layout.result_offset > INT32_MAX - 8
-				|| (!frame_only && !register_string)) {
-			return false;
-		}
-		if (normal_register_string) {
-			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
-			auto frame_scratch = frame_register(std::move(frame));
-			auto frame_reg = frame_scratch.cur_reg();
-			auto string = val_ref(node.operands[0]);
-			auto [result_ref, result] = result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			uint64_t known_length = 0;
-			if (adaptor->known_string_literal(
-					node.operands[0], &known_length, nullptr)) {
-				ASM(MOV64ri, result_reg, known_length);
-			} else {
-				auto string_reg = string.part(0).load_to_reg();
-				ASM(MOV64rm, result_reg,
-					FE_MEM(string_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_string, len))));
-			}
-			/*
-			 * A source call may read the temporary's zval although the
-			 * producer is register-authoritative: publish the result there;
-			 * machine consumers use result_reg.
-			 */
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset)),
-				result_reg);
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_LONG);
-			result.set_modified();
-			return true;
-		}
-		if (normal_frame_string) {
-			auto [frame_ref, frame] =
-				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-			auto frame_scratch = frame_register(std::move(frame));
-			auto frame_reg = frame_scratch.cur_reg();
-			ScratchReg string{this};
-			auto string_reg = string.alloc_gp();
-			ASM(MOV64rm, string_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			auto [result_ref, result] = result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			ASM(MOV64rm, result_reg,
-				FE_MEM(string_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_string, len))));
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset)),
-				result_reg);
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_LONG);
-			result.set_modified();
-			return true;
-		}
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
-			return false;
-		}
-		const auto successors = guarded_successors_of(node);
-		if (register_string) {
-			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
-			auto frame_scratch = frame_register(std::move(frame));
-			auto frame_reg = frame_scratch.cur_reg();
-			auto [result_ref, result] = result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			uint64_t known_length = 0;
-			if (adaptor->known_string_literal(
-					node.operands[0], &known_length, nullptr)) {
-				ASM(MOV64ri, result_reg, known_length);
-			} else {
-				auto [string_ref, string] =
-					val_ref_single(node.operands[0]);
-				auto string_reg = string.load_to_reg();
-				ASM(MOV64rm, result_reg,
-					FE_MEM(string_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_string, len))));
-			}
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset)),
-				result_reg);
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_LONG);
-			result.set_modified();
-			generate_uncond_branch(successors[0]);
-			return true;
-		}
-		auto slow = text_writer.label_create();
-		auto ready = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg type{this};
-		ScratchReg string{this};
-		ScratchReg decision{this};
-		auto type_reg = type.alloc_gp();
-		auto string_reg = string.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-
-		ASM(MOVZXr32m8, type_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.operand_offset + offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, type_reg, IS_STRING);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, string_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.operand_offset)));
-
-		/* A frame-only consumer such as RETURN reads the published slot. */
-		auto store_length = [&](AsmReg length_reg) {
-			ASM(MOV64rm, length_reg,
-				FE_MEM(string_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_string, len))));
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset)),
-				length_reg);
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_LONG);
-		};
-		if (node.has_result) {
-			auto [result_ref, result] = result_ref_single(node.result);
-			store_length(result.alloc_reg());
-			result.set_modified();
-		} else {
-			ScratchReg length{this};
-			store_length(length.alloc_gp());
-		}
-		finish_guarded_with(slow, ready, std::move(decision), [&] {
-			type.reset();
-			string.reset();
-		}, successors);
-		return true;
-	};
-	auto long_binary = [&]() {
-		if (const int identical = identical_literal(); identical != 0) {
-			return identical > 0;
-		}
-		zend_tpde_long_binary layout{};
-		const bool framed_layout =
-			zend_tpde_long_binary_at(mir, &layout);
-		auto register_long_operand = [&](IRValueRef operand) {
-			return adaptor->exact_type(operand)
-						== ZEND_MIR_SCALAR_TYPE_I64
-				|| (adaptor->exact_type(operand)
-						== ZEND_MIR_SCALAR_TYPE_NONE
-					&& adaptor->machine_kind(operand)
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
-		};
-		const bool register_layout =
-			node.has_result
-				&& node.operands.size() == 3
-				&& register_long_operand(node.operands[0])
-				&& register_long_operand(node.operands[1]);
-		bool register_result_layout = false;
-		if (!framed_layout && register_layout
-				&& zend_mir_id_is_valid(
-					mir.value_operation.result_storage_id)
-				&& (mir.value_operation.result.kind
-						== ZEND_MIR_SOURCE_OPERAND_SLOT
-					|| mir.value_operation.result.kind
-						== ZEND_MIR_SOURCE_OPERAND_SSA)
-				&& (mir.value_operation.result.slot_kind
-						== ZEND_MIR_SOURCE_SLOT_TMP
-					|| mir.value_operation.result.slot_kind
-						== ZEND_MIR_SOURCE_SLOT_VAR
-					|| mir.value_operation.result.slot_kind
-						== ZEND_MIR_SOURCE_SLOT_CV)) {
-			const uint64_t result_offset =
-				frame_slot_offset(mir.value_operation.result_storage_id);
-			if (result_offset <= UINT32_MAX - 8) {
-				layout.result_offset =
-					static_cast<uint32_t>(result_offset);
-				register_result_layout = true;
-			}
-		}
-		/*
-		 * Operands that live in CV slots or literals, as in most untyped
-		 * loops, never reach the register form. Evaluate integer and floating
-		 * point operands inline like the VM's fast paths: long/long with an
-		 * overflow check, any long/double mix in double precision. Other
-		 * types, integer overflow, integer division and a zero divisor use
-		 * the helper.
-		 */
-		auto numeric_framed_binary = [&]() -> int {
-			const zend_mir_executable_value_ref &operation =
-				mir.value_operation;
-			const uint32_t opcode = operation.source_opcode;
-			const bool arithmetic = opcode == ZEND_ADD
-				|| opcode == ZEND_SUB || opcode == ZEND_MUL
-				|| opcode == ZEND_DIV;
-			const bool comparison = opcode == ZEND_IS_SMALLER
-				|| opcode == ZEND_IS_SMALLER_OR_EQUAL
-				|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
-			/* Integer-only operations: two longs inline, anything else,
-			 * a zero or -1 divisor and a shift count outside 0..63 use the
-			 * helper. */
-			const bool integer_op = opcode == ZEND_MOD
-				|| opcode == ZEND_SL || opcode == ZEND_SR;
-			/* A proven operation of two numbers cannot fail: integer
-			 * overflow continues in double. A typed body emits it without a
-			 * guarded diamond; in a Zend entry its cold edge is dead. */
-			const bool proven =
-				zend_tpde_numeric_binary_proven(adaptor->plan(), mir);
-			const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
-			if ((!arithmetic && !comparison && !integer_op)
-					|| (!guarded && !(proven && adaptor->typed_body()))
-					|| !mir.has_value_operation
-					|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
-				return -1;
-			}
-			/* The plan keeps the result of two longs an exact long only where
-			 * Zend's range inference excludes overflow. */
-			if (adaptor->typed_body() && !guarded && arithmetic
-					&& opcode != ZEND_DIV && node.has_result
-					&& node.operands.size() == 2
-					&& adaptor->machine_kind(node.result)
-						== ZEND_TPDE_MACHINE_VALUE_I64) {
-				ScratchReg left_value{this};
-				ScratchReg right_value{this};
-				auto left_reg = left_value.alloc_gp();
-				auto right_reg = right_value.alloc_gp();
-				auto load_long = [&](IRValueRef operand, AsmReg target) {
-					if (adaptor->machine_kind(operand)
-							== ZEND_TPDE_MACHINE_VALUE_I64) {
-						auto [value_ref, value] = val_ref_single(operand);
-						ASM(MOV64rr, target, value.load_to_reg());
-						return true;
-					}
-					if (adaptor->machine_kind(operand)
-							!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-						return false;
-					}
-					auto value = val_ref(operand);
-					auto payload = value.part(0);
-					ASM(MOV64rr, target, payload.load_to_reg());
-					return true;
-				};
-				if (!load_long(node.operands[0], left_reg)
-						|| !load_long(node.operands[1], right_reg)) {
-					return 0;
-				}
-				switch (opcode) {
-					case ZEND_ADD:
-						ASM(ADD64rr, left_reg, right_reg);
-						break;
-					case ZEND_SUB:
-						ASM(SUB64rr, left_reg, right_reg);
-						break;
-					default:
-						ASM(IMUL64rr, left_reg, right_reg);
-						break;
-				}
-#if ZEND_DEBUG
-				auto no_overflow = text_writer.label_create();
-				generate_raw_jump(Jump::jno, no_overflow);
-				ASM(UD2);
-				label_place(no_overflow);
-#endif
-				auto [result_ref_value, result] =
-					result_ref_single(node.result);
-				auto result_reg = result.alloc_reg();
-				ASM(MOV64rr, result_reg, left_reg);
-				result.set_modified();
-				return 1;
-			}
-			/*
-			 * Register operands, such as the boxed result of a preceding
-			 * numeric node, take this form only where the long-only register
-			 * form cannot: MUL and DIV, or any result that can hold a double
-			 * or a boolean. A typed body passes both operands without a frame
-			 * operand.
-			 */
-			const bool register_operands = register_layout
-				|| (adaptor->typed_body() && !guarded
-					&& node.has_result && node.operands.size() == 2
-					&& register_long_operand(node.operands[0])
-					&& register_long_operand(node.operands[1]));
-			if (register_operands) {
-				const zend_tpde_machine_value_kind kind = node.has_result
-					? adaptor->machine_kind(node.result)
-					: ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-				if (!(opcode == ZEND_MUL || opcode == ZEND_DIV
-						|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						|| (comparison
-							&& kind == ZEND_TPDE_MACHINE_VALUE_BOOL))) {
-					return -1;
-				}
-				for (uint32_t index = 0; index < 2; ++index) {
-					const IRValueRef operand = node.operands[index];
-					if (!(adaptor->machine_kind(operand)
-								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-							&& val_parts(operand).count() == 2)
-							&& !(adaptor->machine_kind(operand)
-									== ZEND_TPDE_MACHINE_VALUE_I64
-								&& adaptor->exact_type(operand)
-									== ZEND_MIR_SCALAR_TYPE_I64)) {
-						return -1;
-					}
-				}
-			} else {
-				if (!frame_only_operands(node)) {
-					return -1;
-				}
-			}
-			struct FramedOperand {
-				bool literal;
-				int32_t offset;
-				bool reg;
-				uint32_t index;
-			};
-			auto framed_operand = [&](const zend_mir_source_operand_ref &operand,
-					zend_mir_storage_id storage, FramedOperand *out) {
-				uint64_t offset;
-				out->reg = false;
-				if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-					out->literal = true;
-					offset = uint64_t{operand.index} * sizeof(zval);
-				} else if ((operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-							|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-						&& (operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-							|| operand.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-							|| operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
-						&& zend_mir_id_is_valid(storage)) {
-					/* With frame-only operands a temporary is published in its
-					 * slot; consuming a number needs no release. */
-					out->literal = false;
-					offset = frame_slot_offset(storage);
-				} else {
-					return false;
-				}
-				if (offset > INT32_MAX - sizeof(zval)) {
-					return false;
-				}
-				out->offset = static_cast<int32_t>(offset);
-				return true;
-			};
-			FramedOperand left{false, 0, true, 0}, right{false, 0, true, 1};
-			if ((!register_operands
-						&& (!framed_operand(
-								operation.op1, operation.op1_storage_id, &left)
-							|| !framed_operand(
-								operation.op2, operation.op2_storage_id,
-								&right)))
-					|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-						&& operation.result.kind
-							!= ZEND_MIR_SOURCE_OPERAND_SSA)
-					|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
-						&& operation.result.slot_kind
-							!= ZEND_MIR_SOURCE_SLOT_VAR
-						&& operation.result.slot_kind
-							!= ZEND_MIR_SOURCE_SLOT_CV)
-					|| (!register_operands
-						&& !zend_mir_id_is_valid(
-							operation.result_storage_id))) {
-				return -1;
-			}
-			/* A typed body has no frame; its result lives in registers. */
-			const bool result_slot =
-				zend_mir_id_is_valid(operation.result_storage_id)
-				&& !adaptor->typed_body();
-			/* A CV result only replaces a non-refcounted value: OPcache
-			 * contracts ASSIGN into it only then, and an aliased input was
-			 * just checked to be numeric. A temporary never aliases input. */
-			const uint64_t result_offset64 = result_slot
-				? frame_slot_offset(operation.result_storage_id)
-				: 0;
-			if (result_offset64 > INT32_MAX - sizeof(zval)
-					|| (!register_operands
-						&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-						&& ((!left.literal && operation.op1_storage_id
-								== operation.result_storage_id)
-							|| (!right.literal && operation.op2_storage_id
-								== operation.result_storage_id)))) {
-				return -1;
-			}
-			const int32_t result_offset =
-				static_cast<int32_t>(result_offset64);
-			const zend_tpde_machine_value_kind result_kind = node.has_result
-				? adaptor->machine_kind(node.result)
-				: ZEND_TPDE_MACHINE_VALUE_I64;
-			if (node.has_result
-					&& result_kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-					&& !(comparison
-						&& result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL)) {
-				return -1;
-			}
-			const auto guarded_successors = guarded
-				? adaptor->block_succs(IRBlockRef{node.control_block})
-				: decltype(adaptor->block_succs(
-					IRBlockRef{node.control_block})){};
-			if (guarded
-					&& (node.control_block == UINT32_MAX
-						|| node.continuation_block == UINT32_MAX
-						|| guarded_successors.size() < 2
-						|| static_cast<uint32_t>(guarded_successors[0])
-							!= node.continuation_block
-						|| static_cast<uint32_t>(guarded_successors[1])
-							!= node.argument_index)) {
-				return 0;
-			}
-
-			/* Zend's type inference fixes most operand types in numeric
-			 * code; test only the unknown ones. */
-			uint8_t left_known = IS_UNDEF;
-			uint8_t right_known = IS_UNDEF;
-			if (!register_operands
-					&& operation.source_position_id
-						< adaptor->plan()->source_opcode_count) {
-				const zend_tpde_source_opcode &source =
-					adaptor->plan()->source_opcodes[
-						operation.source_position_id];
-				if (source.opcode == opcode) {
-					left_known = source.op1_known_type;
-					right_known = source.op2_known_type;
-				}
-			}
-			if (proven) {
-				if (left_known == IS_UNDEF) {
-					left_known = ZEND_TPDE_KNOWN_NUMBER;
-				}
-				if (right_known == IS_UNDEF) {
-					right_known = ZEND_TPDE_KNOWN_NUMBER;
-				}
-			}
-			const bool known_long =
-				left_known == IS_LONG && right_known == IS_LONG;
-			const bool known_double = !register_operands
-				&& ((left_known == IS_DOUBLE
-						&& (right_known == IS_LONG
-							|| right_known == IS_DOUBLE))
-					|| (right_known == IS_DOUBLE
-						&& left_known == IS_LONG));
-			/*
-			 * Double arithmetic other than division and every comparison of
-			 * known numbers cannot fail: compute in SSE registers straight
-			 * from the slots and store a double or boolean.
-			 */
-			if (known_double && opcode != ZEND_DIV && !integer_op
-					&& (arithmetic
-						|| !node.has_result
-						|| result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL
-						|| result_kind
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
-				auto [frame_ref, frame] =
-					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-				auto frame_scratch = frame_register(std::move(frame));
-				auto frame_reg = frame_scratch.cur_reg();
-				ScratchReg literals{this};
-				ScratchReg value{this};
-				ScratchReg left_double{this};
-				ScratchReg right_double{this};
-				auto value_reg = value.alloc_gp();
-				auto left_fp = left_double.alloc(
-					tpde::x64::PlatformConfig::FP_BANK);
-				auto right_fp = right_double.alloc(
-					tpde::x64::PlatformConfig::FP_BANK);
-				AsmReg literals_reg = frame_reg;
-				if (left.literal || right.literal) {
-					literals_reg = literals.alloc_gp();
-					emit_literal_base(literals_reg, frame_reg);
-				}
-				auto load_double = [&](const FramedOperand &operand,
-						uint8_t known, AsmReg fp_reg) {
-					const AsmReg base =
-						operand.literal ? literals_reg : frame_reg;
-					if (known == IS_DOUBLE) {
-						ASM(SSE_MOVSDrm, fp_reg,
-							FE_MEM(base, 0, FE_NOREG, operand.offset));
-					} else {
-						ASM(MOV64rm, value_reg,
-							FE_MEM(base, 0, FE_NOREG, operand.offset));
-						ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
-					}
-				};
-				load_double(left, left_known, left_fp);
-				load_double(right, right_known, right_fp);
-				literals.reset();
-				if (arithmetic) {
-					emit_double_arith(opcode, left_fp, right_fp);
-					if (result_slot) {
-						ASM(SSE_MOVSDmr,
-							FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
-							left_fp);
-						ASM(MOV32mi,
-							FE_MEM(frame_reg, 0, FE_NOREG, result_offset
-								+ static_cast<int32_t>(
-									offsetof(zval, u1.type_info))),
-							IS_DOUBLE);
-					}
-					if (node.has_result) {
-						auto fast_result = result_ref(node.result);
-						auto payload = fast_result.part(0);
-						auto type_info = fast_result.part(1);
-						auto payload_reg = payload.alloc_reg();
-						auto type_info_reg = type_info.alloc_reg();
-						ASM(SSE_MOVQ_X2Grr, payload_reg, left_fp);
-						ASM(MOV32ri, type_info_reg, IS_DOUBLE);
-						payload.set_modified();
-						type_info.set_modified();
-					}
-				} else {
-					ScratchReg parity{this};
-					auto parity_reg = parity.alloc_gp();
-					emit_double_compare_set(opcode, left_fp, right_fp,
-						value_reg, parity_reg);
-					if (result_slot) {
-						ASM(LEA32rm, parity_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-						ASM(MOV32mr,
-							FE_MEM(frame_reg, 0, FE_NOREG, result_offset
-								+ static_cast<int32_t>(
-									offsetof(zval, u1.type_info))),
-							parity_reg);
-					}
-					if (node.has_result) {
-						if (result_kind
-								== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-							auto fast_result = result_ref(node.result);
-							auto payload = fast_result.part(0);
-							auto type_info = fast_result.part(1);
-							auto payload_reg = payload.alloc_reg();
-							auto type_info_reg = type_info.alloc_reg();
-							ASM(MOV64rr, payload_reg, value_reg);
-							ASM(LEA32rm, type_info_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-							payload.set_modified();
-							type_info.set_modified();
-						} else {
-							auto [bool_ref, bool_result] =
-								result_ref_single(node.result);
-							auto bool_reg = bool_result.alloc_reg();
-							ASM(MOV64rr, bool_reg, value_reg);
-							bool_result.set_modified();
-						}
-					}
-				}
-				left_double.reset();
-				right_double.reset();
-				if (!guarded) {
-					return 1;
-				}
-				/* Both operands are known doubles: the cold edge is never
-				 * taken. */
-				value.reset();
-				generate_uncond_branch(guarded_successors[0]);
-				return 1;
-			}
-
-			auto slow = text_writer.label_create();
-			auto done = text_writer.label_create();
-			auto mixed = text_writer.label_create();
-			auto store = text_writer.label_create();
-			/* IDIV takes rdx:rax and a variable shift its count in cl;
-			 * reserve them before the operands are placed. */
-			ScratchReg fixed_ax{this};
-			ScratchReg fixed_dx{this};
-			ScratchReg fixed_cx{this};
-			const AsmReg ax_reg{AsmReg::AX};
-			const AsmReg dx_reg{AsmReg::DX};
-			const AsmReg cx_reg{AsmReg::CX};
-			if (opcode == ZEND_DIV || opcode == ZEND_MOD) {
-				fixed_ax.alloc_specific(ax_reg);
-				fixed_dx.alloc_specific(dx_reg);
-			} else if (opcode == ZEND_SL || opcode == ZEND_SR) {
-				fixed_cx.alloc_specific(cx_reg);
-			}
-			ScratchReg frame_scratch{this};
-			AsmReg frame_reg = AsmReg::make_invalid();
-			if (!register_operands || result_slot) {
-				auto [frame_ref, frame] =
-					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-				frame_scratch = std::move(frame).into_scratch();
-				frame_reg = frame_scratch.cur_reg();
-			}
-			ScratchReg literals{this};
-			ScratchReg left_type{this};
-			ScratchReg right_type{this};
-			ScratchReg left_value{this};
-			ScratchReg right_value{this};
-			ScratchReg left_double{this};
-			ScratchReg right_double{this};
-			auto left_type_reg = left_type.alloc_gp();
-			auto right_type_reg = right_type.alloc_gp();
-			auto left_reg = left_value.alloc_gp();
-			auto right_reg = right_value.alloc_gp();
-			/* Register pressure: the right type becomes the result type once
-			 * the operands are classified, the left type the decision. */
-			const AsmReg result_type_reg = right_type_reg;
-			const AsmReg decision_reg = left_type_reg;
-			auto left_fp = left_double.alloc(
-				tpde::x64::PlatformConfig::FP_BANK);
-			auto right_fp = right_double.alloc(
-				tpde::x64::PlatformConfig::FP_BANK);
-			AsmReg literals_reg = frame_reg;
-			if (left.literal || right.literal) {
-				literals_reg = literals.alloc_gp();
-				emit_literal_base(literals_reg, frame_reg);
-			}
-			auto load = [&](const FramedOperand &operand, AsmReg type_reg,
-					AsmReg value_reg, uint8_t known,
-					zend_mir_storage_id storage) {
-				if (operand.reg) {
-					const IRValueRef source = node.operands[operand.index];
-					if (adaptor->machine_kind(source)
-							== ZEND_TPDE_MACHINE_VALUE_I64) {
-						auto [value_ref, value] = val_ref_single(source);
-						ASM(MOV64rr, value_reg, value.load_to_reg());
-						ASM(MOV32ri, type_reg, IS_LONG);
-					} else {
-						auto value = val_ref(source);
-						auto payload = value.part(0);
-						auto type_info = value.part(1);
-						ASM(MOV64rr, value_reg, payload.load_to_reg());
-						ASM(MOVZXr32r8, type_reg, type_info.load_to_reg());
-					}
-					return;
-				}
-				const AsmReg base = operand.literal ? literals_reg : frame_reg;
-				/* A known long's type is never tested. */
-				if (known != IS_LONG) {
-					ASM(MOVZXr32m8, type_reg,
-						FE_MEM(base, 0, FE_NOREG, operand.offset
-							+ static_cast<int32_t>(offsetof(zval, u1.type_info))));
-				}
-				ASM(MOV64rm, value_reg,
-					FE_MEM(base, 0, FE_NOREG, operand.offset));
-				/* A CV bound by global, static or & holds a reference; read
-				 * through it like the VM. A CV result written back into the
-				 * same slot keeps the helper, which updates the referent. */
-				if (!operand.literal
-						&& (known == IS_UNDEF
-							|| known == ZEND_TPDE_KNOWN_BOOL)
-						&& !(operation.result.slot_kind
-								== ZEND_MIR_SOURCE_SLOT_CV
-							&& storage == operation.result_storage_id)) {
-					auto plain = text_writer.label_create();
-					ASM(CMP32ri, type_reg, IS_REFERENCE);
-					emit_cold_branch(Jump::je, plain, [&] {
-						emit_deref_value(type_reg, value_reg, true);
-					});
-				}
-			};
-			load(left, left_type_reg, left_reg, left_known,
-				operation.op1_storage_id);
-			load(right, right_type_reg, right_reg, right_known,
-				operation.op2_storage_id);
-
-			/* long op long; a known double goes straight to the double path */
-			if (!known_double) {
-				if (left_known != IS_LONG) {
-					ASM(CMP32ri, left_type_reg, IS_LONG);
-					generate_raw_jump(Jump::jne, mixed);
-				}
-				if (right_known != IS_LONG) {
-					ASM(CMP32ri, right_type_reg, IS_LONG);
-					generate_raw_jump(Jump::jne, mixed);
-				}
-				/* Proven arithmetic recomputes an overflowing result in
-				 * double: the wrapped sum or difference gives the left operand
-				 * back exactly, a product keeps it in the dead right type
-				 * register. */
-				auto overflow = text_writer.label_create();
-				const bool overflow_edge = proven && arithmetic
-					&& opcode != ZEND_DIV;
-				if (overflow_edge && opcode == ZEND_MUL) {
-					ASM(MOV64rr, result_type_reg, left_reg);
-				}
-				switch (opcode) {
-					case ZEND_ADD:
-						ASM(ADD64rr, left_reg, right_reg);
-						generate_raw_jump(Jump::jo,
-							overflow_edge ? overflow : slow);
-						ASM(MOV32ri, result_type_reg, IS_LONG);
-						break;
-					case ZEND_SUB:
-						ASM(SUB64rr, left_reg, right_reg);
-						generate_raw_jump(Jump::jo,
-							overflow_edge ? overflow : slow);
-						ASM(MOV32ri, result_type_reg, IS_LONG);
-						break;
-					case ZEND_MUL:
-						ASM(IMUL64rr, left_reg, right_reg);
-						generate_raw_jump(Jump::jo,
-							overflow_edge ? overflow : slow);
-						ASM(MOV32ri, result_type_reg, IS_LONG);
-						break;
-					case ZEND_DIV:
-						/* An exact quotient stays a long; otherwise divide both
-						 * operands in double precision below. */
-						ASM(TEST64rr, right_reg, right_reg);
-						generate_raw_jump(Jump::je, slow);
-						ASM(CMP64ri, right_reg, -1);
-						generate_raw_jump(Jump::je, slow);
-						ASM(MOV64rr, ax_reg, left_reg);
-						ASM(CQO);
-						ASM(IDIV64r, right_reg);
-						ASM(TEST64rr, dx_reg, dx_reg);
-						generate_raw_jump(Jump::jne, mixed);
-						ASM(MOV64rr, left_reg, ax_reg);
-						ASM(MOV32ri, result_type_reg, IS_LONG);
-						break;
-					case ZEND_MOD:
-						ASM(TEST64rr, right_reg, right_reg);
-						generate_raw_jump(Jump::je, slow);
-						ASM(CMP64ri, right_reg, -1);
-						generate_raw_jump(Jump::je, slow);
-						ASM(MOV64rr, ax_reg, left_reg);
-						ASM(CQO);
-						ASM(IDIV64r, right_reg);
-						ASM(MOV64rr, left_reg, dx_reg);
-						ASM(MOV32ri, result_type_reg, IS_LONG);
-						break;
-					case ZEND_SL:
-					case ZEND_SR:
-						/* Unsigned: a negative count is out of range too. */
-						ASM(CMP64ri, right_reg, 63);
-						generate_raw_jump(Jump::ja, slow);
-						ASM(MOV64rr, cx_reg, right_reg);
-						if (opcode == ZEND_SL) {
-							ASM(SHL64rr, left_reg, cx_reg);
-						} else {
-							ASM(SAR64rr, left_reg, cx_reg);
-						}
-						ASM(MOV32ri, result_type_reg, IS_LONG);
-						break;
-					default: {
-						const Jump condition =
-							opcode == ZEND_IS_SMALLER ? Jump::jl
-							: opcode == ZEND_IS_SMALLER_OR_EQUAL ? Jump::jle
-							: opcode == ZEND_IS_EQUAL ? Jump::je
-							: Jump::jne;
-						ASM(CMP64rr, left_reg, right_reg);
-						generate_raw_set(condition, left_reg);
-						ASM(LEA32rm, result_type_reg, FE_MEM(left_reg, 0, FE_NOREG, IS_FALSE));
-						break;
-					}
-				}
-				generate_raw_jump(Jump::jmp, store);
-				if (overflow_edge) {
-					label_place(overflow);
-					if (opcode == ZEND_ADD) {
-						ASM(SUB64rr, left_reg, right_reg);
-					} else if (opcode == ZEND_SUB) {
-						ASM(ADD64rr, left_reg, right_reg);
-					} else {
-						ASM(MOV64rr, left_reg, result_type_reg);
-					}
-					ASM(SSE_CVTSI2SD64rr, left_fp, left_reg);
-					ASM(SSE_CVTSI2SD64rr, right_fp, right_reg);
-					emit_double_arith(opcode, left_fp, right_fp);
-					ASM(SSE_MOVQ_X2Grr, left_reg, left_fp);
-					ASM(MOV32ri, result_type_reg, IS_DOUBLE);
-					generate_raw_jump(Jump::jmp, store);
-				}
-			}
-
-			/* long or double, at least one double: reached only from the
-			 * type tests and an inexact division, and an integer operation
-			 * takes the helper for it. */
-			const bool mixed_reachable =
-				known_double || !known_long || opcode == ZEND_DIV;
-			label_place(mixed);
-			if (integer_op && mixed_reachable) {
-				generate_raw_jump(Jump::jmp, slow);
-			}
-			auto to_double = [&](AsmReg type_reg, AsmReg value_reg,
-					AsmReg fp_reg, uint8_t known) {
-				if (known == IS_DOUBLE) {
-					ASM(SSE_MOVQ_G2Xrr, fp_reg, value_reg);
-					return;
-				}
-				if (known == IS_LONG) {
-					ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
-					return;
-				}
-				emit_number_to_double(type_reg, value_reg, fp_reg, slow,
-					known != ZEND_TPDE_KNOWN_NUMBER);
-			};
-			if (mixed_reachable && !integer_op) {
-				to_double(left_type_reg, left_reg, left_fp, left_known);
-				to_double(right_type_reg, right_reg, right_fp, right_known);
-				switch (opcode) {
-					case ZEND_ADD:
-						ASM(SSE_ADDSDrr, left_fp, right_fp);
-						break;
-					case ZEND_SUB:
-						ASM(SSE_SUBSDrr, left_fp, right_fp);
-						break;
-					case ZEND_MUL:
-						ASM(SSE_MULSDrr, left_fp, right_fp);
-						break;
-					case ZEND_DIV: {
-						/* A zero or NaN divisor sets ZF; the helper throws. */
-						ScratchReg zero{this};
-						auto zero_fp = zero.alloc(
-							tpde::x64::PlatformConfig::FP_BANK);
-						ASM(SSE_XORPDrr, zero_fp, zero_fp);
-						ASM(SSE_UCOMISDrr, right_fp, zero_fp);
-						generate_raw_jump(Jump::je, slow);
-						ASM(SSE_DIVSDrr, left_fp, right_fp);
-						break;
-					}
-					default:
-						break;
-				}
-				if (arithmetic) {
-					ASM(SSE_MOVQ_X2Grr, left_reg, left_fp);
-					ASM(MOV32ri, result_type_reg, IS_DOUBLE);
-				} else {
-					emit_double_compare_set(opcode, left_fp, right_fp, left_reg,
-						right_reg);
-					ASM(LEA32rm, result_type_reg,
-						FE_MEM(left_reg, 0, FE_NOREG, IS_FALSE));
-				}
-			}
-
-			label_place(store);
-			literals.reset();
-			left_double.reset();
-			right_double.reset();
-			if (result_slot) {
-				ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
-					left_reg);
-				ASM(MOV32mr,
-					FE_MEM(frame_reg, 0, FE_NOREG, result_offset
-						+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					result_type_reg);
-			}
-			if (node.has_result) {
-				if (result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-					auto fast_result = result_ref(node.result);
-					auto payload = fast_result.part(0);
-					auto type_info = fast_result.part(1);
-					auto payload_reg = payload.alloc_reg();
-					auto type_info_reg = type_info.alloc_reg();
-					ASM(MOV64rr, payload_reg, left_reg);
-					ASM(MOV32rr, type_info_reg, result_type_reg);
-					payload.set_modified();
-					type_info.set_modified();
-				} else {
-					auto [bool_ref, bool_result] =
-						result_ref_single(node.result);
-					auto bool_reg = bool_result.alloc_reg();
-					ASM(MOV64rr, bool_reg, left_reg);
-					bool_result.set_modified();
-				}
-			}
-			if (!guarded) {
-				right_value.reset();
-				return 1;
-			}
-			finish_guarded_with(slow, done, std::move(left_type),
-				[&] { right_value.reset(); }, guarded_successors);
-			return 1;
-		};
-		{
-			const int framed = numeric_framed_binary();
-			if (framed >= 0) {
-				return framed != 0;
-			}
-		}
-		if (!register_layout
-				|| (!framed_layout && !register_result_layout)
-				|| (framed_layout
-					&& (layout.left.offset > INT32_MAX - 8
-						|| layout.right.offset > INT32_MAX - 8
-						|| layout.result_offset > INT32_MAX - 8))
-				|| !node.has_result
-				|| node.operands.size() != 3
-				|| node.operands[2]
-					!= IRValueRef{Adaptor::FRAME_VALUE}) {
-			return branch_to_guarded_cold();
-		}
-		layout.source_opcode = mir.value_operation.source_opcode;
-		const bool supported_source_opcode =
-			layout.source_opcode == ZEND_ADD
-			|| layout.source_opcode == ZEND_SUB
-			|| layout.source_opcode == ZEND_BW_OR
-			|| layout.source_opcode == ZEND_BW_AND
-			|| layout.source_opcode == ZEND_BW_XOR
-			|| layout.source_opcode == ZEND_SPACESHIP
-			|| layout.source_opcode == ZEND_IS_IDENTICAL
-			|| layout.source_opcode == ZEND_IS_NOT_IDENTICAL
-			|| layout.source_opcode == ZEND_IS_EQUAL
-			|| layout.source_opcode == ZEND_IS_NOT_EQUAL
-			|| layout.source_opcode == ZEND_IS_SMALLER
-			|| layout.source_opcode == ZEND_IS_SMALLER_OR_EQUAL;
-		if (!supported_source_opcode) {
-			return branch_to_guarded_cold();
-		}
-		if (node.kind != Adaptor::InstKind::GuardedFast) {
-			return false;
-		}
-		const auto guarded_successors = guarded_successors_of(node);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg result_value{this};
-		ScratchReg decision{this};
-		auto result_reg = result_value.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-
-		auto load_register_long =
-			[&](IRValueRef operand, AsmReg target) {
-				if (adaptor->machine_kind(operand)
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-					auto value = val_ref(operand);
-					const ValueParts parts = val_parts(operand);
-					if (parts.count() != 2) {
-						return false;
-					}
-					auto payload = value.part(0);
-					auto type_info = value.part(1);
-					auto payload_reg = payload.load_to_reg();
-					auto type_info_reg = type_info.load_to_reg();
-					ASM(CMP32ri, type_info_reg, IS_LONG);
-					generate_raw_jump(Jump::jne, slow);
-					ASM(MOV64rr, target, payload_reg);
-					return true;
-				}
-				auto [value_ref, value] = val_ref_single(operand);
-				ASM(MOV64rr, target, value.load_to_reg());
-				return true;
-			};
-		if (!load_register_long(node.operands[0], result_reg)) {
-			return false;
-		}
-		const bool boolean_result =
-			layout.source_opcode == ZEND_IS_IDENTICAL
-			|| layout.source_opcode == ZEND_IS_NOT_IDENTICAL
-			|| layout.source_opcode == ZEND_IS_EQUAL
-			|| layout.source_opcode == ZEND_IS_NOT_EQUAL
-			|| layout.source_opcode == ZEND_IS_SMALLER
-			|| layout.source_opcode == ZEND_IS_SMALLER_OR_EQUAL;
-		{
-			ScratchReg right_value{this};
-			auto right_reg = right_value.alloc_gp();
-			if (!load_register_long(node.operands[1], right_reg)) {
-				return false;
-			}
-				switch (layout.source_opcode) {
-				case ZEND_ADD:
-					ASM(ADD64rr, result_reg, right_reg);
-					generate_raw_jump(Jump::jo, slow);
-					break;
-				case ZEND_SUB:
-					ASM(SUB64rr, result_reg, right_reg);
-					generate_raw_jump(Jump::jo, slow);
-					break;
-				case ZEND_BW_OR:
-					ASM(OR64rr, result_reg, right_reg);
-					break;
-				case ZEND_BW_AND:
-					ASM(AND64rr, result_reg, right_reg);
-					break;
-				case ZEND_BW_XOR:
-					ASM(XOR64rr, result_reg, right_reg);
-					break;
-				case ZEND_SPACESHIP: {
-					ScratchReg less{this};
-					auto less_reg = less.alloc_gp();
-					ASM(CMP64rr, result_reg, right_reg);
-					generate_raw_set(Jump::jl, less_reg);
-					generate_raw_set(Jump::jg, result_reg);
-					ASM(SUB64rr, result_reg, less_reg);
-					break;
-				}
-				case ZEND_IS_IDENTICAL:
-				case ZEND_IS_EQUAL:
-					ASM(CMP64rr, result_reg, right_reg);
-					generate_raw_set(Jump::je, result_reg);
-					break;
-				case ZEND_IS_NOT_IDENTICAL:
-				case ZEND_IS_NOT_EQUAL:
-					ASM(CMP64rr, result_reg, right_reg);
-					generate_raw_set(Jump::jne, result_reg);
-					break;
-				case ZEND_IS_SMALLER:
-					ASM(CMP64rr, result_reg, right_reg);
-					generate_raw_set(Jump::jl, result_reg);
-					break;
-				case ZEND_IS_SMALLER_OR_EQUAL:
-					ASM(CMP64rr, result_reg, right_reg);
-					generate_raw_set(Jump::jle, result_reg);
-					break;
-				default:
-					return false;
-			}
-		}
-		if (framed_layout || register_result_layout) {
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset)),
-				result_reg);
-			if (boolean_result) {
-				ScratchReg result_type{this};
-				auto result_type_reg = result_type.alloc_gp();
-				ASM(LEA32rm, result_type_reg, FE_MEM(result_reg, 0, FE_NOREG, IS_FALSE));
-				ASM(MOV32mr,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							layout.result_offset
-								+ offsetof(zval, u1.type_info))),
-					result_type_reg);
-			} else {
-				ASM(MOV32mi,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							layout.result_offset
-								+ offsetof(zval, u1.type_info))),
-					IS_LONG);
-			}
-		}
-		if (adaptor->machine_kind(node.result)
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			auto fast_result = result_ref(node.result);
-			auto payload = fast_result.part(0);
-			auto type_info = fast_result.part(1);
-			auto payload_reg = payload.alloc_reg();
-			auto type_info_reg = type_info.alloc_reg();
-			ASM(MOV64rr, payload_reg, result_reg);
-			if (boolean_result) {
-				ASM(LEA32rm, type_info_reg, FE_MEM(result_reg, 0, FE_NOREG, IS_FALSE));
-			} else {
-				ASM(MOV32ri, type_info_reg, IS_LONG);
-			}
-			payload.set_modified();
-			type_info.set_modified();
-		} else {
-			auto [fast_result_ref, fast_result] =
-				result_ref_single(node.result);
-			auto fast_result_reg = fast_result.alloc_reg();
-			ASM(MOV64rr, fast_result_reg, result_reg);
-			fast_result.set_modified();
-		}
-		finish_guarded_with(slow, done, std::move(decision),
-			[&] { result_value.reset(); }, guarded_successors);
-		return true;
-	};
-	auto long_assign_op = [&]() {
-		zend_tpde_long_assign_op layout;
-
-		if (!zend_tpde_long_assign_op_at(mir, &layout)
-				|| layout.left_offset > INT32_MAX - 8
-				|| layout.right.offset > INT32_MAX - 8
-				|| layout.result_offset > INT32_MAX - 8) {
-			return branch_to_guarded_cold();
-		}
-		if (layout.has_result != node.has_result
-				&& !(node.mutation_result
-					&& !layout.has_result && node.has_result)) {
-			return branch_to_guarded_cold();
-		}
-		/* ASSIGN_OP is always guarded (see freeze_machine_control_flow()),
-		 * also in typed bodies. */
-		ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
-		const auto guarded_successors = guarded_successors_of(node);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg type{this};
-		ScratchReg left{this};
-		ScratchReg right{this};
-		ScratchReg decision{this};
-		auto type_reg = type.alloc_gp();
-		auto left_reg = left.alloc_gp();
-		auto right_reg = right.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-		/* A lazy mutation leaves its result in the register only when it
-		 * read the previous value from the register too: a value read
-		 * from the slot is the slot's, which the result must update. */
-		bool left_from_register = false;
-
-			if (node.assign_op_left_operand_index < node.operands.size()
-					&& adaptor->representation(
-						node.operands[node.assign_op_left_operand_index])
-						== ZEND_MIR_REPRESENTATION_I64
-					&& adaptor->exact_type(
-						node.operands[node.assign_op_left_operand_index])
-						== ZEND_MIR_SCALAR_TYPE_I64
-					&& adaptor->machine_kind(
-						node.operands[node.assign_op_left_operand_index])
-						== ZEND_TPDE_MACHINE_VALUE_I64) {
-				auto [left_ref, left_value] =
-					val_ref_single(
-						node.operands[node.assign_op_left_operand_index]);
-				ASM(MOV64rr, left_reg, left_value.load_to_reg());
-				left_from_register = true;
-			} else if (node.assign_op_left_operand_index < node.operands.size()
-					&& adaptor->machine_kind(
-						node.operands[node.assign_op_left_operand_index])
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				auto left_value = val_ref(
-					node.operands[node.assign_op_left_operand_index]);
-			auto payload = left_value.part(0);
-			auto type_info = left_value.part(1);
-			ASM(MOV64rr, left_reg, payload.load_to_reg());
-			ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			left_from_register = true;
-		} else {
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.left_offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, left_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.left_offset)));
-		}
-
-			if (node.assign_op_right_operand_index < node.operands.size()
-					&& adaptor->representation(
-						node.operands[node.assign_op_right_operand_index])
-						== ZEND_MIR_REPRESENTATION_I64
-					&& adaptor->exact_type(
-						node.operands[node.assign_op_right_operand_index])
-						== ZEND_MIR_SCALAR_TYPE_I64
-					&& adaptor->machine_kind(
-						node.operands[node.assign_op_right_operand_index])
-						== ZEND_TPDE_MACHINE_VALUE_I64) {
-				auto [right_ref, right_value] =
-					val_ref_single(
-						node.operands[node.assign_op_right_operand_index]);
-				ASM(MOV64rr, right_reg, right_value.load_to_reg());
-			} else if (node.assign_op_right_operand_index < node.operands.size()
-					&& adaptor->machine_kind(
-						node.operands[node.assign_op_right_operand_index])
-						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				auto right_value = val_ref(
-					node.operands[node.assign_op_right_operand_index]);
-			auto payload = right_value.part(0);
-			auto type_info = right_value.part(1);
-			auto payload_reg = payload.load_to_reg();
-			auto type_info_reg = type_info.load_to_reg();
-			ASM(MOV64rr, right_reg, payload_reg);
-			ASM(CMP8ri, type_info_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-		} else if (layout.right.literal) {
-			if (node.machine_reference_operand_index
-						>= node.operands.size()) {
-				return branch_to_guarded_cold();
-			}
-			auto [literal_ref, literal] = val_ref_single(
-				node.operands[node.machine_reference_operand_index]);
-			auto literal_reg = literal.load_to_reg();
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(literal_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, right_reg,
-				FE_MEM(literal_reg, 0, FE_NOREG, 0));
-		} else {
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.right.offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, right_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.right.offset)));
-		}
-
-		if (layout.has_result) {
-			ASM(TEST32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.result_offset
-							+ offsetof(zval, u1.type_info))),
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::jne, slow);
-		}
-
-		switch (layout.source_opcode) {
-			case ZEND_ADD:
-				ASM(ADD64rr, left_reg, right_reg);
-				generate_raw_jump(Jump::jo, slow);
-				break;
-			case ZEND_SUB:
-				ASM(SUB64rr, left_reg, right_reg);
-				generate_raw_jump(Jump::jo, slow);
-				break;
-			case ZEND_BW_OR:
-				ASM(OR64rr, left_reg, right_reg);
-				break;
-			case ZEND_BW_AND:
-				ASM(AND64rr, left_reg, right_reg);
-				break;
-			case ZEND_BW_XOR:
-				ASM(XOR64rr, left_reg, right_reg);
-				break;
-			default:
-				return false;
-		}
-		if (node.mutation_result) {
-			if (adaptor->machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_I64) {
-				auto [result_ref, result] =
-					result_ref_single(node.result);
-				auto result_reg = result.alloc_reg();
-				ASM(MOV64rr, result_reg, left_reg);
-				result.set_modified();
-			} else if (adaptor->machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				auto result = result_ref(node.result);
-				const ValueParts parts = val_parts(node.result);
-				for (uint32_t part = 0; part < parts.count(); ++part) {
-					auto value = result.part(part);
-					auto value_reg = value.alloc_reg();
-					const zend_tpde_machine_part_role role =
-						parts.representation.parts[part].semantic_role;
-					if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
-						ASM(MOV64rr, value_reg, left_reg);
-					} else if (role
-							== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-						ASM(MOV32ri, value_reg, IS_LONG);
-					} else {
-						return false;
-					}
-					value.set_modified();
-				}
-			} else {
-				return false;
-			}
-		}
-		if (!(node.mutation_result && mir.mutation_lazy_scalar
-				&& left_from_register)) {
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.left_offset)),
-				left_reg);
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.left_offset + offsetof(zval, u1.type_info))),
-				IS_LONG);
-		}
-		if (layout.has_result) {
-			auto [result_ref, result] =
-				result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			ASM(MOV64rr, result_reg, left_reg);
-			result.set_modified();
-		}
-		if (layout.consume_right) {
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.right.offset
-						+ offsetof(zval, u1.type_info))),
-				IS_UNDEF);
-		}
-		type.reset();
-		left.reset();
-		right.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			guarded_successors);
-		return true;
-	};
-	auto long_incdec = [&]() {
-		zend_tpde_long_incdec layout;
-
-		if (!zend_tpde_long_incdec_at(mir, &layout, true)
-				|| layout.operand_offset > INT32_MAX - 8
-				|| layout.result_offset > INT32_MAX - 8
-				|| (layout.indirect
-					&& (node.mutation_result || mir.mutation_lazy_scalar
-						|| (!node.operands.empty()
-							&& node.operands[0]
-								!= IRValueRef{Adaptor::FRAME_VALUE})))) {
-			return branch_to_guarded_cold();
-		}
-		/* A result without a machine value is published to its slot. */
-		if (layout.has_result != node.has_result
-				&& !(node.mutation_result
-					&& !layout.has_result && node.has_result)
-				&& !(layout.has_result && !node.has_result)) {
-			return branch_to_guarded_cold();
-		}
-		/* INCDEC is always guarded (see freeze_machine_control_flow()),
-		 * also in typed bodies. */
-		ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
-		const bool machine_result = node.has_result;
-		const auto guarded_successors = guarded_successors_of(node);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg type{this};
-		ScratchReg value{this};
-		ScratchReg limit{this};
-		ScratchReg decision{this};
-		auto type_reg = type.alloc_gp();
-		auto value_reg = value.alloc_gp();
-		auto limit_reg = limit.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-		/* Address of the updated integer when it is not the CV slot itself. */
-		ScratchReg target{this};
-		AsmReg target_reg{};
-		/* As for ASSIGN_OP: only a value read from the register may leave
-		 * the slot behind. */
-		const bool lazy_register_operand =
-			node.mutation_result && mir.mutation_lazy_scalar
-			&& !node.operands.empty()
-			&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-			&& ((adaptor->representation(node.operands[0])
-						== ZEND_MIR_REPRESENTATION_I64
-					&& adaptor->exact_type(node.operands[0])
-						== ZEND_MIR_SCALAR_TYPE_I64
-					&& adaptor->machine_kind(node.operands[0])
-						== ZEND_TPDE_MACHINE_VALUE_I64)
-				|| adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
-
-		if (!node.operands.empty()
-				&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-				&& adaptor->representation(node.operands[0])
-					== ZEND_MIR_REPRESENTATION_I64
-				&& adaptor->exact_type(node.operands[0])
-					== ZEND_MIR_SCALAR_TYPE_I64
-				&& adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_I64) {
-			auto [operand_ref, operand] =
-				val_ref_single(node.operands[0]);
-			ASM(MOV64rr, value_reg, operand.load_to_reg());
-		} else if (!node.operands.empty()
-				&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
-				&& adaptor->machine_kind(node.operands[0])
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			auto operand = val_ref(node.operands[0]);
-			auto payload = operand.part(0);
-			auto type_info = operand.part(1);
-			ASM(MOV64rr, value_reg, payload.load_to_reg());
-			ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-		} else if (layout.indirect) {
-			/*
-			 * ++/-- through a write fetch (++$a[$k]): the VAR holds the
-			 * INDIRECT to the element. An integer or an untyped reference's
-			 * integer is updated in place; the helper does the rest.
-			 */
-			auto loaded = text_writer.label_create();
-			target_reg = target.alloc_gp();
-			ASM(CMP8mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.operand_offset
-							+ offsetof(zval, u1.type_info))),
-				IS_INDIRECT);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, target_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(target_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			emit_cold_branch(Jump::jne, loaded, [&] {
-				ASM(CMP32ri, type_reg, IS_REFERENCE);
-				generate_raw_jump(Jump::jne, slow);
-				ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
-				ASM(CMP64mi,
-					FE_MEM(target_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_reference, sources.ptr))),
-					0);
-				generate_raw_jump(Jump::jne, slow);
-				ASM(ADD64ri, target_reg,
-					static_cast<int32_t>(offsetof(zend_reference, val)));
-				ASM(CMP8mi,
-					FE_MEM(target_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zval, u1.type_info))),
-					IS_LONG);
-				generate_raw_jump(Jump::jne, slow);
-			});
-			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
-		} else if (!lazy_register_operand) {
-			/*
-			 * The CV may hold a reference, as for an int &$value parameter.
-			 * Update an untyped reference's integer in place; typed
-			 * references need the helper's type checks.
-			 */
-			target_reg = target.alloc_gp();
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.operand_offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(LEA64rm, target_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			emit_cold_branch(Jump::jne, text_writer.label_create(), [&] {
-				ASM(CMP32ri, type_reg, IS_REFERENCE);
-				generate_raw_jump(Jump::jne, slow);
-				ASM(MOV64rm, target_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
-				ASM(CMP64mi,
-					FE_MEM(target_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_reference, sources.ptr))),
-					0);
-				generate_raw_jump(Jump::jne, slow);
-				ASM(ADD64ri, target_reg,
-					static_cast<int32_t>(offsetof(zend_reference, val)));
-				ASM(MOVZXr32m8, type_reg,
-					FE_MEM(target_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zval, u1.type_info))));
-				ASM(CMP32ri, type_reg, IS_LONG);
-				generate_raw_jump(Jump::jne, slow);
-			});
-			ASM(MOV64rm, value_reg, FE_MEM(target_reg, 0, FE_NOREG, 0));
-		} else {
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.operand_offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, type_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, value_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-		}
-		/* The add overflows exactly at ZEND_LONG_MAX (ZEND_LONG_MIN), which
-		 * the helper turns into a double; nothing is written before. */
-		const int32_t step = layout.increment ? 1 : -1;
-		ASM(ADD64ri, value_reg, step);
-		generate_raw_jump(Jump::jo, slow);
-
-		if (layout.has_result) {
-			ASM(TEST32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.result_offset
-							+ offsetof(zval, u1.type_info))),
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::jne, slow);
-			if (layout.post) {
-				if (machine_result) {
-					auto [result_ref, result] =
-						result_ref_single(node.result);
-					auto result_reg = result.alloc_reg();
-					ASM(LEA64rm, result_reg,
-						FE_MEM(value_reg, 0, FE_NOREG, -step));
-					result.set_modified();
-				} else {
-					ASM(LEA64rm, limit_reg,
-						FE_MEM(value_reg, 0, FE_NOREG, -step));
-					ASM(MOV64mr,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(layout.result_offset)),
-						limit_reg);
-				}
-			}
-		}
-		if (node.mutation_result) {
-			if (adaptor->machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_I64) {
-				auto [result_ref, result] =
-					result_ref_single(node.result);
-				auto result_reg = result.alloc_reg();
-				ASM(MOV64rr, result_reg, value_reg);
-				result.set_modified();
-			} else if (adaptor->machine_kind(node.result)
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-				auto result = result_ref(node.result);
-				const ValueParts parts = val_parts(node.result);
-				for (uint32_t part = 0; part < parts.count(); ++part) {
-					auto result_part = result.part(part);
-					auto result_reg = result_part.alloc_reg();
-					const zend_tpde_machine_part_role role =
-						parts.representation.parts[part].semantic_role;
-					if (role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
-						ASM(MOV64rr, result_reg, value_reg);
-					} else if (role
-							== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-						ASM(MOV32ri, result_reg, IS_LONG);
-					} else {
-						return false;
-					}
-					result_part.set_modified();
-				}
-			} else {
-				return false;
-			}
-		}
-		if (target.has_reg()) {
-			ASM(MOV64mr, FE_MEM(target_reg, 0, FE_NOREG, 0), value_reg);
-		} else if (!lazy_register_operand) {
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)),
-				value_reg);
-		}
-		if (layout.has_result) {
-			if (!layout.post) {
-				if (machine_result) {
-					auto [result_ref, result] =
-						result_ref_single(node.result);
-					auto result_reg = result.alloc_reg();
-					ASM(MOV64rr, result_reg, value_reg);
-					result.set_modified();
-				} else {
-					ASM(MOV64mr,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(layout.result_offset)),
-						value_reg);
-				}
-			}
-			if (!machine_result) {
-				ASM(MOV32mi,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							layout.result_offset
-								+ offsetof(zval, u1.type_info))),
-					IS_LONG);
-			}
-		}
-		type.reset();
-		value.reset();
-		limit.reset();
-		target.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			guarded_successors);
-		return true;
-	};
-	auto slot_isset_empty = [&]() {
-		zend_tpde_slot_isset_empty layout;
-
-		if (!zend_tpde_slot_isset_empty_at(mir, &layout)
-				|| layout.operand_offset
-					> static_cast<uint32_t>(INT32_MAX
-						- offsetof(zval, u1.type_info))
-				|| layout.result_offset
-					> static_cast<uint32_t>(INT32_MAX
-						- offsetof(zval, u1.type_info))) {
-			return branch_to_guarded_cold();
-		}
-		if (!node.has_result
-				&& node.kind != Adaptor::InstKind::GuardedFast) {
-			return branch_to_guarded_cold();
-		}
-		if (!node.has_result
-				&& node.kind == Adaptor::InstKind::GuardedFast
-				&& (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL
-					|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-					|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64)) {
-			auto [frame_ref, frame] =
-				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-			auto frame_scratch = frame_register(std::move(frame));
-			auto frame_reg = frame_scratch.cur_reg();
-			ScratchReg result{this};
-			ScratchReg type{this};
-			auto result_reg = result.alloc_gp();
-			auto type_reg = type.alloc_gp();
-			if (!layout.is_empty) {
-				ASM(MOV32ri, result_reg,
-					node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL ? 0 : 1);
-			} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-				ASM(MOV32ri, result_reg, 1);
-			} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				ASM(MOV32rm, type_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(layout.operand_offset)));
-				ASM(TEST32rr, type_reg, type_reg);
-				generate_raw_set(Jump::je, result_reg);
-			} else {
-				ASM(MOV64rm, type_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(layout.operand_offset)));
-				ASM(TEST64rr, type_reg, type_reg);
-				generate_raw_set(Jump::je, result_reg);
-			}
-			store_boolean_zval(frame_reg,
-				static_cast<int32_t>(layout.result_offset), result_reg,
-				type_reg);
-			const auto successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			generate_branch_to_block(
-				Jump::jmp, successors[0], false, false);
-			return true;
-		}
-		if (node.has_result) {
-			const bool invert_result =
-				(mir.machine_control_flow_flags
-					& ZEND_TPDE_MACHINE_CONTROL_FLOW_INVERT_RESULT) != 0;
-			const bool has_scalar_operand = !node.operands.empty()
-				&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE};
-			const IRValueRef operand = has_scalar_operand
-				? node.operands[0] : IRValueRef{Adaptor::FRAME_VALUE};
-			const zend_mir_scalar_type_mask type = has_scalar_operand
-				? adaptor->exact_type(operand) : node.exact_type;
-			if (type == ZEND_MIR_SCALAR_TYPE_NULL
-					|| type == ZEND_MIR_SCALAR_TYPE_I1
-					|| type == ZEND_MIR_SCALAR_TYPE_I64) {
-				auto [result_ref, result] = result_ref_single(node.result);
-				auto result_reg = result.alloc_reg();
-				if (!layout.is_empty) {
-					ASM(MOV32ri, result_reg,
-						type == ZEND_MIR_SCALAR_TYPE_NULL ? 0 : 1);
-				} else if (type == ZEND_MIR_SCALAR_TYPE_NULL) {
-					ASM(MOV32ri, result_reg, 1);
-				} else if (has_scalar_operand) {
-					auto [operand_ref, value] = val_ref_single(operand);
-					auto value_reg = value.load_to_reg();
-					if (type == ZEND_MIR_SCALAR_TYPE_I1) {
-						ASM(TEST32rr, value_reg, value_reg);
-					} else {
-						ASM(TEST64rr, value_reg, value_reg);
-					}
-					generate_raw_set(
-						invert_result ? Jump::jne : Jump::je, result_reg);
-				} else {
-					auto [frame_ref, frame] =
-						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = frame_register(std::move(frame));
-					ScratchReg value{this};
-					auto value_reg = value.alloc_gp();
-					if (type == ZEND_MIR_SCALAR_TYPE_I1) {
-						ASM(MOV32rm, value_reg,
-							FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
-								static_cast<int32_t>(layout.operand_offset)));
-						ASM(TEST32rr, value_reg, value_reg);
-					} else {
-						ASM(MOV64rm, value_reg,
-							FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
-								static_cast<int32_t>(layout.operand_offset)));
-						ASM(TEST64rr, value_reg, value_reg);
-					}
-					generate_raw_set(
-						invert_result ? Jump::jne : Jump::je, result_reg);
-				}
-				result.set_modified();
-				if (node.kind == Adaptor::InstKind::GuardedFast) {
-					auto [frame_ref, frame] =
-						val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-					auto frame_scratch = frame_register(std::move(frame));
-					ScratchReg result_type{this};
-					store_boolean_zval(frame_scratch.cur_reg(),
-						static_cast<int32_t>(layout.result_offset), result_reg,
-						result_type.alloc_gp());
-					const auto successors = adaptor->block_succs(
-						IRBlockRef{node.control_block});
-					generate_branch_to_block(
-						Jump::jmp, successors[0], false, false);
-				}
-				return true;
-			}
-		}
-		/* The general path decides a guarded node's branch. */
-		if (node.kind != Adaptor::InstKind::GuardedFast) {
-			return false;
-		}
-		auto slow = text_writer.label_create();
-		auto truthy = text_writer.label_create();
-		auto falsey = text_writer.label_create();
-		auto store = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg type{this};
-		ScratchReg value{this};
-		ScratchReg decision{this};
-		auto type_reg = type.alloc_gp();
-		auto value_reg = value.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-
-		if (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-			generate_raw_jump(Jump::jmp,
-				layout.is_empty ? truthy : falsey);
-		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1
-				|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64) {
-			if (!layout.is_empty) {
-				generate_raw_jump(Jump::jmp, truthy);
-			} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				ASM(MOV32rm, value_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(layout.operand_offset)));
-				ASM(TEST32rr, value_reg, value_reg);
-				generate_raw_jump(Jump::jne, truthy);
-				generate_raw_jump(Jump::jmp, falsey);
-			} else {
-				ASM(MOV64rm, value_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(layout.operand_offset)));
-				ASM(TEST64rr, value_reg, value_reg);
-				generate_raw_jump(Jump::jne, truthy);
-				generate_raw_jump(Jump::jmp, falsey);
-			}
-		} else {
-		ASM(MOVZXr32m8, type_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.operand_offset
-						+ offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, type_reg, IS_NULL);
-		generate_raw_jump(Jump::jle, falsey);
-		ASM(CMP32ri, type_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::je, slow);
-		if (!layout.is_empty) {
-			generate_raw_jump(Jump::jmp, truthy);
-		} else {
-			ASM(CMP32ri, type_reg, IS_FALSE);
-			generate_raw_jump(Jump::je, falsey);
-			ASM(CMP32ri, type_reg, IS_TRUE);
-			generate_raw_jump(Jump::je, truthy);
-			ASM(CMP32ri, type_reg, IS_LONG);
-			auto not_long = text_writer.label_create();
-			generate_raw_jump(Jump::jne, not_long);
-			ASM(MOV64rm, value_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(TEST64rr, value_reg, value_reg);
-			generate_raw_jump(Jump::jne, truthy);
-			generate_raw_jump(Jump::jmp, falsey);
-
-			label_place(not_long);
-			ASM(CMP32ri, type_reg, IS_STRING);
-			auto not_string = text_writer.label_create();
-			generate_raw_jump(Jump::jne, not_string);
-			ASM(MOV64rm, value_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(MOV64rm, type_reg,
-				FE_MEM(value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_string, len))));
-			ASM(TEST64rr, type_reg, type_reg);
-			generate_raw_jump(Jump::je, falsey);
-			ASM(CMP64ri, type_reg, 1);
-			generate_raw_jump(Jump::jne, truthy);
-			ASM(MOVZXr32m8, type_reg,
-				FE_MEM(value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_string, val))));
-			ASM(CMP32ri, type_reg, '0');
-			generate_raw_jump(Jump::je, falsey);
-			generate_raw_jump(Jump::jmp, truthy);
-
-			label_place(not_string);
-			ASM(CMP32ri, type_reg, IS_ARRAY);
-			auto not_array = text_writer.label_create();
-			generate_raw_jump(Jump::jne, not_array);
-			ASM(MOV64rm, value_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(MOV32rm, type_reg,
-				FE_MEM(value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(HashTable, nNumOfElements))));
-			ASM(TEST32rr, type_reg, type_reg);
-			generate_raw_jump(Jump::jne, truthy);
-			generate_raw_jump(Jump::jmp, falsey);
-
-			label_place(not_array);
-			ASM(CMP32ri, type_reg, IS_RESOURCE);
-			auto not_resource = text_writer.label_create();
-			generate_raw_jump(Jump::jne, not_resource);
-			ASM(MOV64rm, value_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(MOV32rm, type_reg,
-				FE_MEM(value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_resource, handle))));
-			ASM(TEST32rr, type_reg, type_reg);
-			generate_raw_jump(Jump::jne, truthy);
-			generate_raw_jump(Jump::jmp, falsey);
-			label_place(not_resource);
-			generate_raw_jump(Jump::jmp, slow);
-		}
-		}
-
-		label_place(truthy);
-		ASM(MOV32ri, type_reg, layout.is_empty ? 0 : 1);
-		generate_raw_jump(Jump::jmp, store);
-		label_place(falsey);
-		ASM(MOV32ri, type_reg, layout.is_empty ? 1 : 0);
-		label_place(store);
-		if (node.has_result) {
-			auto [result_ref, result] =
-				result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			ASM(MOV32rr, result_reg, type_reg);
-			result.set_modified();
-		} else {
-			store_boolean_zval(frame_reg,
-				static_cast<int32_t>(layout.result_offset), type_reg,
-				value_reg);
-		}
-		type.reset();
-		value.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			guarded_successors_of(node));
-		return true;
-	};
-	auto object_property_read = [&]() {
-		zend_tpde_object_property_read layout;
-		const zend_tpde_machine_reference *property_reference =
-			operation_machine_reference(
-				ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT);
-
-		/* A result without a machine value lives only in its temporary:
-		 * the copy goes there, as the helper's cached read puts it. */
-		const bool frame_result = !node.has_result
-			&& (mir.value_operation.result.slot_kind
-					== ZEND_MIR_SOURCE_SLOT_TMP
-				|| mir.value_operation.result.slot_kind
-					== ZEND_MIR_SOURCE_SLOT_VAR);
-		const bool isset_read = record.opcode
-			== ZEND_MIR_OPCODE_OBJECT_FETCH_IS;
-		const bool func_arg_read = record.opcode
-			== ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG;
-		if (!(isset_read
-					? frame_result
-						&& zend_tpde_object_property_isset_read_at(
-							mir, &layout)
-					: func_arg_read
-						? frame_result
-							&& zend_tpde_object_property_func_arg_read_at(
-								mir, &layout)
-						: zend_tpde_object_property_read_at(mir, &layout))
-				|| (!frame_result && !node.has_result)
-				|| (!frame_result
-					&& (property_reference == nullptr
-						|| property_reference->stable_storage_or_layout_id
-							!= layout.cache_offset
-						|| property_reference->access_width
-							!= sizeof(zval)))
-				|| layout.receiver_offset > INT32_MAX
-				|| layout.result_offset > INT32_MAX
-				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)
-				|| node.kind != Adaptor::InstKind::GuardedFast) {
-			return branch_to_guarded_cold();
-		}
-		const auto guarded_successors = guarded_successors_of(node);
-		const zend_tpde_machine_value_kind result_kind = frame_result
-			? ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			: adaptor->machine_kind(node.result);
-		const zend_mir_scalar_type_mask exact = frame_result
-			? ZEND_MIR_SCALAR_TYPE_NONE : adaptor->exact_type(node.result);
-		const bool boxed = result_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-		const bool pointer = result_kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| result_kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
-		if (!boxed && exact != ZEND_MIR_SCALAR_TYPE_I1
-				&& exact != ZEND_MIR_SCALAR_TYPE_I64
-				&& exact != ZEND_MIR_SCALAR_TYPE_F64 && !pointer) {
-			return false;
-		}
-		/*
-		 * The declared property the VM run-time cache names is probed by
-		 * zend_native_property_slot(); a miss leaves everything unchanged and
-		 * takes the guarded cold block, whose helper repeats the fetch.
-		 */
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg decision{this};
-		auto decision_reg = decision.alloc_gp();
-		{
-			ScratchReg cache{this};
-			auto cache_reg = cache.alloc_gp();
-			if (func_arg_read) {
-				/* An argument sent by reference fetches for writing. */
-				ASM(MOV64rm, cache_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_execute_data, call))));
-				ASM(TEST32mi,
-					FE_MEM(cache_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_execute_data, This)
-							+ offsetof(zval, u1.type_info))),
-					static_cast<int32_t>(ZEND_CALL_SEND_ARG_BY_REF));
-				generate_raw_jump(Jump::jne, slow);
-			}
-			ASM(MOV64rm, cache_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_execute_data, run_time_cache))));
-			ASM(TEST64rr, cache_reg, cache_reg);
-			generate_raw_jump(Jump::je, slow);
-			/* A reference property reads as its value (ZVAL_COPY_DEREF). */
-			ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_property_read_slot(
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(layout.receiver_offset)}},
-					GenericValuePart{GenericValuePart::Expr{
-						std::move(cache),
-						static_cast<int64_t>(layout.cache_offset)}},
-					slot)) {
-				return false;
-			}
-			const AsmReg slot_reg = slot.cur_reg_or_load(this);
-			ASM(TEST64rr, slot_reg, slot_reg);
-			generate_raw_jump(Jump::je, slow);
-			GenericValuePart property{
-				GenericValuePart::Expr{slot_reg, 0}};
-			bool encoded;
-			if (frame_result) {
-				ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
-				ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 4};
-				encoded = EncodeBase::encode_zend_native_zval_copy(
-					std::move(property), payload, type_info);
-				if (encoded) {
-					ASM(MOV64mr,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(layout.result_offset)),
-						payload.cur_reg_or_load(this));
-					ASM(MOV32mr,
-						FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(layout.result_offset
-								+ offsetof(zval, u1.type_info))),
-						type_info.cur_reg_or_load(this));
-				}
-				payload.reset(this);
-				type_info.reset(this);
-				slot.reset(this);
-				if (!encoded) {
-					return false;
-				}
-			} else {
-				auto result = result_ref(node.result);
-				if (boxed) {
-					/* An owned copy, published to the result temporary as the
-					 * helper does, since consumers such as RETURN read it there. */
-					auto payload = result.part(0);
-					auto type_info = result.part(1);
-					encoded = EncodeBase::encode_zend_native_zval_copy(
-						std::move(property), payload, type_info);
-					if (encoded) {
-						ASM(MOV64mr,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(layout.result_offset)),
-							payload.load_to_reg());
-						ASM(MOV32mr,
-							FE_MEM(frame_reg, 0, FE_NOREG,
-								static_cast<int32_t>(layout.result_offset
-									+ offsetof(zval, u1.type_info))),
-							type_info.load_to_reg());
-					}
-				} else if (exact == ZEND_MIR_SCALAR_TYPE_I1) {
-					encoded = EncodeBase::encode_zend_native_zval_is_true_type(
-						std::move(property), result.part(0));
-				} else if (exact == ZEND_MIR_SCALAR_TYPE_F64) {
-					encoded = EncodeBase::encode_zend_native_load_f64(
-						std::move(property), result.part(0));
-				} else {
-					encoded = EncodeBase::encode_zend_native_load_u64(
-						std::move(property), result.part(0));
-				}
-				slot.reset(this);
-				if (!encoded) {
-					return false;
-				}
-			}
-		}
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			guarded_successors);
-		return true;
-	};
-	/*
-	 * FETCH_OBJ_W of a cached untyped declared property: the VAR result
-	 * addresses the slot through IS_INDIRECT, as the helper's cached fetch
-	 * does; anything else takes the guarded cold block.
-	 */
-	auto object_property_address = [&]() {
-		zend_tpde_object_property_read layout;
-
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| node.has_result
-				|| !zend_tpde_object_property_write_fetch_at(mir, &layout)
-				|| layout.receiver_offset > INT32_MAX
-				|| layout.result_offset > INT32_MAX
-				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
-			return branch_to_guarded_cold();
-		}
-		const auto guarded_successors = guarded_successors_of(node);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg decision{this};
-		auto decision_reg = decision.alloc_gp();
-		{
-			ScratchReg cache{this};
-			auto cache_reg = cache.alloc_gp();
-			ASM(MOV64rm, cache_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_execute_data, run_time_cache))));
-			ASM(TEST64rr, cache_reg, cache_reg);
-			generate_raw_jump(Jump::je, slow);
-			/* A typed property's info in the cache entry needs the
-			 * helper's checks. */
-			ASM(CMP64mi,
-				FE_MEM(cache_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.cache_offset + 2 * sizeof(void *))),
-				0);
-			generate_raw_jump(Jump::jne, slow);
-			ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!EncodeBase::encode_zend_native_property_slot(
-					GenericValuePart{GenericValuePart::Expr{frame_reg,
-						static_cast<int64_t>(layout.receiver_offset)}},
-					GenericValuePart{GenericValuePart::Expr{
-						std::move(cache),
-						static_cast<int64_t>(layout.cache_offset)}},
-					slot)) {
-				return false;
-			}
-			const AsmReg slot_reg = slot.cur_reg_or_load(this);
-			ASM(TEST64rr, slot_reg, slot_reg);
-			generate_raw_jump(Jump::je, slow);
-			ASM(MOV64mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset)),
-				slot_reg);
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_INDIRECT);
-			slot.reset(this);
-		}
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			guarded_successors);
-		return true;
-	};
-	auto object_property_write = [&]() {
-		zend_tpde_object_property_write layout;
-		const zend_tpde_machine_reference *property_reference =
-			operation_machine_reference(
-				ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT);
-
-		if (!zend_tpde_object_property_write_at(mir, &layout)
-				|| property_reference == nullptr
-				|| property_reference->stable_storage_or_layout_id
-					!= layout.cache_offset
-				|| property_reference->access_width != sizeof(zval)
-				|| layout.receiver_offset > INT32_MAX
-				|| layout.value_offset > INT32_MAX
-				|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
-			return execute_value_operation();
-		}
-		if (node.kind != Adaptor::InstKind::GuardedFast
-				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
-			return false;
-		}
-		const bool scalar_value =
-			node.property_write_value_operand_index != UINT32_MAX
-			&& node.property_write_value_operand_index < node.operands.size()
-			&& adaptor->machine_kind(node.operands[
-				node.property_write_value_operand_index])
-				== ZEND_TPDE_MACHINE_VALUE_I64
-			&& adaptor->exact_type(node.operands[
-				node.property_write_value_operand_index])
-				== ZEND_MIR_SCALAR_TYPE_I64;
-		const auto successors = guarded_successors_of(node);
-		auto slow = text_writer.label_create();
-		auto property_metadata_valid = text_writer.label_create();
-		auto old_released = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg object{this};
-		ScratchReg cache{this};
-		ScratchReg offset{this};
-		ScratchReg property{this};
-		ScratchReg type{this};
-		ScratchReg low_word{this};
-		ScratchReg decision{this};
-		auto object_reg = object.alloc_gp();
-		auto cache_reg = cache.alloc_gp();
-		auto offset_reg = offset.alloc_gp();
-		auto property_reg = property.alloc_gp();
-		auto type_reg = type.alloc_gp();
-		auto low_word_reg = low_word.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-		ASM(MOVZXr32m8, type_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.receiver_offset
-						+ offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, type_reg, IS_OBJECT);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, object_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.receiver_offset)));
-		ASM(MOV32rm, offset_reg,
-			FE_MEM(object_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_object, extra_flags))));
-		ASM(TEST32ri, offset_reg,
-			IS_OBJ_LAZY_UNINITIALIZED | IS_OBJ_LAZY_PROXY);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, cache_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_execute_data, run_time_cache))));
-		ASM(TEST64rr, cache_reg, cache_reg);
-		generate_raw_jump(Jump::je, slow);
-		ASM(MOV64rm, type_reg,
-			FE_MEM(object_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_object, ce))));
-		ASM(MOV64rm, offset_reg,
-			FE_MEM(type_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_class_entry, create_object))));
-		ASM(TEST64rr, offset_reg, offset_reg);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, property_reg,
-			FE_MEM(cache_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.cache_offset)));
-		ASM(CMP64rr, type_reg, property_reg);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, offset_reg,
-			FE_MEM(cache_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.cache_offset + sizeof(void *))));
-		ASM(CMP64ri, offset_reg, ZEND_FIRST_PROPERTY_OFFSET);
-		generate_raw_jump(Jump::jl, slow);
-		ASM(MOV64rm, type_reg,
-			FE_MEM(cache_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.cache_offset + 2 * sizeof(void *))));
-		ASM(TEST64rr, type_reg, type_reg);
-		generate_raw_jump(Jump::je, property_metadata_valid);
-		ASM(MOV32rm, cache_reg,
-			FE_MEM(type_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_property_info, flags))));
-		ASM(TEST32ri, cache_reg, ZEND_ACC_READONLY);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(TEST32ri, cache_reg, ZEND_ACC_PPP_SET_MASK);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, cache_reg,
-			FE_MEM(type_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_property_info, hooks))));
-		ASM(TEST64rr, cache_reg, cache_reg);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV32rm, cache_reg,
-			FE_MEM(type_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_property_info, type)
-						+ offsetof(zend_type, type_mask))));
-		ASM(TEST32ri, cache_reg, 1u << IS_LONG);
-		generate_raw_jump(Jump::je, slow);
-		if (!scalar_value) {
-			AsmReg value_base = frame_reg;
-			if (layout.literal_value) {
-				emit_literal_base(cache_reg, frame_reg);
-				value_base = cache_reg;
-			}
-			ASM(MOVZXr32m8, cache_reg,
-				FE_MEM(value_base, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.value_offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(CMP32ri, cache_reg, IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
-		}
-		label_place(property_metadata_valid);
-		ASM(MOV64rr, property_reg, object_reg);
-		ASM(ADD64rr, property_reg, offset_reg);
-		ASM(MOV32rm, type_reg,
-			FE_MEM(property_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(CMP8ri, type_reg, IS_UNDEF);
-		generate_raw_jump(Jump::je, slow);
-		ASM(CMP8ri, type_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::je, slow);
-
-		if (scalar_value) {
-			ASM(MOV32ri, type_reg, IS_LONG);
-		} else {
-			AsmReg value_base = frame_reg;
-			if (layout.literal_value) {
-				emit_literal_base(low_word_reg, frame_reg);
-				value_base = low_word_reg;
-			}
-			ASM(MOV32rm, type_reg,
-				FE_MEM(value_base, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.value_offset
-							+ offsetof(zval, u1.type_info))));
-			ASM(CMP8ri, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::je, slow);
-		}
-
-		ASM(TEST8mi,
-			FE_MEM(property_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.v.type_flags))),
-			IS_TYPE_REFCOUNTED);
-		generate_raw_jump(Jump::je, old_released);
-		ASM(MOV64rm, cache_reg,
-			FE_MEM(property_reg, 0, FE_NOREG, 0));
-		ASM(MOV32rm, offset_reg,
-			FE_MEM(cache_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))));
-		ASM(CMP32ri, offset_reg, 1);
-		generate_raw_jump(Jump::jle, slow);
-		ASM(SUB32mi,
-			FE_MEM(cache_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))),
-			1);
-		label_place(old_released);
-
-		if (scalar_value) {
-			auto [value_ref, value] = val_ref_single(node.operands[
-				node.property_write_value_operand_index]);
-			auto value_reg = value.load_to_reg();
-			ASM(MOV64rr, low_word_reg, value_reg);
-		} else {
-			/* For a literal, low_word still holds the literal base. */
-			ASM(MOV64rm, low_word_reg,
-				FE_MEM(layout.literal_value ? low_word_reg : frame_reg, 0,
-					FE_NOREG, static_cast<int32_t>(layout.value_offset)));
-		}
-		if (!scalar_value && !layout.move_value) {
-			emit_try_addref(type_reg, low_word_reg);
-		}
-		ASM(MOV64mr,
-			FE_MEM(property_reg, 0, FE_NOREG, 0), low_word_reg);
-		ASM(MOV32mr,
-			FE_MEM(property_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))),
-			type_reg);
-		if (layout.move_value) {
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						layout.value_offset
-							+ offsetof(zval, u1.type_info))),
-				IS_UNDEF);
-		}
-		finish_guarded_with(slow, done, std::move(decision), [&] {
-			object.reset();
-			cache.reset();
-			offset.reset();
-			property.reset();
-			type.reset();
-			low_word.reset();
-		}, successors);
-		return true;
-	};
-	/*
-	 * FETCH_CONSTANT reads the constant the runtime cache slot names, like
-	 * the VM: a cached constant with a non-refcounted value is copied to the
-	 * result slot inline. An empty or special slot, a counted value and a
-	 * result held in registers use the helper, which also fills the slot.
-	 */
-	auto fetch_constant_inline = [&]() {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		/* FETCH_CONSTANT is never guarded (see
-		 * freeze_machine_control_flow()): the helper runs inline when the
-		 * cached constant is missing or counted. */
-		bool frame_operands = node.kind == Adaptor::InstKind::MIR
-			&& !node.has_result
-			&& mir.has_value_operation
-			&& operation.source_opcode == ZEND_FETCH_CONSTANT
-			&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-				|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
-			&& zend_mir_id_is_valid(operation.result_storage_id)
-			&& operation.extended_value <= INT32_MAX - sizeof(void *);
-		frame_operands = frame_operands && frame_only_operands(node);
-		const uint64_t result_offset64 =
-			frame_slot_offset(operation.result_storage_id);
-		if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
-			return execute_value_operation();
-		}
-		const int32_t result_offset = static_cast<int32_t>(result_offset64);
-		const auto spilled = spill_before_branch(true);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		{
-			const AsmReg frame_reg = canonical_frame_register();
-			ScratchReg constant{this};
-			ScratchReg type{this};
-			auto constant_reg = constant.alloc_gp();
-			auto type_reg = type.alloc_gp();
-			ASM(MOV64rm, constant_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_execute_data, run_time_cache))));
-			ASM(TEST64rr, constant_reg, constant_reg);
-			generate_raw_jump(Jump::je, slow);
-			ASM(MOV64rm, constant_reg,
-				FE_MEM(constant_reg, 0, FE_NOREG,
-					static_cast<int32_t>(operation.extended_value)));
-			ASM(TEST64rr, constant_reg, constant_reg);
-			generate_raw_jump(Jump::je, slow);
-			ASM(TEST32ri, constant_reg, CACHE_SPECIAL);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV32rm, type_reg,
-				FE_MEM(constant_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_constant, value)
-						+ offsetof(zval, u1.type_info))));
-			ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG, result_offset
-					+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				type_reg);
-			ASM(MOV64rm, constant_reg,
-				FE_MEM(constant_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_constant, value))));
-			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
-				constant_reg);
-			generate_raw_jump(Jump::jmp, done);
-		}
-		label_place(slow);
-		if (!execute_value_operation()) {
-			return false;
-		}
-		label_place(done);
-		release_spilled_regs(spilled);
-		return true;
-	};
-	/*
-	 * BIND_GLOBAL of a CV as the VM binds it: the run-time cache keeps the
-	 * global's bucket offset in EG(symbol_table); while that bucket still
-	 * holds the name and a reference, the CV takes another reference to
-	 * it. Anything else, including a CV that holds a counted value, runs
-	 * the helper, which also refreshes the cached offset. A non-ZTS build
-	 * reads EG(symbol_table)'s address from the execution context.
-	 */
-	auto bind_global_inline = [&]() {
-#ifdef ZTS
-		return execute_value_operation();
-#else
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		bool frame_operands = node.kind == Adaptor::InstKind::MIR
-			&& !node.has_result && mir.has_value_operation
-			&& operation.source_opcode == ZEND_BIND_GLOBAL
-			&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-			&& zend_mir_id_is_valid(operation.op1_storage_id)
-			&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& operation.extended_value <= INT32_MAX - sizeof(void *)
-			&& uint64_t{operation.op2.index} * sizeof(zval) <= INT32_MAX;
-		frame_operands = frame_operands && frame_only_operands(node);
-		const uint64_t local_offset64 =
-			frame_slot_offset(operation.op1_storage_id);
-		/* Images outlive the process (the OPcache file cache): the symbol
-		 * table comes from the context. */
-		if (!frame_operands || local_offset64 > INT32_MAX - sizeof(zval)
-				|| val_assignment(adaptor->val_local_idx(IRValueRef{
-					Adaptor::EXECUTION_CONTEXT_ARGUMENT})) == nullptr) {
-			return execute_value_operation();
-		}
-		const int32_t local_offset = static_cast<int32_t>(local_offset64);
-		const AsmReg symbol_context_reg = canonical_value_register(
-			IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
-		const auto spilled = spill_before_branch(true);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		{
-			const AsmReg frame_reg = canonical_frame_register();
-			ScratchReg offset{this};
-			ScratchReg table{this};
-			ScratchReg bucket{this};
-			auto offset_reg = offset.alloc_gp();
-			auto table_reg = table.alloc_gp();
-			auto bucket_reg = bucket.alloc_gp();
-			ASM(MOV64rm, offset_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(
-					offsetof(zend_execute_data, run_time_cache))));
-			ASM(TEST64rr, offset_reg, offset_reg);
-			generate_raw_jump(Jump::je, slow);
-			/* The cache holds offset + 1; an empty slot wraps below. */
-			ASM(MOV64rm, offset_reg, FE_MEM(offset_reg, 0, FE_NOREG,
-				static_cast<int32_t>(operation.extended_value)));
-			ASM(SUB64ri, offset_reg, 1);
-			ASM(MOV64rm, table_reg, FE_MEM(symbol_context_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(
-					zend_native_execution_context, symbol_table))));
-			ASM(MOV32rm, bucket_reg, FE_MEM(table_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, nNumUsed))));
-			ASM(SHL64ri, bucket_reg, 5);
-			static_assert(sizeof(Bucket) == 32);
-			ASM(CMP64rr, offset_reg, bucket_reg);
-			generate_raw_jump(Jump::jae, slow);
-			ASM(MOV64rm, bucket_reg, FE_MEM(table_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, arData))));
-			ASM(ADD64rr, bucket_reg, offset_reg);
-			/* The literal name must be the bucket's key string. */
-			emit_literal_base(table_reg, frame_reg);
-			ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
-				static_cast<int32_t>(operation.op2.index * sizeof(zval))));
-			ASM(CMP64rm, table_reg, FE_MEM(bucket_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(Bucket, key))));
-			generate_raw_jump(Jump::jne, slow);
-			ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				IS_INDIRECT);
-			emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
-				ASM(MOV64rm, bucket_reg, FE_MEM(bucket_reg, 0, FE_NOREG, 0));
-			});
-			ASM(CMP8mi, FE_MEM(bucket_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				IS_REFERENCE);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				local_offset + static_cast<int32_t>(
-					offsetof(zval, u1.type_info))),
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, bucket_reg, FE_MEM(bucket_reg, 0, FE_NOREG, 0));
-			ASM(ADD32mi, FE_MEM(bucket_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
-				1);
-			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, local_offset),
-				bucket_reg);
-			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				local_offset + static_cast<int32_t>(
-					offsetof(zval, u1.type_info))),
-				IS_REFERENCE_EX);
-			generate_raw_jump(Jump::jmp, done);
-		}
-		label_place(slow);
-		if (!execute_value_operation()) {
-			return false;
-		}
-		label_place(done);
-		release_spilled_regs(spilled);
-		return true;
-#endif
-	};
-	/*
-	 * FETCH_CLASS_CONSTANT of a literal name as the VM reads it: the
-	 * run-time cache keeps the class and the constant's value; for a literal
-	 * class the value alone decides, for self::, parent:: and static:: the
-	 * class, resolved from the caller, must match. An uncounted value is
-	 * copied into the result; anything else runs the helper, which also
-	 * fills the cache.
-	 */
-	auto class_constant_inline = [&]() {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		const uint32_t fetch =
-			operation.op1_unused_payload & ZEND_FETCH_CLASS_MASK;
-		const bool literal_class =
-			operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-		bool frame_operands = node.kind == Adaptor::InstKind::MIR
-			&& !node.has_result && mir.has_value_operation
-			&& operation.source_opcode == ZEND_FETCH_CLASS_CONSTANT
-			&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& (literal_class
-				|| (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
-					&& (fetch == ZEND_FETCH_CLASS_SELF
-						|| fetch == ZEND_FETCH_CLASS_PARENT
-						|| fetch == ZEND_FETCH_CLASS_STATIC)))
-			&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-				|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
-			&& zend_mir_id_is_valid(operation.result_storage_id)
-			&& operation.extended_value <= INT32_MAX - 2 * sizeof(void *);
-		frame_operands = frame_operands && frame_only_operands(node);
-		const uint64_t result_offset64 =
-			frame_slot_offset(operation.result_storage_id);
-		if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
-			return execute_value_operation();
-		}
-		const int32_t result_offset = static_cast<int32_t>(result_offset64);
-		const int32_t class_slot =
-			static_cast<int32_t>(operation.extended_value);
-		const int32_t value_slot = class_slot
-			+ static_cast<int32_t>(sizeof(void *));
-		const auto spilled = spill_before_branch(true);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		{
-			const AsmReg frame_reg = canonical_frame_register();
-			ScratchReg cache{this};
-			ScratchReg scope{this};
-			ScratchReg value{this};
-			auto cache_reg = cache.alloc_gp();
-			auto scope_reg = scope.alloc_gp();
-			auto value_reg = value.alloc_gp();
-			ASM(MOV64rm, cache_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_execute_data, run_time_cache))));
-			ASM(TEST64rr, cache_reg, cache_reg);
-			generate_raw_jump(Jump::je, slow);
-			if (!literal_class) {
-				if (fetch == ZEND_FETCH_CLASS_STATIC) {
-					/* The called scope: $this's class or the class This
-					 * holds. */
-					ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_execute_data, This))));
-					ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_execute_data, This)
-							+ offsetof(zval, u1.type_info))), IS_OBJECT);
-					/* Mostly a static method, whose This holds the class. */
-					emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
-						ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(zend_object, ce))));
-					});
-				} else {
-					ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_execute_data, func))));
-					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_op_array, scope))));
-					if (fetch == ZEND_FETCH_CLASS_PARENT) {
-						ASM(TEST64rr, scope_reg, scope_reg);
-						generate_raw_jump(Jump::je, slow);
-						ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zend_class_entry, parent))));
-					}
-				}
-				ASM(TEST64rr, scope_reg, scope_reg);
-				generate_raw_jump(Jump::je, slow);
-				ASM(CMP64rm, scope_reg,
-					FE_MEM(cache_reg, 0, FE_NOREG, class_slot));
-				generate_raw_jump(Jump::jne, slow);
-			}
-			ASM(MOV64rm, cache_reg, FE_MEM(cache_reg, 0, FE_NOREG, value_slot));
-			ASM(TEST64rr, cache_reg, cache_reg);
-			generate_raw_jump(Jump::je, slow);
-			ASM(MOV32rm, value_reg, FE_MEM(cache_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			ASM(TEST32ri, value_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV32mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset
-				+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				value_reg);
-			ASM(MOV64rm, value_reg, FE_MEM(cache_reg, 0, FE_NOREG, 0));
-			ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
-				value_reg);
-			generate_raw_jump(Jump::jmp, done);
-		}
-		label_place(slow);
-		if (!execute_value_operation()) {
-			return false;
-		}
-		label_place(done);
-		release_spilled_regs(spilled);
-		return true;
-	};
-	/*
-	 * INSTANCEOF of a CV against a literal class as the VM tests it: the
-	 * run-time cache keeps the class; a value that is no object is not an
-	 * instance, and an object is one when its class, a parent or an
-	 * interface is that class; a reference is looked through. An undefined
-	 * variable and an unfilled cache run the helper.
-	 */
-	auto instanceof_inline = [&]() {
-		const zend_mir_executable_value_ref &operation = mir.value_operation;
-		bool frame_operands = node.kind == Adaptor::InstKind::MIR
-			&& !node.has_result && mir.has_value_operation
-			&& operation.source_opcode == ZEND_INSTANCEOF
-			&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-			&& zend_mir_id_is_valid(operation.op1_storage_id)
-			&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
-			&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
-			&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-				|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
-				|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV)
-			&& zend_mir_id_is_valid(operation.result_storage_id)
-			&& operation.result_storage_id != operation.op1_storage_id
-			&& operation.extended_value <= INT32_MAX - sizeof(void *);
-		/* A CV result releases its previous value: a counted one takes
-		 * the helper. */
-		const bool result_cv =
-			operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV;
-		frame_operands = frame_operands && frame_only_operands(node);
-		const uint64_t value_offset64 =
-			frame_slot_offset(operation.op1_storage_id);
-		const uint64_t result_offset64 =
-			frame_slot_offset(operation.result_storage_id);
-		if (!frame_operands || value_offset64 > INT32_MAX - sizeof(zval)
-				|| result_offset64 > INT32_MAX - sizeof(zval)) {
-			return execute_value_operation();
-		}
-		const int32_t value_offset = static_cast<int32_t>(value_offset64);
-		const int32_t result_offset = static_cast<int32_t>(result_offset64);
-		const int32_t result_type = result_offset
-			+ static_cast<int32_t>(offsetof(zval, u1.type_info));
-		const auto spilled = spill_before_branch(true);
-		auto slow = text_writer.label_create();
-		auto done = text_writer.label_create();
-		{
-			const AsmReg frame_reg = canonical_frame_register();
-			ScratchReg type{this};
-			ScratchReg klass{this};
-			auto type_reg = type.alloc_gp();
-			auto class_reg = klass.alloc_gp();
-			if (result_cv) {
-				ASM(TEST8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-					result_offset + static_cast<int32_t>(
-						offsetof(zval, u1.v.type_flags))),
-					IS_TYPE_REFCOUNTED);
-				generate_raw_jump(Jump::jne, slow);
-			}
-			/* The value's zval, behind a reference (a global) too. */
-			ScratchReg value{this};
-			auto value_reg = value.alloc_gp();
-			ASM(LEA64rm, value_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				value_offset));
-			ASM(MOVZXr32m8, type_reg, FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			auto dereferenced = text_writer.label_create();
-			ASM(CMP32ri, type_reg, IS_REFERENCE);
-			emit_cold_branch(Jump::je, dereferenced, [&] {
-				ASM(MOV64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG, 0));
-				ASM(LEA64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_reference, val))));
-				ASM(MOVZXr32m8, type_reg, FE_MEM(value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))));
-			});
-			ASM(CMP32ri, type_reg, IS_OBJECT);
-			auto object = text_writer.label_create();
-			generate_raw_jump(Jump::je, object);
-			/* An undefined CV warns in the helper. */
-			ASM(CMP32ri, type_reg, IS_UNDEF);
-			generate_raw_jump(Jump::je, slow);
-			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
-				IS_FALSE);
-			generate_raw_jump(Jump::jmp, done);
-			label_place(object);
-			ASM(MOV64rm, class_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_execute_data, run_time_cache))));
-			ASM(TEST64rr, class_reg, class_reg);
-			generate_raw_jump(Jump::je, slow);
-			ASM(MOV64rm, class_reg, FE_MEM(class_reg, 0, FE_NOREG,
-				static_cast<int32_t>(operation.extended_value)));
-			ASM(TEST64rr, class_reg, class_reg);
-			generate_raw_jump(Jump::je, slow);
-			ASM(MOV64rm, type_reg, FE_MEM(value_reg, 0, FE_NOREG, 0));
-			ASM(MOV64rm, type_reg, FE_MEM(type_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_object, ce))));
-			auto instance = text_writer.label_create();
-			auto not_instance = text_writer.label_create();
-			ASM(CMP64rr, class_reg, type_reg);
-			generate_raw_jump(Jump::je, instance);
-			/* instanceof_function_slow(): the interfaces of a linked class,
-			 * else its parent chain. */
-			{
-				ScratchReg index{this};
-				auto index_reg = index.alloc_gp();
-				auto parent_loop = text_writer.label_create();
-				auto interface_loop = text_writer.label_create();
-				ASM(TEST32mi, FE_MEM(class_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_class_entry,
-						ce_flags))), ZEND_ACC_INTERFACE);
-				auto parents = text_writer.label_create();
-				generate_raw_jump(Jump::je, parents);
-				ASM(MOV32rm, index_reg, FE_MEM(type_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_class_entry,
-						num_interfaces))));
-				ASM(MOV64rm, type_reg, FE_MEM(type_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_class_entry,
-						interfaces))));
-				label_place(interface_loop);
-				ASM(SUB32ri, index_reg, 1);
-				generate_raw_jump(Jump::jb, not_instance);
-				ASM(CMP64rm, class_reg, FE_MEM(type_reg, 8, index_reg, 0));
-				generate_raw_jump(Jump::je, instance);
-				generate_raw_jump(Jump::jmp, interface_loop);
-				label_place(parents);
-				label_place(parent_loop);
-				ASM(MOV64rm, type_reg, FE_MEM(type_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_class_entry,
-						parent))));
-				ASM(CMP64rr, class_reg, type_reg);
-				generate_raw_jump(Jump::je, instance);
-				ASM(TEST64rr, type_reg, type_reg);
-				generate_raw_jump(Jump::jne, parent_loop);
-			}
-			label_place(not_instance);
-			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
-				IS_FALSE);
-			generate_raw_jump(Jump::jmp, done);
-			label_place(instance);
-			ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
-				IS_TRUE);
-			generate_raw_jump(Jump::jmp, done);
-		}
-		label_place(slow);
-		if (!execute_value_operation()) {
-			return false;
-		}
-		label_place(done);
-		release_spilled_regs(spilled);
-		return true;
-	};
-	auto dynamic_fetch_read = [&]() {
-		zend_tpde_dynamic_fetch_read layout;
-
-		if (!zend_tpde_dynamic_fetch_read_at(mir, &layout)) {
-			return branch_to_guarded_cold();
-		}
-		if (!node.has_result) {
-			return branch_to_guarded_cold();
-		}
-		/* DYNAMIC_FETCH_R is always guarded (see
-		 * freeze_machine_control_flow()); a name without a direct CV takes
-		 * the cold path. */
-		ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
-		const auto guarded_successors = guarded_successors_of(node);
-		if (layout.cv_index == UINT32_MAX) {
-			return branch_to_guarded_cold();
-		}
-		if (layout.direct_long) {
-			const uint64_t value_offset =
-				frame_slot_offset(layout.cv_index);
-			if (value_offset > INT32_MAX - sizeof(zval)
-					|| adaptor->representation(node.result)
-						!= ZEND_MIR_REPRESENTATION_I64
-					|| adaptor->exact_type(node.result)
-						!= ZEND_MIR_SCALAR_TYPE_I64
-					|| adaptor->machine_kind(node.result)
-						!= ZEND_TPDE_MACHINE_VALUE_I64) {
-				return false;
-			}
-			if (node.operands.size() == 2) {
-				auto [name_ref, name_value] =
-					val_ref_single(node.operands[0]);
-				(void) name_ref;
-				(void) name_value;
-			}
-			auto [frame_ref, frame] =
-				val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-			auto frame_reg = frame.load_to_reg();
-			auto [result_ref, result] = result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			ASM(MOV64rm, result_reg,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(value_offset)));
-			result.set_modified();
-			generate_branch_to_block(Jump::jmp,
-				IRBlockRef{node.continuation_block}, false, true);
-			return true;
-		}
-		const uint64_t cv_offset =
-			frame_slot_offset(layout.cv_index);
-		if (cv_offset > INT32_MAX - sizeof(zval)) {
-			return false;
-		}
-		auto slow = text_writer.label_create();
-		auto not_indirect = text_writer.label_create();
-		auto not_reference = text_writer.label_create();
-		auto done = text_writer.label_create();
-		auto [frame_ref, frame] =
-			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-		auto frame_scratch = frame_register(std::move(frame));
-		auto frame_reg = frame_scratch.cur_reg();
-		ScratchReg slot{this};
-		ScratchReg type{this};
-		ScratchReg decision{this};
-		auto slot_reg = slot.alloc_gp();
-		auto type_reg = type.alloc_gp();
-		auto decision_reg = decision.alloc_gp();
-
-		ASM(LEA64rm, slot_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(cv_offset)));
-		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		ASM(CMP8ri, type_reg, IS_INDIRECT);
-		generate_raw_jump(Jump::jne, not_indirect);
-		ASM(MOV64rm, slot_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
-		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		label_place(not_indirect);
-		/* FETCH_R copies the referenced value. */
-		ASM(CMP8ri, type_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::jne, not_reference);
-		ASM(MOV64rm, slot_reg, FE_MEM(slot_reg, 0, FE_NOREG, 0));
-		ASM(LEA64rm, slot_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_reference, val))));
-		ASM(MOV32rm, type_reg,
-			FE_MEM(slot_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zval, u1.type_info))));
-		label_place(not_reference);
-		ASM(CMP8ri, type_reg, IS_UNDEF);
-		generate_raw_jump(Jump::je, slow);
-
-		ASM(MOV32ri, decision_reg, 0);
-		if (adaptor->machine_kind(node.result)
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			auto result = result_ref(node.result);
-			auto payload = result.part(0);
-			auto type_info = result.part(1);
-			auto payload_reg = payload.alloc_reg();
-			auto type_info_reg = type_info.alloc_reg();
-			ASM(MOV64rm, payload_reg,
-				FE_MEM(slot_reg, 0, FE_NOREG, 0));
-			ASM(MOV32rr, type_info_reg, type_reg);
-			payload.set_modified();
-			type_info.set_modified();
-			ASM(TEST32ri, type_reg,
-				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::je, done);
-			ASM(ADD32mi,
-				FE_MEM(payload_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, refcount))),
-				1);
-		} else {
-			auto [result_ref, result] =
-				result_ref_single(node.result);
-			auto result_reg = result.alloc_reg();
-			switch (adaptor->exact_type(node.result)) {
-				case ZEND_MIR_SCALAR_TYPE_I1:
-					ASM(CMP32ri, type_reg, IS_TRUE);
-					generate_raw_set(Jump::je, result_reg);
-					break;
-				case ZEND_MIR_SCALAR_TYPE_I64:
-					ASM(MOV64rm, result_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG, 0));
-					break;
-				case ZEND_MIR_SCALAR_TYPE_F64:
-					ASM(SSE_MOVSDrm, result_reg,
-						FE_MEM(slot_reg, 0, FE_NOREG, 0));
-					break;
-				default:
-					switch (adaptor->machine_kind(node.result)) {
-						case ZEND_TPDE_MACHINE_VALUE_STRING_PTR:
-						case ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR:
-						case ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR:
-						case ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR:
-						case ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR:
-							ASM(MOV64rm, result_reg,
-								FE_MEM(slot_reg, 0, FE_NOREG, 0));
-							break;
-						default:
-							return false;
-					}
-			}
-			result.set_modified();
-		}
-		generate_raw_jump(Jump::jmp, done);
-
-		label_place(slow);
-		slot.reset();
-		type.reset();
-		ASM(MOV32ri, decision_reg, 1);
-		label_place(done);
-		generate_guarded_decision_branch(
-			std::move(decision), guarded_successors[1],
-			guarded_successors[0]);
-		return true;
-	};
 
 	switch (node.kind) {
 		case Adaptor::InstKind::ZvalCopy:
 		case Adaptor::InstKind::ZvalMove:
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_COPY_TMP) {
-				return copy_temporary_slot();
+				return copy_temporary_slot(ctx);
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN) {
-				return copy_slot(
+				return copy_slot(ctx,
 					mir.value_operation.op2,
 					mir.value_operation.op2_storage_id,
 					mir.value_operation.op1_storage_id,
@@ -18380,7 +18586,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					node.kind == Adaptor::InstKind::ZvalMove);
 			}
 			if (record.opcode == ZEND_MIR_OPCODE_VALUE_QM_ASSIGN) {
-				return copy_slot(
+				return copy_slot(ctx,
 					mir.value_operation.op1,
 					mir.value_operation.op1_storage_id,
 					mir.value_operation.result_storage_id,
@@ -18390,7 +18596,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return false;
 		case Adaptor::InstKind::ZvalReleaseFast:
 			return record.opcode == ZEND_MIR_OPCODE_VALUE_FREE
-				? free_temporary_slot() : false;
+				? free_temporary_slot(ctx) : false;
 		case Adaptor::InstKind::SlowPathCall:
 			/*
 			 * The helper reads its operands from their frame slots. A value
@@ -18404,14 +18610,14 @@ bool ZendCompilerX64::compile_inst_impl(
 							Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
 					continue;
 				}
-				if (!materialize_cold_operand(
+				if (!materialize_cold_operand(ctx,
 						operand, adaptor->canonical_storage(operand))) {
 					return false;
 				}
 			}
 			if ((record.opcode == ZEND_MIR_OPCODE_VALUE_ROPE_INIT
 						|| record.opcode == ZEND_MIR_OPCODE_VALUE_ROPE_ADD)
-					&& rope_literal_inline()) {
+					&& rope_literal_inline(ctx)) {
 				return true;
 			}
 			if (mir.has_value_operation
@@ -18733,7 +18939,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						generate_raw_jump(Jump::jmp, done);
 					}
 					label_place(slow);
-					if (!execute_value_operation()) {
+					if (!execute_value_operation(ctx)) {
 						return false;
 					}
 					label_place(done);
@@ -18757,7 +18963,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				const uint64_t holder_offset =
 					frame_slot_offset(mir.value_operation.op1_storage_id);
 				if (holder_offset > INT32_MAX - sizeof(zval)) {
-					return execute_value_operation();
+					return execute_value_operation(ctx);
 				}
 				const int32_t type_offset = static_cast<int32_t>(
 					holder_offset + offsetof(zval, u1.type_info));
@@ -18775,14 +18981,14 @@ bool ZendCompilerX64::compile_inst_impl(
 					IS_UNDEF);
 				generate_raw_jump(Jump::jmp, done);
 				label_place(slow);
-				if (!execute_value_operation()) {
+				if (!execute_value_operation(ctx)) {
 					return false;
 				}
 				label_place(done);
 				release_spilled_regs(spilled);
 				return true;
 			}
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		default:
 			break;
 	}
@@ -18798,67 +19004,67 @@ bool ZendCompilerX64::compile_inst_impl(
 			|| record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_NAME) {
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 				&& mir.fused_into_branch && !adaptor->typed_body()) {
-			return fused_into_branch_placeholder();
+			return fused_into_branch_placeholder(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 				&& node.kind == Adaptor::InstKind::GuardedFast) {
-			if (const int checked = type_check_inline(); checked != 0) {
+			if (const int checked = type_check_inline(ctx); checked != 0) {
 				return checked > 0;
 			}
-			return branch_to_guarded_cold();
+			return branch_to_guarded_cold(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_R
 				|| ((record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_IS
 						|| record.opcode
 							== ZEND_MIR_OPCODE_OBJECT_FETCH_FUNC_ARG)
 					&& node.kind == Adaptor::InstKind::GuardedFast)) {
-			return object_property_read();
+			return object_property_read(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_W
 				&& node.kind == Adaptor::InstKind::GuardedFast) {
-			return object_property_address();
+			return object_property_address(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_ASSIGN) {
-			return object_property_write();
+			return object_property_write(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
-			return dynamic_fetch_read();
+			return dynamic_fetch_read(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_FETCH_CONSTANT) {
-			return fetch_constant_inline();
+			return fetch_constant_inline(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_DYNAMIC_BIND_GLOBAL) {
-			return bind_global_inline();
+			return bind_global_inline(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT) {
-			return class_constant_inline();
+			return class_constant_inline(ctx);
 		}
 		if (record.opcode == ZEND_MIR_OPCODE_OBJECT_INSTANCEOF) {
-			return instanceof_inline();
+			return instanceof_inline(ctx);
 		}
-		return execute_value_operation();
+		return execute_value_operation(ctx);
 	}
 	switch (record.opcode) {
 		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_COPY_TMP:
-			return copy_temporary_slot();
+			return copy_temporary_slot(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FREE:
-			return free_temporary_slot();
+			return free_temporary_slot(ctx);
 		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN:
 			if (mir.value_operation.op1.slot_kind
 					!= ZEND_MIR_SOURCE_SLOT_CV) {
-				return execute_value_operation();
+				return execute_value_operation(ctx);
 			}
-			return copy_slot(
+			return copy_slot(ctx,
 				mir.value_operation.op2,
 				mir.value_operation.op2_storage_id,
 				mir.value_operation.op1_storage_id,
@@ -18868,11 +19074,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
 			if (mir.value_operation.op1.kind
 					== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-				if (const int copied = copy_literal(); copied != 0) {
+				if (const int copied = copy_literal(ctx); copied != 0) {
 					return copied > 0;
 				}
 			}
-			return copy_slot(
+			return copy_slot(ctx,
 				mir.value_operation.op1,
 				mir.value_operation.op1_storage_id,
 				mir.value_operation.result_storage_id,
@@ -18883,74 +19089,74 @@ bool ZendCompilerX64::compile_inst_impl(
 						== ZEND_MIR_SOURCE_SLOT_VAR,
 				true);
 		case ZEND_MIR_OPCODE_VALUE_CONCAT:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ROPE_INIT:
 		case ZEND_MIR_OPCODE_VALUE_ROPE_ADD:
-			if (rope_literal_inline()) {
+			if (rope_literal_inline(ctx)) {
 				return true;
 			}
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ROPE_END:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_INIT_ARRAY:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
-			return read_array();
+			return read_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
-			return write_array();
+			return write_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
-			return write_array();
+			return write_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS:
-			return coalesce_array();
+			return coalesce_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET:
-			return write_array();
+			return write_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
-			return append_packed_array();
+			return append_packed_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 			if (mir.fused_into_branch && !adaptor->typed_body()) {
-				return fused_into_branch_placeholder();
+				return fused_into_branch_placeholder(ctx);
 			}
-			return isset_array();
+			return isset_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
-			return long_assign_op();
+			return long_assign_op(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
 			if (node.kind == Adaptor::InstKind::GuardedFast) {
-				if (const int freed = iterator_free_inline(); freed != 0) {
+				if (const int freed = iterator_free_inline(ctx); freed != 0) {
 					return freed > 0;
 				}
-				return branch_to_guarded_cold();
+				return branch_to_guarded_cold(ctx);
 			}
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
 			if (mir.fused_into_branch && !adaptor->typed_body()) {
-				return fused_into_branch_placeholder();
+				return fused_into_branch_placeholder(ctx);
 			}
-			return long_binary();
+			return long_binary(ctx);
 		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
-			return string_length();
+			return string_length(ctx);
 		case ZEND_MIR_OPCODE_VALUE_CAST:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
 			if (mir.fused_into_branch && !adaptor->typed_body()) {
-				return fused_into_branch_placeholder();
+				return fused_into_branch_placeholder(ctx);
 			}
-			return slot_isset_empty();
+			return slot_isset_empty(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_INCDEC:
-			return long_incdec();
+			return long_incdec(ctx);
 		case ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE:
 			/*
 			 * The source operand is an allocator-visible use even when the
@@ -19031,7 +19237,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				return true;
 			}
 			if (!have_type) {
-				return execute_value_operation();
+				return execute_value_operation(ctx);
 			}
 			const auto spilled = spill_before_branch(true);
 			auto done = text_writer.label_create();
@@ -19063,7 +19269,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				generate_raw_jump(Jump::jb, done);
 			}
 			verified_type.reset();
-			if (!execute_value_operation()) {
+			if (!execute_value_operation(ctx)) {
 				return false;
 			}
 			label_place(done);
@@ -19071,7 +19277,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_VALUE_ECHO:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_FUNC_NUM_ARGS: {
 			if (node.operands.size() != 1
 					|| record.representation != ZEND_MIR_REPRESENTATION_I64
@@ -19124,28 +19330,28 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_GENERATOR_CREATE:
 		case ZEND_MIR_OPCODE_GENERATOR_YIELD:
 		case ZEND_MIR_OPCODE_GENERATOR_YIELD_FROM:
 		case ZEND_MIR_OPCODE_GENERATOR_RETURN:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_COUNT:
 			if (node.kind == Adaptor::InstKind::GuardedFast) {
-				if (const int counted = count_inline(); counted != 0) {
+				if (const int counted = count_inline(ctx); counted != 0) {
 					return counted > 0;
 				}
-				return branch_to_guarded_cold();
+				return branch_to_guarded_cold(ctx);
 			}
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ARRAY_KEY_EXISTS:
 			if (node.kind == Adaptor::InstKind::GuardedFast) {
-				if (const int exists = key_exists_inline(); exists != 0) {
+				if (const int exists = key_exists_inline(ctx); exists != 0) {
 					return exists > 0;
 				}
-				return branch_to_guarded_cold();
+				return branch_to_guarded_cold(ctx);
 			}
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_GET_TYPE:
 		case ZEND_MIR_OPCODE_VALUE_IN_ARRAY:
 		case ZEND_MIR_OPCODE_VALUE_ISSET_THIS:
@@ -19163,11 +19369,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_VALUE_EXT_NOP:
 		case ZEND_MIR_OPCODE_VALUE_DISCARD_EXCEPTION:
 		case ZEND_MIR_OPCODE_VALUE_CASE:
-			return execute_value_operation();
+			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_COPY:
 		case ZEND_MIR_OPCODE_CANONICALIZE:
 		case ZEND_MIR_OPCODE_I1_TO_I64:
-			return copy_result();
+			return copy_result(ctx);
 		case ZEND_MIR_OPCODE_STATEPOINT:
 			if ((record.effects & ZEND_MIR_EFFECT_MASK(
 					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
@@ -19231,38 +19437,38 @@ bool ZendCompilerX64::compile_inst_impl(
 			consume_operands(node);
 			return true;
 		case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_add_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_sub_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_mul_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_OR:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_or_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_AND:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_and_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_XOR:
 		case ZEND_MIR_OPCODE_I1_XOR:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_xor_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_BIT_NOT: {
-			auto [source_ref, source] = unary();
+			auto [source_ref, source] = unary(ctx);
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto source_reg = source.load_to_reg();
 			auto result_reg = result.alloc_try_reuse(source);
@@ -19273,7 +19479,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		case ZEND_MIR_OPCODE_I1_NOT:
 		case ZEND_MIR_OPCODE_I64_TO_I1: {
-			auto [source_ref, source] = unary();
+			auto [source_ref, source] = unary(ctx);
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto source_reg = source.load_to_reg();
 			ASM(TEST64rr, source_reg, source_reg);
@@ -19285,31 +19491,31 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		case ZEND_MIR_OPCODE_I64_EQ:
 		case ZEND_MIR_OPCODE_I1_EQ:
-			if (can_fuse_compare_branch()) {
-				return integer_compare(Jump::je);
+			if (can_fuse_compare_branch(ctx)) {
+				return integer_compare(ctx, Jump::je);
 			}
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_eq_u64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_LT:
-			if (can_fuse_compare_branch()) {
-				return integer_compare(Jump::jl);
+			if (can_fuse_compare_branch(ctx)) {
+				return integer_compare(ctx, Jump::jl);
 			}
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_lt_i64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_LE:
-			if (can_fuse_compare_branch()) {
-				return integer_compare(Jump::jle);
+			if (can_fuse_compare_branch(ctx)) {
+				return integer_compare(ctx, Jump::jle);
 			}
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_le_i64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_I64_CMP: {
-			auto [left_pair, right_pair] = binary();
+			auto [left_pair, right_pair] = binary(ctx);
 			auto &[left_ref, left] = left_pair;
 			auto &[right_ref, right] = right_pair;
 			auto [result_ref, result] = result_ref_single(node.result);
@@ -19331,7 +19537,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto ax = rax.alloc_specific(tpde::x64::AsmReg::AX);
 			auto dx = rdx.alloc_specific(tpde::x64::AsmReg::DX);
 			auto cx = divisor.alloc_specific(tpde::x64::AsmReg::CX);
-			auto [left_pair, right_pair] = binary();
+			auto [left_pair, right_pair] = binary(ctx);
 			auto &[left_ref, left] = left_pair;
 			auto &[right_ref, right] = right_pair;
 			mov(ax, left.load_to_reg(), 8);
@@ -19346,7 +19552,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		case ZEND_MIR_OPCODE_I64_SHR_CHECKED: {
 			ScratchReg count{this};
 			auto cx = count.alloc_specific(tpde::x64::AsmReg::CX);
-			auto [left_pair, right_pair] = binary();
+			auto [left_pair, right_pair] = binary(ctx);
 			auto &[left_ref, left] = left_pair;
 			auto &[right_ref, right] = right_pair;
 			mov(cx, right.load_to_reg(), 8);
@@ -19363,26 +19569,26 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_F64_ADD:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_add_f64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_F64_SUB:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_sub_f64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_F64_MUL:
-			return encode_binary([&](auto &&left, auto &&right, auto &&result) {
+			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
 				return EncodeBase::encode_zend_native_mul_f64(
 					std::move(left), std::move(right), std::move(result));
 			});
 		case ZEND_MIR_OPCODE_F64_EQ:
 		case ZEND_MIR_OPCODE_F64_LT:
 		case ZEND_MIR_OPCODE_F64_LE:
-			return floating_compare(record.opcode);
+			return floating_compare(ctx, record.opcode);
 		case ZEND_MIR_OPCODE_F64_CMP: {
-			auto [left_pair, right_pair] = binary();
+			auto [left_pair, right_pair] = binary(ctx);
 			auto &[left_ref, left] = left_pair;
 			auto &[right_ref, right] = right_pair;
 			auto [result_ref, result] = result_ref_single(node.result);
@@ -19402,7 +19608,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		case ZEND_MIR_OPCODE_I64_TO_F64:
 		case ZEND_MIR_OPCODE_I1_TO_F64: {
-			auto [source_ref, source] = unary();
+			auto [source_ref, source] = unary(ctx);
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
 			ASM(SSE_CVTSI2SD64rr, result_reg, source.load_to_reg());
@@ -19410,7 +19616,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_F64_TO_I64_CHECKED: {
-			auto [source_ref, source] = unary();
+			auto [source_ref, source] = unary(ctx);
 			auto [result_ref, result] = result_ref_single(node.result);
 			auto result_reg = result.alloc_reg();
 			ASM(SSE_CVTTSD2SI64rr, result_reg, source.load_to_reg());
@@ -19418,7 +19624,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		case ZEND_MIR_OPCODE_F64_TO_I1: {
-			auto [source_ref, source] = unary();
+			auto [source_ref, source] = unary(ctx);
 			ScratchReg bits{this};
 			auto bits_reg = bits.alloc_gp();
 			ASM(SSE_MOVQ_X2Grr, bits_reg, source.load_to_reg());
@@ -19434,7 +19640,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				IRBlockRef{node.control_block})[0]);
 			return true;
 		case ZEND_MIR_OPCODE_COND_BRANCH: {
-			auto [condition_ref, condition] = unary();
+			auto [condition_ref, condition] = unary(ctx);
 			auto condition_reg = condition.load_to_reg();
 			ASM(TEST64rr, condition_reg, condition_reg);
 			const auto &successors = adaptor->block_succs(
@@ -19502,7 +19708,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				ValuePart frame_argument{
 					tpde::x64::PlatformConfig::GP_BANK, 8};
 				frame_argument.set_value(this, take_frame(frame_scratch));
-				if (!execute_value_operation_with(
+				if (!execute_value_operation_with(ctx,
 						&frame_argument,
 						ZEND_NATIVE_HELPER_VALUE_CHECK_VAR,
 						ZEND_CHECK_VAR)) {
@@ -25301,6 +25507,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return false;
 	}
 }
+
 
 bool ZendCompilerX64::compile_inst(
 	IRInstRef instruction, InstRange remaining_instructions) {
