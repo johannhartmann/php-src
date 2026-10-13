@@ -1808,9 +1808,11 @@ static zend_native_status zend_native_static_assign_explicit(
 
 	property = zend_native_static_property_explicit(
 		execute_data, operation, BP_VAR_W, &property_info, &temporary);
-	/* ASSIGN_STATIC_PROP_REF fetches OP_DATA with BP_VAR_W: an undefined CV
-	 * becomes NULL before reference type validation and binding. */
-	if (by_reference && value != NULL && operation->auxiliary_type == IS_CV
+	/* ASSIGN_STATIC_PROP_REF fetches OP_DATA with BP_VAR_W after the
+	 * property: when the property fetch succeeded, an undefined CV becomes
+	 * NULL before reference type validation and binding. */
+	if (by_reference && property != NULL && property_info != NULL
+			&& value != NULL && operation->auxiliary_type == IS_CV
 			&& Z_TYPE_P(value) == IS_UNDEF) {
 		ZVAL_NULL(value);
 	}
