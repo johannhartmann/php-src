@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PHP-3.01
 
+#include "Zend/Native/TPDE/Common/zend_tpde_compiler_common.hpp"
 #include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
 #include "Zend/Native/TPDE/LinuxX64/zend_tpde_encodegen_x64.hpp"
 #include "Zend/Native/TPDE/EncodeGen/zend_tpde_encodegen_values.h"
@@ -33,6 +34,7 @@ using IRValueRef = zend::native::tpde::IRValueRef;
 using IRInstRef = zend::native::tpde::IRInstRef;
 using IRBlockRef = zend::native::tpde::IRBlockRef;
 using IRFuncRef = zend::native::tpde::IRFuncRef;
+using zend::native::tpde::ZendCompilerCommon;
 
 /*
  * Profile-guided layout (ZEND_NATIVE_LAYOUT_PROFILE=path): per function key,
@@ -367,13 +369,14 @@ bool is_frame_slot(const zend_mir_source_operand_ref &operand) {
 
 class ZendCompilerX64 final
 	: public tpde::x64::CompilerX64<Adaptor, ZendCompilerX64,
-		::tpde::CompilerBase, ZendX64Config>,
+		ZendCompilerCommon, ZendX64Config>,
 	  public tpde_encodegen::EncodeCompiler<Adaptor, ZendCompilerX64,
-		::tpde::CompilerBase, ZendX64Config> {
+		ZendCompilerCommon, ZendX64Config> {
 	using Base = tpde::x64::CompilerX64<Adaptor, ZendCompilerX64,
-		::tpde::CompilerBase, ZendX64Config>;
+		ZendCompilerCommon, ZendX64Config>;
 	using EncodeBase = tpde_encodegen::EncodeCompiler<Adaptor, ZendCompilerX64,
-		::tpde::CompilerBase, ZendX64Config>;
+		ZendCompilerCommon, ZendX64Config>;
+	friend ZendCompilerCommon<Adaptor, ZendCompilerX64, ZendX64Config>;
 	zend_native_image *image_;
 	/* A source operand in the runtime helpers' encoding. */
 	uint64_t encode_source_operand(const zend_mir_source_operand_ref &operand,
@@ -420,11 +423,6 @@ class ZendCompilerX64 final
 	/* TPDE tracks its branch regions in debug builds only. */
 	bool in_branch_region_ = false;
 
-	struct TargetBranchAssignment {
-		::tpde::ValLocalIdx local_idx;
-		uint32_t part;
-	};
-	using TargetBranchState = std::vector<TargetBranchAssignment>;
 	TargetBranchState generator_gateway_state_;
 
 	/*
@@ -1206,24 +1204,6 @@ class ZendCompilerX64 final
 		return true;
 	}
 
-	TargetBranchState spill_target_branch_state() {
-		const auto release = spill_before_branch(true);
-		TargetBranchState state;
-
-		for (auto reg_id : ::tpde::util::BitSetIterator<>{
-				release & register_file.used}) {
-			const ::tpde::Reg reg{reg_id};
-			const auto local_idx = register_file.reg_local_idx(reg);
-			if (local_idx == INVALID_VAL_LOCAL_IDX
-					|| register_file.is_fixed(reg)) {
-				continue;
-			}
-			state.push_back(TargetBranchAssignment{
-				local_idx, register_file.reg_part(reg)});
-		}
-		return state;
-	}
-
 	/*
 	 * A guarded fast path jumps to its cold block from every failed check,
 	 * and the cold block reloads an operand from its stack slot once that
@@ -1298,77 +1278,25 @@ class ZendCompilerX64 final
 		}
 	}
 
-	void reconcile_target_branch_state(const TargetBranchState &state) {
-		for (const TargetBranchAssignment &entry : state) {
-			::tpde::ValueAssignment *assignment =
-				val_assignment(entry.local_idx);
-			if (assignment == nullptr) {
-				continue;
-			}
-			::tpde::AssignmentPartRef part{assignment, entry.part};
-			if (!part.register_valid() || part.fixed_assignment()) {
-				continue;
-			}
-			ZEND_ASSERT(part.stack_valid() || part.variable_ref()
-				|| assignment->references_left == 0);
-			const ::tpde::Reg reg = part.get_reg();
-			part.set_register_valid(false);
-			register_file.unmark_used(reg);
-		}
-	}
-
 public:
-	struct ValRefSpecial {
-		uint8_t mode = 4;
-		uint8_t bank = 0;
-		uint8_t padding[6]{};
-		uint64_t bits = 0;
-	};
-
-	struct ValueParts {
-		tpde::RegBank bank;
-		zend_tpde_machine_representation_desc representation;
-		uint32_t count() const { return representation.part_count; }
-		uint32_t size_bytes(uint32_t part) const {
-			ZEND_ASSERT(part < representation.part_count);
-			return representation.parts[part].bit_width / 8;
-		}
-		tpde::RegBank reg_bank(uint32_t part) const {
-			ZEND_ASSERT(part < representation.part_count);
-			return representation.parts[part].register_bank
-					== ZEND_TPDE_MACHINE_REGISTER_FP
-				? tpde::x64::PlatformConfig::FP_BANK
-				: tpde::x64::PlatformConfig::GP_BANK;
-		}
-	};
-
 	explicit ZendCompilerX64(Adaptor *adaptor, zend_native_image *image)
 		: Base{adaptor},
 		  image_{image},
 		  image_symbols_(image->symbol_count),
 		  image_slots_(image->symbol_count) {}
 
-	/*
-	 * Direct calls into a component-local function check the C stack against
-	 * the callee's projected low-water mark, RSP - frame, instead of RSP
-	 * alone. The frame is known only once the callee is compiled, so the guard
-	 * encodes SUB with a 32-bit immediate and is patched then; callees
-	 * compiled later (forward calls, recursion) are patched when they finish.
-	 */
-	struct DirectCallStackGuardLabelPatch {
-		tpde::Label label;
-		uint32_t target_function;
-	};
-	struct DirectCallStackGuardOffsetPatch {
-		uint32_t offset;
-		uint32_t target_function;
-	};
-	std::vector<DirectCallStackGuardLabelPatch>
-		current_direct_call_stack_guard_patches_;
-	std::vector<DirectCallStackGuardOffsetPatch>
-		pending_direct_call_stack_guard_patches_;
-	std::vector<uint32_t> function_stack_frame_sizes_;
+	/* The jumps of ZendCompilerCommon. */
+	static constexpr auto JUMP_ALWAYS = Jump::jmp;
+	static constexpr auto JUMP_EQUAL = Jump::je;
+	static constexpr auto JUMP_NOT_EQUAL = Jump::jne;
+	void emit_decision_test(AsmReg reg) {
+		ASM(TEST32rr, reg, reg);
+	}
 
+	/*
+	 * A direct call stack guard (ZendCompilerCommon): SUB with a 32-bit
+	 * immediate, located by the label after it.
+	 */
 	void emit_direct_call_stack_guard_position(
 			AsmReg destination, uint32_t target_function) {
 		ASM(MOV64rr, destination, FE_SP);
@@ -1376,11 +1304,11 @@ public:
 		ASM(SUB64ri, destination, INT32_C(0x10000));
 		const auto patch_label = text_writer.label_create();
 		label_place(patch_label);
-		current_direct_call_stack_guard_patches_.push_back({
-			patch_label, target_function});
+		add_direct_call_stack_guard(patch_label, target_function, destination);
 	}
 
-	void patch_direct_call_stack_guard(uint32_t offset, uint32_t frame_size) {
+	void patch_direct_call_stack_guard(
+			uint32_t offset, AsmReg, uint32_t frame_size) {
 		ZEND_ASSERT(offset >= sizeof(int32_t));
 		ZEND_ASSERT(frame_size <= INT32_MAX);
 		const int32_t immediate = static_cast<int32_t>(frame_size);
@@ -1408,15 +1336,6 @@ public:
 	void reset() {
 		Base::reset();
 		EncodeBase::reset();
-		current_direct_call_stack_guard_patches_.clear();
-		pending_direct_call_stack_guard_patches_.clear();
-		function_stack_frame_sizes_.clear();
-	}
-
-	bool hook_post_func_sym_init() {
-		function_stack_frame_sizes_.assign(
-			this->func_syms.size(), UINT32_MAX);
-		return true;
 	}
 
 	tpde::SymRef runtime_symbol(zend_native_runtime_helper_id id) {
@@ -1435,20 +1354,6 @@ public:
 		return reference;
 	}
 
-	AsmReg canonical_value_register(IRValueRef value) {
-		const auto local_idx = adaptor->val_local_idx(value);
-		::tpde::ValueAssignment *assignment = val_assignment(local_idx);
-		ZEND_ASSERT(assignment != nullptr);
-		::tpde::AssignmentPartRef part{assignment, 0};
-		if (!part.register_valid()) {
-			ZEND_ASSERT(part.stack_valid());
-			ValuePartRef reload{this, local_idx, assignment, 0, false};
-			const AsmReg reg = reload.load_to_reg();
-			reload.reset();
-			return reg;
-		}
-		return AsmReg{part.get_reg().id()};
-	}
 	/*
 	 * The frame for an inline form: its fixed register when it has one,
 	 * which no form writes, else a scratch copy, as into_scratch() makes.
@@ -1490,10 +1395,6 @@ public:
 			result.scratch.emplace(std::move(frame).into_scratch());
 		}
 		return result;
-	}
-	AsmReg canonical_frame_register() {
-		return canonical_value_register(
-			IRValueRef{Adaptor::FRAME_VALUE});
 	}
 	/* A helper wrote a scalar result to its frame slot. Zend writes a bool
 	 * as type_info only, so its value comes from IS_TRUE, not the payload. */
@@ -3196,53 +3097,26 @@ public:
 	/* Branches to the continuation of the FINALLY_CALL whose source
 	 * position reg holds. */
 	void emit_finally_return_dispatch(AsmReg reg) {
-		const zend_tpde_plan *plan = adaptor->plan();
-		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-			const zend_mir_instruction_record &call =
-				plan->instructions[i].record;
-			zend_mir_block_id target;
-			if (call.opcode != ZEND_MIR_OPCODE_FINALLY_CALL
-					|| zend_tpde_block_successor_count(
-						plan, call.block_id) != 2
-					|| !zend_tpde_block_successor_at(
-						plan, call.block_id, 1, &target)) {
-				continue;
-			}
-			ASM(CMP32ri, reg, call.source_position_id);
+		for_each_finally_continuation([&](uint32_t source_position,
+				IRBlockRef continuation) {
+			ASM(CMP32ri, reg, source_position);
 			auto continued = text_writer.label_create();
 			generate_raw_jump(Jump::jne, continued);
-			generate_exception_branch(adaptor->block_ref(target));
+			generate_exception_branch(continuation);
 			label_place(continued);
-		}
+		});
 	}
 	/* Branches to the catch or finally handler whose source position,
 	 * flagged with ZEND_NATIVE_FINALLY_EXCEPTION_FLAG, reg holds. */
 	void emit_handler_dispatch(AsmReg reg) {
-		const zend_tpde_plan *plan = adaptor->plan();
-		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-			const zend_mir_instruction_record &handler =
-				plan->instructions[i].record;
-			if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
-					&& handler.opcode != ZEND_MIR_OPCODE_FINALLY_ENTER)
-					|| handler.block_id == plan->function.entry_block_id
-					|| !zend_mir_id_is_valid(handler.source_position_id)) {
-				continue;
-			}
-			const IRBlockRef handler_block =
-				adaptor->block_ref(handler.block_id);
-			if (static_cast<uint32_t>(
-					this->analyzer.block_idx(handler_block))
-					>= this->block_labels.size()) {
-				continue;
-			}
-			ASM(CMP32ri, reg,
-				ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
-					| handler.source_position_id);
+		for_each_exception_handler(true, [&](IRBlockRef handler_block,
+				uint32_t flagged_position) {
+			ASM(CMP32ri, reg, flagged_position);
 			const auto continued = text_writer.label_create();
 			generate_raw_jump(Jump::jne, continued);
 			generate_exception_branch(handler_block);
 			label_place(continued);
-		}
+		});
 	}
 	/* A call TPDE does not see, of symbol. */
 	void emit_symbol_call(tpde::SymRef symbol) {
@@ -4065,10 +3939,6 @@ public:
 		return target;
 	}
 
-	void generate_exception_branch(IRBlockRef target) {
-		auto index = static_cast<uint32_t>(this->analyzer.block_idx(target));
-		generate_raw_jump(Jump::jmp, this->block_labels[index]);
-	}
 	template <typename BranchJump>
 	void generate_branch_to_block(
 			BranchJump jump, IRBlockRef target,
@@ -4355,39 +4225,6 @@ public:
 		store_type_word(base, offset, zend_tpde_zval_type(type), value_reg);
 	}
 
-	void generate_guarded_decision_branch(
-			ScratchReg &&decision, IRBlockRef nonzero_target,
-			IRBlockRef zero_target) {
-		const IRBlockRef next = analyzer.block_ref(next_block());
-		const bool nonzero_needs_split =
-			branch_needs_split(nonzero_target);
-		const bool zero_needs_split = branch_needs_split(zero_target);
-		const auto spilled = spill_before_branch();
-
-		begin_branch_region();
-		ASM(TEST32rr, decision.cur_reg(), decision.cur_reg());
-		if (next == nonzero_target
-				|| (next != zero_target && nonzero_needs_split)) {
-			generate_branch_to_block(
-				Jump::je, zero_target, zero_needs_split, false);
-			generate_branch_to_block(
-				Jump::jmp, nonzero_target, false, true);
-		} else if (next == zero_target) {
-			generate_branch_to_block(
-				Jump::jne, nonzero_target,
-				nonzero_needs_split, false);
-			generate_branch_to_block(
-				Jump::jmp, zero_target, false, true);
-		} else {
-			ZEND_ASSERT(!nonzero_needs_split);
-			generate_branch_to_block(
-				Jump::jne, nonzero_target, false, false);
-			generate_branch_to_block(
-				Jump::jmp, zero_target, false, true);
-		}
-		end_branch_region();
-		release_spilled_regs(spilled);
-	}
 	template <typename BranchJump>
 	void generate_cond_branch(
 			BranchJump jump, IRBlockRef true_target,
@@ -4410,25 +4247,6 @@ public:
 		return adaptor->cur_func_may_emit_calls() || has_entry_variant();
 	}
 	tpde::SymRef cur_personality_func() const { return {}; }
-	bool try_force_fixed_assignment(IRValueRef value) const {
-		const zend_tpde_machine_value_kind kind =
-			adaptor->machine_kind(value);
-		const bool pointer_value =
-			kind == ZEND_TPDE_MACHINE_VALUE_STRING_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_OBJECT_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_RESOURCE_PTR
-			|| kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR;
-		return value == IRValueRef{Adaptor::FRAME_VALUE}
-			|| (!adaptor->typed_body()
-				&& value == IRValueRef{
-					Adaptor::EXECUTION_CONTEXT_ARGUMENT})
-			|| (pointer_value
-				&& adaptor->machine_value_is_register_authoritative(value))
-			|| (adaptor->val_is_phi(value)
-				&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& adaptor->machine_value_is_register_authoritative(value));
-	}
 	/*
 	 * A section of rarely run code behind the function's hot code. A
 	 * section opened inside one (a cold block, a slow path's own stub) stays
@@ -4709,36 +4527,6 @@ public:
 			reg = Base::select_fixed_assignment_reg(part, value);
 		}
 		return reg;
-	}
-	ValueParts val_parts(IRValueRef value) const {
-		const zend_tpde_machine_value_kind kind =
-			adaptor->machine_kind(value);
-		const zend_tpde_machine_representation_desc representation =
-			zend_tpde_machine_representation(
-				kind, adaptor->machine_value_is_register_authoritative(value));
-		return {
-			representation.parts[0].register_bank
-					== ZEND_TPDE_MACHINE_REGISTER_FP
-				? tpde::x64::PlatformConfig::FP_BANK
-				: tpde::x64::PlatformConfig::GP_BANK,
-			representation};
-	}
-	std::optional<ValRefSpecial> val_ref_special(IRValueRef value) {
-		uint64_t bits;
-		if (!adaptor->constant(value, &bits)) {
-			return {};
-		}
-		return ValRefSpecial{
-			.mode = 4,
-			.bank = static_cast<uint8_t>(val_parts(value).bank.id()),
-			.bits = bits};
-	}
-	ValuePart val_part_ref_special(ValRefSpecial &value, uint32_t) {
-		return ValuePart{value.bits, 8, tpde::RegBank{value.bank}};
-	}
-	void define_func_idx(IRFuncRef function, uint32_t index) {
-		(void) function;
-		(void) index;
 	}
 	void start_func(uint32_t index) {
 		/* A function that failed to compile left its guard patches. */
@@ -5546,41 +5334,7 @@ public:
 		}
 		const uint32_t frame_size = machine_frame_size();
 		Base::finish_func(index);
-
-		for (const auto &patch : current_direct_call_stack_guard_patches_) {
-			const uint32_t offset = text_writer.label_offset(patch.label);
-			const uint32_t target_frame_size =
-				function_stack_frame_sizes_[patch.target_function];
-			if (target_frame_size == UINT32_MAX) {
-				pending_direct_call_stack_guard_patches_.push_back({
-					offset, patch.target_function});
-			} else {
-				patch_direct_call_stack_guard(offset, target_frame_size);
-			}
-		}
-		current_direct_call_stack_guard_patches_.clear();
-
-		ZEND_ASSERT(index < function_stack_frame_sizes_.size());
-		function_stack_frame_sizes_[index] = frame_size;
-		for (size_t patch_index = 0;
-				patch_index < pending_direct_call_stack_guard_patches_.size();) {
-			const auto &patch =
-				pending_direct_call_stack_guard_patches_[patch_index];
-			if (patch.target_function != index) {
-				++patch_index;
-				continue;
-			}
-			patch_direct_call_stack_guard(patch.offset, frame_size);
-			pending_direct_call_stack_guard_patches_.erase(
-				pending_direct_call_stack_guard_patches_.begin()
-					+ static_cast<std::ptrdiff_t>(patch_index));
-		}
-	}
-	void setup_var_ref_assignments() {
-		for (uint32_t index = 0;
-				index < adaptor->frame_slot_reference_count(); ++index) {
-			init_variable_ref(adaptor->frame_slot_reference(index), index);
-		}
+		resolve_direct_call_stack_guards(index, frame_size);
 	}
 	void load_address_of_var_reference(
 			AsmReg destination, ::tpde::AssignmentPartRef reference) {
