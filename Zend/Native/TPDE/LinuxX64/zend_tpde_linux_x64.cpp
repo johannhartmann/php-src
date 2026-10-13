@@ -344,6 +344,21 @@ struct ZendX64Config : tpde::x64::PlatformConfig {
 	static constexpr bool DEFAULT_VAR_REF_HANDLING = false;
 };
 
+/* The offset of a CV or temporary frame slot from the frame. */
+constexpr uint64_t frame_slot_offset(uint64_t storage) {
+	return (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+}
+
+/* A zval's second 64-bit word: u1, the type info, and u2. */
+constexpr int32_t zval_high_word = static_cast<int32_t>(offsetof(zval, u1));
+static_assert(zval_high_word == 8);
+
+/* A shift that scales a zval index to its byte offset. */
+constexpr uint8_t zval_size_shift = 4;
+static_assert(sizeof(zval) == size_t{1} << zval_size_shift);
+
+static_assert(Z_TYPE_FLAGS_MASK == 0xff00);
+
 class ZendCompilerX64 final
 	: public tpde::x64::CompilerX64<Adaptor, ZendCompilerX64,
 		::tpde::CompilerBase, ZendX64Config>,
@@ -628,7 +643,7 @@ class ZendCompilerX64 final
 			const zend_mir_storage_id storage =
 				adaptor->canonical_storage(value);
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+				frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
 					|| offset > INT32_MAX - sizeof(zval)) {
 				return false;
@@ -754,7 +769,7 @@ class ZendCompilerX64 final
 			const zend_mir_storage_id storage =
 				adaptor->canonical_storage(value);
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+				frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
 					|| offset > INT32_MAX - sizeof(zval)) {
 				return false;
@@ -2060,8 +2075,8 @@ public:
 	 */
 	bool store_fused_result_placeholder(
 			const zend_tpde_instruction *compare, AsmReg frame_reg) {
-		const uint64_t result_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
-			+ compare->value_operation.result_storage_id) * sizeof(zval);
+		const uint64_t result_offset = frame_slot_offset(
+			compare->value_operation.result_storage_id);
 		if (!zend_mir_id_is_valid(compare->value_operation.result_storage_id)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return false;
@@ -3439,8 +3454,7 @@ public:
 				&& operation.op1_storage_id != operation.result_storage_id) {
 			value_kind = operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 				? ValueKind::Cv : ValueKind::Tmp;
-			value_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
-				+ operation.op1_storage_id) * sizeof(zval);
+			value_offset = frame_slot_offset(operation.op1_storage_id);
 		} else {
 			return true;
 		}
@@ -3464,8 +3478,8 @@ public:
 		} else {
 			return true;
 		}
-		const uint64_t result_offset = (uint64_t{ZEND_CALL_FRAME_SLOT}
-			+ operation.result_storage_id) * sizeof(zval);
+		const uint64_t result_offset =
+			frame_slot_offset(operation.result_storage_id);
 		if (value_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)
 				|| key_value > (key_kind == KeyKind::String
@@ -4103,7 +4117,7 @@ public:
 				: uint64_t{adaptor->plan()->source_frame_variable_count}
 					+ operand.index;
 		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + physical_slot) * sizeof(zval);
+			frame_slot_offset(physical_slot);
 		if (offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
@@ -4711,7 +4725,8 @@ public:
 	 * initializes the frame the Init pushed, calls the Zend entry and
 	 * leaves through the shared zend_native_call_fast_leave(). Only
 	 * caller-saved registers are used; the stack area holds the frame, the
-	 * result offset and the discarded result.
+	 * result offset and the discarded result, and saves RSI, RDX and RCX
+	 * across calls.
 	 */
 	void emit_fast_call_entry(uint32_t function_index) {
 		const zend_tpde_plan *plan = adaptor->plan();
@@ -4777,7 +4792,21 @@ public:
 			std::memcpy(text_writer.begin_ptr() + branch_end - 4,
 				&displacement, sizeof(displacement));
 		};
+		/*
+		 * The stack area: the frame, the result offset (R8D), the local zval
+		 * of a discarded result, the context (RSI) and two words that keep
+		 * RDX and RCX across the variadic and run-time cache calls, or the CV
+		 * cursor (R10) and end (R11) across a release.
+		 */
 		constexpr int32_t area = 56;
+		constexpr int32_t area_frame = 0;
+		constexpr int32_t area_result_offset = 8;
+		constexpr int32_t area_local_result = 16;
+		constexpr int32_t area_context = 32;
+		constexpr int32_t area_save_first = 40;
+		constexpr int32_t area_save_second = 48;
+		static_assert(area_local_result + sizeof(zval) == area_context
+			&& area_save_second + 8 == area);
 		auto member = [](size_t offset) {
 			return static_cast<int32_t>(offset);
 		};
@@ -4790,7 +4819,8 @@ public:
 				+ offsetof(zval, u1.type_info));
 		const uint32_t min_arguments = plan->fast_call_min_arguments;
 		const uint32_t start = text_writer.offset();
-		/* Its own FDE: the CFA is RSP + 48 between the stack adjustments. */
+		/* Its own FDE: the CFA is RSP + area + 8 between the stack
+		 * adjustments. */
 		text_writer.eh_begin_fde();
 		/*
 		 * The frame the call site pushed (ADR 0025 section 3): an argument
@@ -4914,7 +4944,7 @@ public:
 		text_writer.eh_advance(cfi_location - start);
 		text_writer.eh_write_inst(
 			tpde::dwarf::DW_CFA_def_cfa_offset, area + 8);
-		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 32), FE_SI);
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_context), FE_SI);
 		/* Unlink the frame from EX(call). */
 		ASM(MOV64rm, FE_AX, FE_MEM(FE_DI, 0, FE_NOREG,
 			member(offsetof(zend_execute_data, call))));
@@ -4922,11 +4952,11 @@ public:
 			member(offsetof(zend_execute_data, prev_execute_data))));
 		ASM(MOV64mr, FE_MEM(FE_DI, 0, FE_NOREG,
 			member(offsetof(zend_execute_data, call))), FE_R9);
-		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 0), FE_AX);
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_frame), FE_AX);
 		/* The return value: the result slot, or the local zval. */
 		ASM(MOV32rr, FE_R8, FE_R8);
-		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 8), FE_R8);
-		ASM(LEA64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, 16));
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_result_offset), FE_R8);
+		ASM(LEA64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, area_local_result));
 		ASM(LEA64rm, FE_R10, FE_MEM(FE_DI, 1, FE_R8, 0));
 		ASM(CMP32ri, FE_R8, -1);
 		ASM(CMOVNZ64rr, FE_R9, FE_R10);
@@ -4941,14 +4971,14 @@ public:
 		/* The variadic parameter collects the extra arguments, which move
 		 * behind the temporaries first; the call preserves nothing. */
 		if (variadic) {
-			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 40), FE_DX);
-			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 48), FE_CX);
+			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_save_first), FE_DX);
+			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_save_second), FE_CX);
 			ASM(MOV64rr, FE_DI, FE_AX);
 			emit_symbol_call(variadic_symbol);
-			ASM(MOV64rm, FE_AX, FE_MEM(FE_SP, 0, FE_NOREG, 0));
-			ASM(MOV64rm, FE_DX, FE_MEM(FE_SP, 0, FE_NOREG, 40));
-			ASM(MOV64rm, FE_CX, FE_MEM(FE_SP, 0, FE_NOREG, 48));
-			ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, 32));
+			ASM(MOV64rm, FE_AX, FE_MEM(FE_SP, 0, FE_NOREG, area_frame));
+			ASM(MOV64rm, FE_DX, FE_MEM(FE_SP, 0, FE_NOREG, area_save_first));
+			ASM(MOV64rm, FE_CX, FE_MEM(FE_SP, 0, FE_NOREG, area_save_second));
+			ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, area_context));
 		}
 		/* EX(opline) skips the RECV of every supplied parameter. */
 		ASM(MOV64rm, FE_R9, FE_MEM(FE_AX, 0, FE_NOREG,
@@ -5071,10 +5101,10 @@ public:
 		 * zend_native_call_fast_leave(), which starts from this state.
 		 */
 		std::vector<uint32_t> to_general;
-		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, area_frame));
 		ASM(TEST32rr, FE_AX, FE_AX);
 		to_general.push_back(branch(true));
-		ASM(MOV64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, 32));
+		ASM(MOV64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, area_context));
 		ASM(MOV64rm, FE_R10, FE_MEM(FE_R9, 0, FE_NOREG,
 			member(offsetof(zend_native_execution_context, exception))));
 		ASM(CMP64mi, FE_MEM(FE_R10, 0, FE_NOREG, 0), 0);
@@ -5099,7 +5129,7 @@ public:
 		const uint32_t undefined_result = branch_zero();
 		const uint32_t result_defined = text_writer.offset();
 		/* A discarded result is checked out of line. */
-		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, 8), -1);
+		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, area_result_offset), -1);
 		const uint32_t discarded = branch_zero();
 		const uint32_t discarded_checked = text_writer.offset();
 		/* A variable destructor may inspect the backtrace: the dying frame
@@ -5217,13 +5247,13 @@ public:
 		/* The callee's first call in the request creates its run-time
 		 * cache; the call preserves nothing. */
 		patch(missing_cache, text_writer.offset());
-		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 40), FE_DX);
+		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_save_first), FE_DX);
 		ASM(MOV64rr, FE_DI, FE_AX);
 		emit_symbol_call(run_time_cache_symbol);
 		ASM(MOV64rr, FE_R10, FE_AX);
-		ASM(MOV64rm, FE_AX, FE_MEM(FE_SP, 0, FE_NOREG, 0));
-		ASM(MOV64rm, FE_DX, FE_MEM(FE_SP, 0, FE_NOREG, 40));
-		ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, 32));
+		ASM(MOV64rm, FE_AX, FE_MEM(FE_SP, 0, FE_NOREG, area_frame));
+		ASM(MOV64rm, FE_DX, FE_MEM(FE_SP, 0, FE_NOREG, area_save_first));
+		ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, area_context));
 		patch(branch(false), cache_ready);
 		/* zend_native_call_fast_release_this(object, result, discarded),
 		 * whose status the entry returns. The frame's memory is free: its
@@ -5231,11 +5261,11 @@ public:
 		patch(this_released, text_writer.offset());
 		patch(this_candidate, text_writer.offset());
 		ASM(MOV64rr, FE_DI, FE_R9);
-		ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, area_frame));
 		ASM(MOV64rm, FE_SI, FE_MEM(FE_SI, 0, FE_NOREG,
 			member(offsetof(zend_execute_data, return_value))));
 		ASM(XOR32rr, FE_DX, FE_DX);
-		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, 8), -1);
+		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, area_result_offset), -1);
 		ASM(SETZ8r, FE_DX);
 		emit_symbol_call(release_this_symbol);
 		text_writer.ensure_space(16);
@@ -5266,16 +5296,16 @@ public:
 			patch(not_reference, next);
 			patch(released, text_writer.offset());
 			patch(candidate, text_writer.offset());
-			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 40), FE_R10);
-			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, 48), FE_R11);
+			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_save_first), FE_R10);
+			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, area_save_second), FE_R11);
 			ASM(MOV64rr, FE_DI, FE_R10);
 			emit_symbol_call(release_symbol);
-			ASM(MOV64rm, FE_R10, FE_MEM(FE_SP, 0, FE_NOREG, 40));
-			ASM(MOV64rm, FE_R11, FE_MEM(FE_SP, 0, FE_NOREG, 48));
+			ASM(MOV64rm, FE_R10, FE_MEM(FE_SP, 0, FE_NOREG, area_save_first));
+			ASM(MOV64rm, FE_R11, FE_MEM(FE_SP, 0, FE_NOREG, area_save_second));
 			/* The straight tests address the frame, the leave the
 			 * context. */
-			ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
-			ASM(MOV64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, 32));
+			ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, area_frame));
+			ASM(MOV64rm, FE_R9, FE_MEM(FE_SP, 0, FE_NOREG, area_context));
 			const uint32_t back = branch(false);
 			patch(back, next);
 		}
@@ -5331,10 +5361,10 @@ public:
 		for (uint32_t general : to_general) {
 			patch(general, general_leave);
 		}
-		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, 0));
+		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, area_frame));
 		ASM(MOV32rr, FE_SI, FE_AX);
 		ASM(XOR32rr, FE_DX, FE_DX);
-		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, 8), -1);
+		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, area_result_offset), -1);
 		ASM(SETZ8r, FE_DX);
 		emit_symbol_call(leave_symbol);
 		ASM(ADD64ri, FE_SP, area);
@@ -5703,6 +5733,10 @@ public:
 	bool emit_pointer_addref(
 		zend_tpde_machine_value_kind kind,
 		AsmReg payload_reg);
+	/* Z_TRY_ADDREF of a zval whose type info is in type_reg and payload in
+	 * payload_reg: a counted value gains increment references. */
+	void emit_try_addref(
+		AsmReg type_reg, AsmReg payload_reg, int32_t increment = 1);
 	bool emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path = false);
 	void consume_materializations(IRInstRef instruction) {
@@ -5963,6 +5997,18 @@ bool ZendCompilerX64::emit_pointer_addref(
 	return true;
 }
 
+void ZendCompilerX64::emit_try_addref(
+		AsmReg type_reg, AsmReg payload_reg, int32_t increment) {
+	const auto uncounted = text_writer.label_create();
+	ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+	generate_raw_jump(Jump::je, uncounted);
+	ASM(ADD32mi,
+		FE_MEM(payload_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
+		increment);
+	label_place(uncounted);
+}
+
 bool ZendCompilerX64::emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path) {
 	if (adaptor->typed_body()) {
@@ -6003,8 +6049,7 @@ bool ZendCompilerX64::emit_materializations(
 		const zend_tpde_materialization &materialization =
 			materializations[index];
 		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + materialization.storage_id)
-				* sizeof(zval);
+			frame_slot_offset(materialization.storage_id);
 		if (!zend_mir_id_is_valid(materialization.storage_id)
 				|| offset > static_cast<uint64_t>(INT32_MAX)
 					- sizeof(zval)) {
@@ -6603,7 +6648,7 @@ bool ZendCompilerX64::reload_generator_values(
 		const zend_tpde_machine_value_kind machine_kind =
 			adaptor->machine_kind(operand);
 		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			frame_slot_offset(storage);
 		if (!zend_mir_id_is_valid(storage)
 				|| offset + offsetof(zval, u1.type_info) > INT32_MAX) {
 			return false;
@@ -6841,7 +6886,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			const zend_mir_storage_id storage_id =
 				adaptor->canonical_storage(guard_operands[operand]);
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval);
+				frame_slot_offset(storage_id);
 			if (!zend_mir_id_is_valid(storage_id)
 					|| offset > INT32_MAX - sizeof(zval)) {
 				return false;
@@ -7408,9 +7453,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				const int32_t result_offset =
 					static_cast<int32_t>(
-						(uint64_t{ZEND_CALL_FRAME_SLOT}
-							+ operation.result_storage_id)
-						* sizeof(zval));
+						frame_slot_offset(operation.result_storage_id));
 				auto [frame_ref, frame] = val_ref_single(
 					node.operands[dispatch_case.frame_operand]);
 				auto frame_scratch = frame_register(std::move(frame));
@@ -7448,9 +7491,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				}
 				const int32_t operand_offset =
 					static_cast<int32_t>(
-						(uint64_t{ZEND_CALL_FRAME_SLOT}
-							+ operation.op1_storage_id)
-						* sizeof(zval));
+						frame_slot_offset(operation.op1_storage_id));
 				auto slow_exception = text_writer.label_create();
 				auto [frame_ref, frame] = val_ref_single(
 					node.operands[dispatch_case.frame_operand]);
@@ -8592,7 +8633,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64rm, callee_reg,
 						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(zend_execute_data, call))));
-					ASM(SHL64ri, target_reg, 4);
+					ASM(SHL64ri, target_reg, zval_size_shift);
 					ASM(ADD64rr, target_reg, callee_reg);
 				}
 				auto &direct_value = direct_value_ref();
@@ -8841,8 +8882,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT}))
 				!= nullptr;
 			const uint64_t array_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT}
-					+ send_argument.source_operand.index) * sizeof(zval);
+				frame_slot_offset(send_argument.source_operand.index);
 			if (send_argument.source_opcode == ZEND_SEND_ARRAY
 					&& send_argument.auxiliary_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_UNUSED
@@ -8943,7 +8983,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(MOV64rm, target_reg, FE_MEM(element_reg, 0, FE_NOREG,
 					static_cast<int32_t>(sizeof(zval *))));
 				ASM(SUB64rm, target_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
-				ASM(SHR64ri, target_reg, 4);
+				ASM(SHR64ri, target_reg, zval_size_shift);
 				ASM(CMP64rr, target_reg, count_reg);
 				generate_raw_jump(Jump::jbe, helper);
 				/* The arguments start after those already sent. */
@@ -8953,12 +8993,12 @@ bool ZendCompilerX64::compile_inst_impl(
 				ASM(MOV32mr, FE_MEM(callee_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zend_execute_data, This)
 						+ offsetof(zval, u2.num_args))), work_reg);
-				ASM(SHL64ri, target_reg, 4);
+				ASM(SHL64ri, target_reg, zval_size_shift);
 				ASM(LEA64rm, target_reg, FE_MEM(callee_reg, 1, target_reg,
 					static_cast<int32_t>(ZEND_CALL_FRAME_SLOT * sizeof(zval))));
 				/* EG(vm_stack_top) += count. */
 				ASM(MOV64rr, work_reg, count_reg);
-				ASM(SHL64ri, work_reg, 4);
+				ASM(SHL64ri, work_reg, zval_size_shift);
 				ASM(ADD64mr, FE_MEM(element_reg, 0, FE_NOREG, 0), work_reg);
 				ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(HashTable, arPacked))));
@@ -8973,7 +9013,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV32rm, work_reg, FE_MEM(table_reg, 0, FE_NOREG,
 						static_cast<int32_t>(offsetof(zval, u1.type_info))));
 					ASM(MOV64rm, element_reg, FE_MEM(table_reg, 0, FE_NOREG, 0));
-					ASM(TEST32ri, work_reg, 0xff00);
+					ASM(TEST32ri, work_reg, Z_TYPE_FLAGS_MASK);
 					generate_raw_jump(Jump::je, copy);
 					ASM(CMP8ri, work_reg, IS_REFERENCE);
 					emit_cold_branch(Jump::je, counted, [&] {
@@ -8984,7 +9024,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							FE_MEM(element_reg, 0, FE_NOREG,
 								static_cast<int32_t>(
 									offsetof(zend_reference, val))));
-						ASM(TEST32ri, work_reg, 0xff00);
+						ASM(TEST32ri, work_reg, Z_TYPE_FLAGS_MASK);
 						generate_raw_jump(Jump::je, copy);
 					});
 					ASM(ADD32mi, FE_MEM(element_reg, 0, FE_NOREG,
@@ -9104,7 +9144,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						auto counted = text_writer.label_create();
 						ASM(TEST8rr, work_reg, work_reg);
 						generate_raw_jump(Jump::je, helper);
-						ASM(TEST32ri, work_reg, 0xff00);
+						ASM(TEST32ri, work_reg, Z_TYPE_FLAGS_MASK);
 						generate_raw_jump(Jump::je, copy);
 						ASM(CMP8ri, work_reg, IS_REFERENCE);
 						emit_cold_branch(Jump::je, counted, [&] {
@@ -9117,7 +9157,7 @@ bool ZendCompilerX64::compile_inst_impl(
 								FE_MEM(value_reg, 0, FE_NOREG,
 									static_cast<int32_t>(
 										offsetof(zend_reference, val))));
-							ASM(TEST32ri, work_reg, 0xff00);
+							ASM(TEST32ri, work_reg, Z_TYPE_FLAGS_MASK);
 							generate_raw_jump(Jump::je, copy);
 						});
 						ASM(ADD32mi, FE_MEM(value_reg, 0, FE_NOREG,
@@ -9217,8 +9257,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						adaptor->plan()->source_frame_variable_count}))
 					* sizeof(zval);
 			const uint64_t target_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + node.argument_index)
-					* sizeof(zval);
+				frame_slot_offset(node.argument_index);
 			if (source_offset > INT32_MAX - sizeof(zval)
 					|| target_offset > INT32_MAX - sizeof(zval)) {
 				return false;
@@ -9401,14 +9440,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				if (cv || literal) {
 					/* A CV or literal keeps its value; the argument adds a
 					 * reference. A temporary moves into the argument. */
-					auto uncounted = text_writer.label_create();
-					ASM(TEST32ri, type_reg,
-						IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-					generate_raw_jump(Jump::je, uncounted);
-					ASM(ADD32mi,
-						FE_MEM(payload_reg, 0, FE_NOREG, static_cast<int32_t>(
-							offsetof(zend_refcounted_h, refcount))), 1);
-					label_place(uncounted);
+					emit_try_addref(type_reg, payload_reg);
 				}
 				ASM(MOV64rm, address_reg,
 					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
@@ -9959,7 +9991,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					adaptor->plan()->source_frame_variable_count)
 					+ result_operand.index;
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+				frame_slot_offset(storage);
 			if (offset > INT32_MAX - sizeof(zval)) {
 				return false;
 			}
@@ -10220,7 +10252,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			const zend_tpde_machine_value_kind machine_kind =
 				adaptor->machine_kind(operand);
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+				frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
 					|| offset + offsetof(zval, u1.type_info)
 						> INT32_MAX) {
@@ -10328,8 +10360,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					: zend_tpde_machine_value_zval_type(
 						guard.machine_kind);
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + guard.storage_id)
-				* sizeof(zval);
+				frame_slot_offset(guard.storage_id);
 			if (!zend_mir_id_is_valid(guard.storage_id)
 					|| expected_type == IS_UNDEF
 					|| offset + offsetof(zval, u1.type_info)
@@ -10375,7 +10406,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		const bool frame_slot = adaptor->frame_slot_reference(
 			node.operands[0], &storage_id);
 		const uint64_t frame_offset = frame_slot
-			? (uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval)
+			? frame_slot_offset(storage_id)
 			: 0;
 		if (frame_offset > INT32_MAX - sizeof(zval)) {
 			return false;
@@ -10418,7 +10449,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return false;
 		}
 		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + node.storage_id) * sizeof(zval);
+			frame_slot_offset(node.storage_id);
 		if (offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
@@ -10473,7 +10504,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		const bool frame_slot = adaptor->frame_slot_reference(
 			node.operands[0], &storage_id);
 		const uint64_t frame_offset = frame_slot
-			? (uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id) * sizeof(zval)
+			? frame_slot_offset(storage_id)
 			: 0;
 		if (frame_offset > static_cast<uint64_t>(INT64_MAX)
 				- sizeof(zval)) {
@@ -10645,7 +10676,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (mir.zval_store_plain || mir.zval_store_lazy_scalar) {
 			const zend_mir_storage_id storage = mir.zval_store_storage_id;
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+				frame_slot_offset(storage);
 			if (node.operands.size() != 2
 					|| node.operands[1] != IRValueRef{Adaptor::FRAME_VALUE}
 					|| !zend_mir_id_is_valid(storage)
@@ -10700,7 +10731,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		const zend_mir_scalar_type_mask exact_type =
 			adaptor->exact_type(input);
 		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			frame_slot_offset(storage);
 		if (!zend_mir_id_is_valid(storage)
 				|| !zend_mir_scalar_type_is_exact(exact_type)
 				|| mir.runtime_helper
@@ -11041,7 +11072,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return false;
 		}
 		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			frame_slot_offset(storage);
 		if (offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
@@ -11273,8 +11304,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		if (!frameless_inline
 				&& zend_tpde_helper_requires_undef_result(helper, operation)) {
 			const uint64_t result_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT}
-					+ operation.result_storage_id) * sizeof(zval)
+				frame_slot_offset(operation.result_storage_id)
 				+ offsetof(zval, u1.type_info);
 			if (result_offset > INT32_MAX - sizeof(uint32_t)) {
 				return false;
@@ -11333,7 +11363,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				return false;
 			}
 			const uint64_t offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+				frame_slot_offset(storage);
 			*out = {operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 					? uint32_t{ZEND_NATIVE_DIM_DIRECT_CV}
 					: uint32_t{ZEND_NATIVE_DIM_DIRECT_TMP},
@@ -11726,7 +11756,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			const zend_mir_storage_id storage = node.mutation_result
 				? operation.op1_storage_id : operation.result_storage_id;
 			const uint64_t frame_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+				frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
 					|| frame_offset > INT32_MAX - sizeof(zval)) {
 				return false;
@@ -11782,7 +11812,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return false;
 		}
 		const uint64_t piece_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + rope_storage) * sizeof(zval)
+			frame_slot_offset(rope_storage)
 			+ (initialize ? 0 : uint64_t{operation.extended_value})
 				* sizeof(zend_string *);
 		const uint64_t literal_offset =
@@ -11830,7 +11860,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		const uint64_t offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			frame_slot_offset(storage);
 		if (offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
@@ -11972,8 +12002,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					? mir.value_operation.op1_storage_id
 					: mir.value_operation.result_storage_id;
 			const uint64_t frame_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + storage)
-					* sizeof(zval);
+				frame_slot_offset(storage);
 			if (!zend_mir_id_is_valid(storage)
 					|| frame_offset > INT32_MAX - sizeof(zval)
 					|| (node.mutation_result
@@ -12148,11 +12177,11 @@ bool ZendCompilerX64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		const uint64_t source_offset = literal_source ? 0
-			: (uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
+			: frame_slot_offset(source_storage);
 		const uint64_t target_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + target_storage) * sizeof(zval);
+			frame_slot_offset(target_storage);
 		const uint64_t result_offset = result_storage == ZEND_MIR_ID_INVALID
-			? 0 : (uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
+			? 0 : frame_slot_offset(result_storage);
 		if (source_offset > INT32_MAX - sizeof(zval)
 				|| target_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
@@ -12430,15 +12459,8 @@ bool ZendCompilerX64::compile_inst_impl(
 			(!move_source ? 1 : 0)
 			+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
 		if (source_refcount_increments != 0 && !scalar_source) {
-			ASM(TEST32ri, source_type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			auto value_owned = text_writer.label_create();
-			generate_raw_jump(Jump::je, value_owned);
-			ASM(ADD32mi,
-				FE_MEM(source_payload_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, refcount))),
-				source_refcount_increments);
-			label_place(value_owned);
+			emit_try_addref(source_type_reg, source_payload_reg,
+				static_cast<int32_t>(source_refcount_increments));
 		}
 		ASM(MOV64mr,
 			FE_MEM(target_reg, 0, FE_NOREG, 0),
@@ -12526,9 +12548,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		const uint64_t source_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
+			frame_slot_offset(source_storage);
 		const uint64_t result_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + result_storage) * sizeof(zval);
+			frame_slot_offset(result_storage);
 		if (source_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return branch_to_guarded_cold();
@@ -12550,15 +12572,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		ASM(MOV64rm, value_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(source_offset)));
-		ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		auto copied = text_writer.label_create();
-		generate_raw_jump(Jump::je, copied);
-		ASM(ADD32mi,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_refcounted_h, refcount))),
-			1);
-		label_place(copied);
+		emit_try_addref(type_reg, value_reg);
 		ASM(MOV64mr,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(result_offset)),
@@ -12577,7 +12591,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		const uint64_t source_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + source_storage) * sizeof(zval);
+			frame_slot_offset(source_storage);
 		if (source_offset > INT32_MAX - sizeof(zval)) {
 			return branch_to_guarded_cold();
 		}
@@ -12811,7 +12825,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return 0;
 		}
 		auto frame_offset = [](zend_mir_storage_id storage) {
-			return (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			return frame_slot_offset(storage);
 		};
 		const uint64_t container_offset = container_literal
 			? uint64_t{operation.op1.index} * sizeof(zval)
@@ -14050,8 +14064,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		generate_raw_jump(Jump::jbe, slow);
 		const zend_mir_executable_value_ref &read = mir.value_operation;
 		const uint64_t result_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + read.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(read.result_storage_id);
 		const bool publish = zend_mir_id_is_valid(read.result_storage_id)
 			&& (read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
 				|| read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
@@ -14212,11 +14225,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const auto successors = guarded_successors_of(node);
 		const uint64_t value_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.op1_storage_id);
 		const uint64_t result_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.result_storage_id);
 		if (value_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return 0;
@@ -14363,15 +14374,12 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const auto successors = guarded_successors_of(node);
 		const uint64_t value_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.op1_storage_id);
 		const uint64_t literal_offset = variable_other
-			? (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op2_storage_id)
-				* sizeof(zval)
+			? frame_slot_offset(operation.op2_storage_id)
 			: uint64_t{operation.op2.index} * sizeof(zval);
 		const uint64_t result_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.result_storage_id);
 		if (value_offset > INT32_MAX - sizeof(zval)
 				|| literal_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
@@ -14608,7 +14616,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const auto successors = guarded_successors_of(node);
 		auto frame_offset = [](zend_mir_storage_id storage) {
-			return (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
+			return frame_slot_offset(storage);
 		};
 		const uint64_t key_offset = key_literal
 			? uint64_t{operation.op1.index} * sizeof(zval)
@@ -14748,8 +14756,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const auto successors = guarded_successors_of(node);
 		const uint64_t holder_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.op1_storage_id);
 		if (holder_offset > INT32_MAX - sizeof(zval)) {
 			return 0;
 		}
@@ -14802,8 +14809,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		const uint64_t literal_offset =
 			uint64_t{operation.op1.index} * sizeof(zval);
 		const uint64_t result_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.result_storage_id);
 		if (literal_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return 0;
@@ -14896,11 +14902,9 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		const auto successors = guarded_successors_of(node);
 		const uint64_t value_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.op1_storage_id);
 		const uint64_t result_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.result_storage_id);
 		if (value_offset > INT32_MAX - sizeof(zval)
 				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return 0;
@@ -15142,7 +15146,7 @@ bool ZendCompilerX64::compile_inst_impl(
 
 		static_assert(sizeof(zval) == 16);
 		ASM(MOV64rr, element_reg, count_reg);
-		ASM(SHL64ri, element_reg, 4);
+		ASM(SHL64ri, element_reg, zval_size_shift);
 		ASM(ADD64rm, element_reg,
 			FE_MEM(array_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(HashTable, arPacked))));
@@ -15158,12 +15162,12 @@ bool ZendCompilerX64::compile_inst_impl(
 					static_cast<int32_t>(layout.value_offset)));
 			ASM(MOV64rm, high_word_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.value_offset + 8)));
+					static_cast<int32_t>(layout.value_offset + zval_high_word)));
 		}
 		ASM(MOV64mr,
 			FE_MEM(element_reg, 0, FE_NOREG, 0), low_word_reg);
 		ASM(MOV64mr,
-			FE_MEM(element_reg, 0, FE_NOREG, 8), high_word_reg);
+			FE_MEM(element_reg, 0, FE_NOREG, zval_high_word), high_word_reg);
 		if (layout.move_value) {
 			ASM(MOV32mi,
 				FE_MEM(frame_reg, 0, FE_NOREG,
@@ -15172,15 +15176,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							+ offsetof(zval, u1.type_info))),
 				IS_UNDEF);
 		} else if (!scalar_value) {
-			auto copied = text_writer.label_create();
-			ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::je, copied);
-			ASM(ADD32mi,
-				FE_MEM(low_word_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, refcount))),
-				1);
-			label_place(copied);
+			emit_try_addref(type_reg, low_word_reg);
 		}
 		ASM(ADD32ri, count_reg, 1);
 		ASM(MOV32mr,
@@ -15208,18 +15204,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				low_word_reg);
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset + 8)),
+					static_cast<int32_t>(layout.result_offset + zval_high_word)),
 				high_word_reg);
 			if (!scalar_value) {
-				auto result_copied = text_writer.label_create();
-				ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-				generate_raw_jump(Jump::je, result_copied);
-				ASM(ADD32mi,
-					FE_MEM(low_word_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_refcounted_h, refcount))),
-					1);
-				label_place(result_copied);
+				emit_try_addref(type_reg, low_word_reg);
 			}
 		}
 		finish_guarded_with(slow, done, std::move(decision), [&] {
@@ -15634,9 +15622,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					|| mir.value_operation.result.slot_kind
 						== ZEND_MIR_SOURCE_SLOT_CV)) {
 			const uint64_t result_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT}
-					+ mir.value_operation.result_storage_id)
-					* sizeof(zval);
+				frame_slot_offset(mir.value_operation.result_storage_id);
 			if (result_offset <= UINT32_MAX - 8) {
 				layout.result_offset =
 					static_cast<uint32_t>(result_offset);
@@ -15794,8 +15780,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					/* With frame-only operands a temporary is published in its
 					 * slot; consuming a number needs no release. */
 					out->literal = false;
-					offset = (uint64_t{ZEND_CALL_FRAME_SLOT} + storage)
-						* sizeof(zval);
+					offset = frame_slot_offset(storage);
 				} else {
 					return false;
 				}
@@ -15833,8 +15818,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * contracts ASSIGN into it only then, and an aliased input was
 			 * just checked to be numeric. A temporary never aliases input. */
 			const uint64_t result_offset64 = result_slot
-				? (uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-					* sizeof(zval)
+				? frame_slot_offset(operation.result_storage_id)
 				: 0;
 			if (result_offset64 > INT32_MAX - sizeof(zval)
 					|| (!register_operands
@@ -17632,7 +17616,6 @@ bool ZendCompilerX64::compile_inst_impl(
 		auto slow = text_writer.label_create();
 		auto property_metadata_valid = text_writer.label_create();
 		auto old_released = text_writer.label_create();
-		auto value_owned = text_writer.label_create();
 		auto done = text_writer.label_create();
 		auto [frame_ref, frame] =
 			val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
@@ -17796,14 +17779,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					FE_NOREG, static_cast<int32_t>(layout.value_offset)));
 		}
 		if (!scalar_value && !layout.move_value) {
-			ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-			generate_raw_jump(Jump::je, value_owned);
-			ASM(ADD32mi,
-				FE_MEM(low_word_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_refcounted_h, refcount))),
-				1);
-			label_place(value_owned);
+			emit_try_addref(type_reg, low_word_reg);
 		}
 		ASM(MOV64mr,
 			FE_MEM(property_reg, 0, FE_NOREG, 0), low_word_reg);
@@ -17852,8 +17828,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& operation.extended_value <= INT32_MAX - sizeof(void *);
 		frame_operands = frame_operands && frame_only_operands(node);
 		const uint64_t result_offset64 =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.result_storage_id);
 		if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
 			return execute_value_operation();
 		}
@@ -17930,8 +17905,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& uint64_t{operation.op2.index} * sizeof(zval) <= INT32_MAX;
 		frame_operands = frame_operands && frame_only_operands(node);
 		const uint64_t local_offset64 =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.op1_storage_id);
 		/* Images outlive the process (the OPcache file cache): the symbol
 		 * table comes from the context. */
 		if (!frame_operands || local_offset64 > INT32_MAX - sizeof(zval)
@@ -18048,8 +18022,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			&& operation.extended_value <= INT32_MAX - 2 * sizeof(void *);
 		frame_operands = frame_operands && frame_only_operands(node);
 		const uint64_t result_offset64 =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.result_storage_id);
 		if (!frame_operands || result_offset64 > INT32_MAX - sizeof(zval)) {
 			return execute_value_operation();
 		}
@@ -18164,11 +18137,9 @@ bool ZendCompilerX64::compile_inst_impl(
 			operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV;
 		frame_operands = frame_operands && frame_only_operands(node);
 		const uint64_t value_offset64 =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.op1_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.op1_storage_id);
 		const uint64_t result_offset64 =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + operation.result_storage_id)
-				* sizeof(zval);
+			frame_slot_offset(operation.result_storage_id);
 		if (!frame_operands || value_offset64 > INT32_MAX - sizeof(zval)
 				|| result_offset64 > INT32_MAX - sizeof(zval)) {
 			return execute_value_operation();
@@ -18305,8 +18276,7 @@ bool ZendCompilerX64::compile_inst_impl(
 		}
 		if (layout.direct_long) {
 			const uint64_t value_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT} + layout.cv_index)
-					* sizeof(zval);
+				frame_slot_offset(layout.cv_index);
 			if (value_offset > INT32_MAX - sizeof(zval)
 					|| adaptor->representation(node.result)
 						!= ZEND_MIR_REPRESENTATION_I64
@@ -18336,7 +18306,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			return true;
 		}
 		const uint64_t cv_offset =
-			(uint64_t{ZEND_CALL_FRAME_SLOT} + layout.cv_index) * sizeof(zval);
+			frame_slot_offset(layout.cv_index);
 		if (cv_offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
@@ -18529,8 +18499,7 @@ bool ZendCompilerX64::compile_inst_impl(
 									== ZEND_MIR_SOURCE_SLOT_TMP)
 							&& zend_mir_id_is_valid(storage)) {
 						*literal = false;
-						offset = (uint64_t{ZEND_CALL_FRAME_SLOT} + storage)
-							* sizeof(zval);
+						offset = frame_slot_offset(storage);
 					} else {
 						return false;
 					}
@@ -18664,7 +18633,7 @@ bool ZendCompilerX64::compile_inst_impl(
 										HashTable, nNumUsed))));
 							ASM(CMP64rr, left_reg, left_type_reg);
 							generate_raw_jump(Jump::jae, slow);
-							ASM(SHL64ri, left_reg, 4);
+							ASM(SHL64ri, left_reg, zval_size_shift);
 							ASM(ADD64rm, left_reg,
 								FE_MEM(element_reg, 0, FE_NOREG,
 									static_cast<int32_t>(offsetof(
@@ -18860,9 +18829,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				 * Iterators and counted arrays keep the runtime primitive.
 				 */
 				const uint64_t holder_offset =
-					(uint64_t{ZEND_CALL_FRAME_SLOT}
-						+ mir.value_operation.op1_storage_id)
-					* sizeof(zval);
+					frame_slot_offset(mir.value_operation.op1_storage_id);
 				if (holder_offset > INT32_MAX - sizeof(zval)) {
 					return execute_value_operation();
 				}
@@ -19107,8 +19074,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					const uint64_t literal_offset =
 						uint64_t{verify.op1.index} * sizeof(zval);
 					const uint64_t result_offset =
-						(uint64_t{ZEND_CALL_FRAME_SLOT}
-							+ verify.result_storage_id) * sizeof(zval);
+						frame_slot_offset(verify.result_storage_id);
 					if (literal_offset > INT32_MAX - sizeof(zval)
 							|| result_offset > INT32_MAX - sizeof(zval)) {
 						return false;
@@ -19189,8 +19155,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				return false;
 			}
 			const uint64_t result_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT}
-					+ mir.value_operation.result_storage_id) * sizeof(zval);
+				frame_slot_offset(mir.value_operation.result_storage_id);
 			if (result_offset > INT32_MAX - offsetof(zval, u1.type_info)) {
 				return false;
 			}
@@ -19782,7 +19747,8 @@ bool ZendCompilerX64::compile_inst_impl(
 					}
 					label_place(copy);
 					ASM(MOV64rm, high_word_reg,
-						FE_MEM(source_reg, 0, FE_NOREG, source_offset + 8));
+						FE_MEM(source_reg, 0, FE_NOREG,
+							source_offset + zval_high_word));
 					ASM(MOV64mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(reset_layout.holder_offset)),
@@ -19790,7 +19756,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					ASM(MOV64mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
-								reset_layout.holder_offset + 8)),
+								reset_layout.holder_offset + zval_high_word)),
 						high_word_reg);
 					ASM(MOV32mi,
 						FE_MEM(frame_reg, 0, FE_NOREG,
@@ -20069,7 +20035,7 @@ bool ZendCompilerX64::compile_inst_impl(
 
 					static_assert(sizeof(zval) == 16);
 					ASM(MOV64rr, element_reg, position_reg);
-					ASM(SHL64ri, element_reg, 4);
+					ASM(SHL64ri, element_reg, zval_size_shift);
 					ASM(ADD64rm, element_reg,
 						FE_MEM(array_reg, 0, FE_NOREG,
 							static_cast<int32_t>(
@@ -20164,16 +20130,7 @@ bool ZendCompilerX64::compile_inst_impl(
 								+ offsetof(zval, u2.fe_pos))),
 						position_reg);
 					if (!layout.destination_scalar_only) {
-						auto value_counted = text_writer.label_create();
-						ASM(TEST32ri, type_reg,
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						generate_raw_jump(Jump::je, value_counted);
-						ASM(ADD32mi,
-							FE_MEM(value_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_refcounted_h, refcount))),
-							1);
-						label_place(value_counted);
+						emit_try_addref(type_reg, value_reg);
 					}
 					ASM(MOV64mr,
 						FE_MEM(frame_reg, 0, FE_NOREG,
@@ -20400,11 +20357,9 @@ bool ZendCompilerX64::compile_inst_impl(
 								|| operation.source_opcode == ZEND_COALESCE)
 							&& !fused && result_condition);
 					const uint64_t operand_offset =
-						(uint64_t{ZEND_CALL_FRAME_SLOT}
-							+ operation.op1_storage_id) * sizeof(zval);
+						frame_slot_offset(operation.op1_storage_id);
 					const uint64_t result_offset = has_result
-						? (uint64_t{ZEND_CALL_FRAME_SLOT}
-							+ operation.result_storage_id) * sizeof(zval)
+						? frame_slot_offset(operation.result_storage_id)
 						: 0;
 					if (supported_opcode
 							&& zend_mir_id_is_valid(
@@ -20435,8 +20390,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					const zend_mir_executable_value_ref &operation =
 						mir.value_operation;
 					const uint64_t operand_offset =
-						(uint64_t{ZEND_CALL_FRAME_SLOT}
-							+ operation.op1_storage_id) * sizeof(zval);
+						frame_slot_offset(operation.op1_storage_id);
 					if (!zend_mir_id_is_valid(operation.op1_storage_id)
 							|| operand_offset > INT32_MAX - sizeof(zval)) {
 						return false;
@@ -21090,8 +21044,7 @@ bool ZendCompilerX64::compile_inst_impl(
 				const zend_mir_storage_id storage =
 					operation.result_storage_id;
 				const uint64_t frame_offset =
-					(uint64_t{ZEND_CALL_FRAME_SLOT} + storage)
-						* sizeof(zval);
+					frame_slot_offset(storage);
 				const bool scalar_result =
 					(adaptor->representation(node.result)
 							== ZEND_MIR_REPRESENTATION_I64
@@ -21827,7 +21780,8 @@ bool ZendCompilerX64::compile_inst_impl(
 								ASM(MOV64mr,
 									FE_MEM(callee_reg, 0, FE_NOREG, offset),
 									payload_reg);
-								store_exact_type_word(callee_reg, offset + 8,
+								store_exact_type_word(callee_reg,
+									offset + zval_high_word,
 									descriptor_argument.exact_type,
 									payload_reg);
 							} else {
@@ -21848,7 +21802,7 @@ bool ZendCompilerX64::compile_inst_impl(
 										literal_reg);
 									ASM(MOV64mi,
 										FE_MEM(callee_reg, 0, FE_NOREG,
-											offset + 8),
+											offset + zval_high_word),
 										zval_type(call.direct_call
 											->arguments[index].exact_type)
 											+ (call.direct_call
@@ -21883,14 +21837,14 @@ bool ZendCompilerX64::compile_inst_impl(
 									ASM(MOV64rm, high_word_reg,
 										FE_MEM(source_frame_reg, 0,
 											FE_NOREG,
-											source_offset + 8));
+											source_offset + zval_high_word));
 									ASM(MOV64mr,
 										FE_MEM(callee_reg, 0, FE_NOREG,
 											offset),
 										low_word_reg);
 									ASM(MOV64mr,
 										FE_MEM(callee_reg, 0, FE_NOREG,
-											offset + 8),
+											offset + zval_high_word),
 										high_word_reg);
 								}
 							} else if (adaptor->machine_kind(
@@ -21916,7 +21870,7 @@ bool ZendCompilerX64::compile_inst_impl(
 									low_word.cur_reg());
 								ASM(MOV32mr,
 									FE_MEM(callee_reg, 0, FE_NOREG,
-										offset + 8),
+										offset + zval_high_word),
 									high_word.cur_reg());
 								ASM(MOV32mi,
 									FE_MEM(callee_reg, 0, FE_NOREG,
@@ -21952,7 +21906,7 @@ bool ZendCompilerX64::compile_inst_impl(
 											FE_NOREG, offset),
 										argument_reg);
 								}
-								store_type_word(callee_reg, offset + 8,
+								store_type_word(callee_reg, offset + zval_high_word,
 									zval_type(*adaptor,
 										node.operands[index]),
 									argument_reg);
@@ -22747,7 +22701,7 @@ bool ZendCompilerX64::compile_inst_impl(
 										literal_reg);
 									ASM(MOV64mi,
 										FE_MEM(callee_reg, 0, FE_NOREG,
-											offset + 8),
+											offset + zval_high_word),
 										zval_type(
 											descriptor_argument.exact_type)
 											+ (descriptor_argument.exact_type
@@ -22780,7 +22734,7 @@ bool ZendCompilerX64::compile_inst_impl(
 											argument_reg);
 									}
 									store_exact_type_word(callee_reg,
-										offset + 8,
+										offset + zval_high_word,
 										descriptor_argument.exact_type,
 										argument_reg);
 								} else {
@@ -22812,7 +22766,7 @@ bool ZendCompilerX64::compile_inst_impl(
 											offset),
 										payload_reg);
 									store_exact_type_word(callee_reg,
-										offset + 8,
+										offset + zval_high_word,
 										descriptor_argument.exact_type,
 										payload_reg);
 								}
@@ -22850,22 +22804,16 @@ bool ZendCompilerX64::compile_inst_impl(
 								ASM(MOV64rm, low_word_reg,
 									FE_MEM(source_address_reg, 0, FE_NOREG, 0));
 								ASM(MOV64rm, high_word_reg,
-									FE_MEM(source_address_reg, 0, FE_NOREG, 8));
+									FE_MEM(source_address_reg, 0, FE_NOREG,
+										zval_high_word));
 								ASM(MOV64mr,
 									FE_MEM(callee_reg, 0, FE_NOREG, offset),
 									low_word_reg);
 								ASM(MOV64mr,
-									FE_MEM(callee_reg, 0, FE_NOREG, offset + 8),
+									FE_MEM(callee_reg, 0, FE_NOREG,
+										offset + zval_high_word),
 									high_word_reg);
-								ASM(TEST32ri, high_word_reg,
-									IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-								auto copied = text_writer.label_create();
-								generate_raw_jump(Jump::je, copied);
-								ASM(ADD32mi,
-									FE_MEM(low_word_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zend_refcounted_h, refcount))), 1);
-								label_place(copied);
+								emit_try_addref(high_word_reg, low_word_reg);
 							} else if (register_pointer_argument) {
 								auto pointer =
 									std::move(argument).into_scratch();
@@ -22881,7 +22829,7 @@ bool ZendCompilerX64::compile_inst_impl(
 								}
 								ASM(MOV32mr,
 									FE_MEM(callee_reg, 0, FE_NOREG,
-										offset + 8),
+										offset + zval_high_word),
 									type_info_reg);
 								ASM(MOV32mi,
 									FE_MEM(callee_reg, 0, FE_NOREG,
@@ -22923,7 +22871,7 @@ bool ZendCompilerX64::compile_inst_impl(
 									low_word.cur_reg());
 								ASM(MOV32mr,
 									FE_MEM(callee_reg, 0, FE_NOREG,
-										offset + 8),
+										offset + zval_high_word),
 									high_word.cur_reg());
 								ASM(MOV32mi,
 									FE_MEM(callee_reg, 0, FE_NOREG,
@@ -22983,12 +22931,12 @@ bool ZendCompilerX64::compile_inst_impl(
 									ASM(ADD64ri, bits_reg, IS_FALSE);
 									ASM(MOV64mr,
 										FE_MEM(callee_reg, 0, FE_NOREG,
-											offset + 8),
+											offset + zval_high_word),
 										bits_reg);
 								} else {
 									ASM(MOV64mi,
 										FE_MEM(callee_reg, 0, FE_NOREG,
-											offset + 8),
+											offset + zval_high_word),
 										argument_kind
 												== ZEND_TPDE_MACHINE_VALUE_F64
 											? IS_DOUBLE : IS_LONG);
@@ -23025,24 +22973,17 @@ bool ZendCompilerX64::compile_inst_impl(
 							ASM(MOV64rm, low_word_reg,
 								FE_MEM(source_address_reg, 0, FE_NOREG, source_offset));
 							ASM(MOV64rm, high_word_reg,
-								FE_MEM(source_address_reg, 0, FE_NOREG, source_offset + 8));
+								FE_MEM(source_address_reg, 0, FE_NOREG,
+									source_offset + zval_high_word));
 							ASM(MOV64mr,
 								FE_MEM(callee_reg, 0, FE_NOREG, offset),
 								low_word_reg);
 							ASM(MOV64mr,
-								FE_MEM(callee_reg, 0, FE_NOREG, offset + 8),
+								FE_MEM(callee_reg, 0, FE_NOREG,
+									offset + zval_high_word),
 								high_word_reg);
 							if (copy_argument) {
-								ASM(TEST32ri, high_word_reg,
-									IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-								auto copied = text_writer.label_create();
-								generate_raw_jump(Jump::je, copied);
-								ASM(ADD32mi,
-									FE_MEM(low_word_reg, 0, FE_NOREG,
-										static_cast<int32_t>(offsetof(
-											zend_refcounted_h, refcount))),
-									1);
-								label_place(copied);
+								emit_try_addref(high_word_reg, low_word_reg);
 							} else {
 								ASM(MOV32mi,
 									FE_MEM(source_address_reg, 0, FE_NOREG,
@@ -23102,23 +23043,14 @@ bool ZendCompilerX64::compile_inst_impl(
 						ASM(MOV64rm, low_word_reg,
 							FE_MEM(source_address_reg, 0, FE_NOREG, 0));
 						ASM(MOV64rm, high_word_reg,
-							FE_MEM(source_address_reg, 0, FE_NOREG, 8));
+							FE_MEM(source_address_reg, 0, FE_NOREG, zval_high_word));
 						ASM(MOV64mr,
 							FE_MEM(callee_reg, 0, FE_NOREG, offset),
 							low_word_reg);
 						ASM(MOV64mr,
-							FE_MEM(callee_reg, 0, FE_NOREG, offset + 8),
+							FE_MEM(callee_reg, 0, FE_NOREG, offset + zval_high_word),
 							high_word_reg);
-						ASM(TEST32ri, high_word_reg,
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						auto copied = text_writer.label_create();
-						generate_raw_jump(Jump::je, copied);
-						ASM(ADD32mi,
-							FE_MEM(low_word_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_refcounted_h, refcount))),
-							1);
-						label_place(copied);
+						emit_try_addref(high_word_reg, low_word_reg);
 					}
 					/* ZVAL_UNDEF writes only the type, as the VM's frame
 					 * setup does. */
@@ -23298,8 +23230,8 @@ bool ZendCompilerX64::compile_inst_impl(
 							add_const_arg(receive_builder, UINT64_C(0), 8);
 							add_const_arg(receive_builder, UINT64_C(0), 4);
 							receive_builder.add_arg(ValuePart{
-								uint64_t{IS_CV} | ((uint64_t{ZEND_CALL_FRAME_SLOT}
-										+ fixed_argument_count) * sizeof(zval) << 8),
+								uint64_t{IS_CV}
+									| (frame_slot_offset(fixed_argument_count) << 8),
 								8, tpde::x64::PlatformConfig::GP_BANK},
 								tpde::CCAssignment{});
 							add_const_arg(receive_builder,
@@ -23494,7 +23426,7 @@ bool ZendCompilerX64::compile_inst_impl(
 										zend_execute_data, return_value))));
 						}
 						if (result_unused) {
-							ASM(CMP32mi, FE_MEM(probe_reg, 0, FE_NOREG, 8),
+							ASM(CMP32mi, FE_MEM(probe_reg, 0, FE_NOREG, zval_high_word),
 								IS_DOUBLE);
 							generate_raw_jump(Jump::ja, complete_fast);
 						} else if (boxed_result_written) {
@@ -23502,13 +23434,14 @@ bool ZendCompilerX64::compile_inst_impl(
 						} else if (call.direct_call->result_type
 								== ZEND_MIR_SCALAR_TYPE_I1) {
 							ASM(MOV32rm, probe_reg,
-								FE_MEM(probe_reg, 0, FE_NOREG, 8));
+								FE_MEM(probe_reg, 0, FE_NOREG, zval_high_word));
 							ASM(CMP32ri, probe_reg, IS_FALSE);
 							generate_raw_jump(Jump::jb, complete_fast);
 							ASM(CMP32ri, probe_reg, IS_TRUE);
 							generate_raw_jump(Jump::ja, complete_fast);
 							} else {
-								ASM(CMP32mi, FE_MEM(probe_reg, 0, FE_NOREG, 8),
+								ASM(CMP32mi, FE_MEM(probe_reg, 0, FE_NOREG,
+									zval_high_word),
 									static_cast<int32_t>(zval_type(
 										call.direct_call->result_type)));
 								generate_raw_jump(Jump::jne, complete_fast);
@@ -24381,8 +24314,7 @@ bool ZendCompilerX64::compile_inst_impl(
 							adaptor->plan()->source_frame_variable_count)
 							+ source.index;
 						const uint64_t offset =
-							(uint64_t{ZEND_CALL_FRAME_SLOT} + storage)
-							* sizeof(zval);
+							frame_slot_offset(storage);
 						if (offset > static_cast<uint64_t>(INT32_MAX)
 								- offsetof(zval, u1.type_info)) {
 							return false;
@@ -25063,9 +24995,10 @@ bool ZendCompilerX64::compile_inst_impl(
 				auto kind_reg = kind.alloc_gp();
 				ASM(LEA32rm, kind_reg,
 					FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-				ASM(MOV32mr, FE_MEM(pointer_reg, 0, FE_NOREG, 8), kind_reg);
+				ASM(MOV32mr, FE_MEM(pointer_reg, 0, FE_NOREG, zval_high_word),
+					kind_reg);
 			} else {
-				ASM(MOV32mi, FE_MEM(pointer_reg, 0, FE_NOREG, 8),
+				ASM(MOV32mi, FE_MEM(pointer_reg, 0, FE_NOREG, zval_high_word),
 					static_cast<int32_t>(type));
 			}
 			label_place(no_result);
@@ -25115,16 +25048,7 @@ bool ZendCompilerX64::compile_inst_impl(
 					auto type_info = returned.part(1);
 					auto payload_reg = payload.load_to_reg();
 					auto type_info_reg = type_info.load_to_reg();
-					auto copied = text_writer.label_create();
-					ASM(TEST32ri, type_info_reg,
-						IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-					generate_raw_jump(Jump::je, copied);
-					ASM(ADD32mi,
-						FE_MEM(payload_reg, 0, FE_NOREG,
-							static_cast<int32_t>(offsetof(
-								zend_refcounted_h, refcount))),
-						1);
-					label_place(copied);
+					emit_try_addref(type_info_reg, payload_reg);
 					return_builder.add(
 						std::move(payload), tpde::CCAssignment{});
 					return_builder.add(
@@ -25177,8 +25101,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						|| copy_source)
 					&& refcount_state != ZEND_MIR_REFCOUNT_IMMORTAL;
 				const uint64_t return_source_offset =
-					(uint64_t{ZEND_CALL_FRAME_SLOT}
-						+ mir.value_operation.op1_storage_id) * sizeof(zval);
+					frame_slot_offset(mir.value_operation.op1_storage_id);
 				if (ownership != ZEND_MIR_OWNERSHIP_STATE_BORROWED
 						&& ownership != ZEND_MIR_OWNERSHIP_STATE_OWNED
 						&& ownership
@@ -25427,8 +25350,7 @@ bool ZendCompilerX64::compile_inst_impl(
 			 * slot or a discarded result (no return zval) keeps the helper.
 			 */
 			const uint64_t temporary_return_offset =
-				(uint64_t{ZEND_CALL_FRAME_SLOT}
-					+ mir.value_operation.op1_storage_id) * sizeof(zval);
+				frame_slot_offset(mir.value_operation.op1_storage_id);
 			const bool cv_return = mir.value_operation.op1.slot_kind
 				== ZEND_MIR_SOURCE_SLOT_CV;
 			if (mir.value_operation.source_opcode == ZEND_RETURN
@@ -25495,15 +25417,7 @@ bool ZendCompilerX64::compile_inst_impl(
 								offsetof(zval, u1.type_info))),
 						type_reg);
 					if (cv_return) {
-						auto uncounted = text_writer.label_create();
-						ASM(TEST32ri, type_reg,
-							IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-						generate_raw_jump(Jump::je, uncounted);
-						ASM(ADD32mi,
-							FE_MEM(payload_reg, 0, FE_NOREG,
-								static_cast<int32_t>(offsetof(
-									zend_refcounted_h, refcount))), 1);
-						label_place(uncounted);
+						emit_try_addref(type_reg, payload_reg);
 					} else {
 						ASM(MOV32mi,
 							FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
