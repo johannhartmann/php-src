@@ -374,6 +374,55 @@ public:
 			static_cast<uint32_t>(offsetof(zend_execute_data, opline)),
 			scratch, 8);
 	}
+	/*
+	 * Calls the typed body function of component member target with the
+	 * node's first argument_count operands and defines the node's result from
+	 * the returned parts. With validate, an invalid return type or a result
+	 * of another part count fails; without, neither is checked.
+	 */
+	bool emit_typed_body_call(const Adaptor::InstNode &node,
+			uint32_t function, uint32_t target, uint32_t argument_count,
+			bool validate) {
+		zend::native::tpde::CCAssignerAppleA64 body_assigner;
+		CallBuilder body_builder{*this, body_assigner};
+		for (uint32_t argument = 0; argument < argument_count; ++argument) {
+			body_builder.add_arg(CallArg{node.operands[argument]});
+		}
+		body_builder.call(this->func_syms[function]);
+		const auto return_type = adaptor->typed_body_return_type(target);
+		if (validate && !return_type.valid) {
+			return false;
+		}
+		const auto return_representation =
+			zend_tpde_machine_representation(return_type.machine_kind, true);
+		std::vector<ValuePart> body_results;
+		body_results.reserve(return_representation.part_count);
+		for (uint32_t part = 0; part < return_representation.part_count;
+				++part) {
+			const auto &part_desc = return_representation.parts[part];
+			body_results.emplace_back(
+				part_desc.register_bank == ZEND_TPDE_MACHINE_REGISTER_FP
+					? DarwinConfig::FP_BANK
+					: DarwinConfig::GP_BANK,
+				part_desc.bit_width / 8);
+			body_builder.add_ret(body_results.back(), ::tpde::CCAssignment{});
+		}
+		if (node.has_result) {
+			if (validate
+					&& val_parts(node.result).count() != body_results.size()) {
+				return false;
+			}
+			auto destination = result_ref(node.result);
+			for (uint32_t part = 0; part < body_results.size(); ++part) {
+				destination.part(part).set_value(std::move(body_results[part]));
+			}
+		} else {
+			for (auto &body_result : body_results) {
+				body_result.reset(this);
+			}
+		}
+		return true;
+	}
 	/* Whether a GuardedFast node's control block has its continuation as
 	 * successor 0 and its cold block as successor 1 (Adaptor::InstNode). */
 	bool guarded_successors_match(const Adaptor::InstNode &node) const {
@@ -10650,56 +10699,10 @@ bool ZendCompilerA64::compile_inst_impl(
 							|| node.operands.size() != argument_count) {
 						return false;
 					}
-					zend::native::tpde::CCAssignerAppleA64 body_assigner;
-					CallBuilder body_builder{*this, body_assigner};
-					for (uint32_t argument = 0;
-							argument < argument_count; ++argument) {
-						body_builder.add_arg(
-							CallArg{node.operands[argument]});
-					}
-					body_builder.call(
-						this->func_syms[typed_body_function]);
-					const auto return_type =
-						adaptor->typed_body_return_type(
-							call.component_target_index);
-					if (!return_type.valid) {
+					if (!emit_typed_body_call(node, typed_body_function,
+							call.component_target_index, argument_count,
+							true)) {
 						return false;
-					}
-					const auto return_representation =
-						zend_tpde_machine_representation(
-							return_type.machine_kind, true);
-					std::vector<ValuePart> body_results;
-					body_results.reserve(return_representation.part_count);
-					for (uint32_t part = 0;
-							part < return_representation.part_count; ++part) {
-						const auto &part_desc =
-							return_representation.parts[part];
-						body_results.emplace_back(
-							part_desc.register_bank
-									== ZEND_TPDE_MACHINE_REGISTER_FP
-								? DarwinConfig::FP_BANK
-								: DarwinConfig::GP_BANK,
-							part_desc.bit_width / 8);
-						body_builder.add_ret(
-							body_results.back(), ::tpde::CCAssignment{});
-					}
-					if (node.has_result) {
-						const ValueParts destination_parts =
-							val_parts(node.result);
-						if (destination_parts.count()
-								!= body_results.size()) {
-							return false;
-						}
-						auto destination = result_ref(node.result);
-						for (uint32_t part = 0;
-								part < body_results.size(); ++part) {
-							destination.part(part).set_value(
-								std::move(body_results[part]));
-						}
-					} else {
-						for (auto &body_result : body_results) {
-							body_result.reset(this);
-						}
 					}
 					adaptor->mark_typed_body_call(
 						call.direct_call->frame_size);
@@ -11119,47 +11122,10 @@ bool ZendCompilerA64::compile_inst_impl(
 							|| node.operands.size() < argument_count) {
 						return false;
 					}
-					zend::native::tpde::CCAssignerAppleA64 body_assigner;
-					CallBuilder body_builder{*this, body_assigner};
-					for (uint32_t argument = 0;
-							argument < argument_count; ++argument) {
-						body_builder.add_arg(
-							CallArg{node.operands[argument]});
-					}
-					body_builder.call(
-						this->func_syms[typed_body_function]);
-					const auto return_type =
-						adaptor->typed_body_return_type(
-							call.component_target_index);
-					const auto return_representation =
-						zend_tpde_machine_representation(
-							return_type.machine_kind, true);
-					std::vector<ValuePart> body_results;
-					body_results.reserve(return_representation.part_count);
-					for (uint32_t part = 0;
-							part < return_representation.part_count; ++part) {
-						const auto &part_desc =
-							return_representation.parts[part];
-						body_results.emplace_back(
-							part_desc.register_bank
-									== ZEND_TPDE_MACHINE_REGISTER_FP
-								? DarwinConfig::FP_BANK
-								: DarwinConfig::GP_BANK,
-							part_desc.bit_width / 8);
-						body_builder.add_ret(
-							body_results.back(), ::tpde::CCAssignment{});
-					}
-					if (node.has_result) {
-						auto destination = result_ref(node.result);
-						for (uint32_t part = 0;
-								part < body_results.size(); ++part) {
-							destination.part(part).set_value(
-								std::move(body_results[part]));
-						}
-					} else {
-						for (auto &body_result : body_results) {
-							body_result.reset(this);
-						}
+					if (!emit_typed_body_call(node, typed_body_function,
+							call.component_target_index, argument_count,
+							false)) {
+						return false;
 					}
 					for (uint32_t operand = argument_count;
 							operand < node.operands.size(); ++operand) {
