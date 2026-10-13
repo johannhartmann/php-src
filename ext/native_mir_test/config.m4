@@ -85,7 +85,7 @@ AS_VAR_IF([PHP_NATIVE_ENGINE], [no], [], [
 
   PHP_ADD_BUILD_DIR([Zend/Native/TPDE/Common])
   PHP_ADD_SOURCES_X([Zend/Native/TPDE/Common],
-    [zend_tpde_backend.cpp zend_tpde_image.cpp zend_tpde_machine_plan.cpp zend_tpde_plan.cpp zend_tpde_plan_analysis.cpp zend_tpde_plan_bindings.cpp zend_tpde_plan_calls.cpp zend_tpde_plan_consumers.cpp zend_tpde_plan_deopt.cpp],
+    [zend_tpde_backend.cpp zend_tpde_image.cpp zend_tpde_ir_adaptor.cpp zend_tpde_machine_plan.cpp zend_tpde_plan.cpp zend_tpde_plan_analysis.cpp zend_tpde_plan_bindings.cpp zend_tpde_plan_calls.cpp zend_tpde_plan_consumers.cpp zend_tpde_plan_deopt.cpp],
     [$PHP_NATIVE_MIR_TEST_CXXFLAGS], [PHP_GLOBAL_OBJS])
   PHP_ADD_BUILD_DIR([Zend/Native/TPDE/ThirdParty/tpde/src])
   PHP_ADD_SOURCES_X([Zend/Native/TPDE/ThirdParty/tpde/src],
