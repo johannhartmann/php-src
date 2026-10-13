@@ -9546,6 +9546,13 @@ bool ZendCompilerX64::compile_inst_impl(
 			checked.reset(this);
 			emit_phase_failure();
 			label_place(valid);
+			/* The failure path freed checked_reg: keep the decision in a
+			 * register the scratch registers below cannot reuse. */
+			ScratchReg decision{this};
+			auto decision_reg = decision.alloc_gp();
+			if (decision_reg != checked_reg) {
+				ASM(MOV32rr, decision_reg, checked_reg);
+			}
 			ScratchReg active{this};
 			ScratchReg callee{this};
 			ScratchReg call_info{this};
@@ -9563,7 +9570,7 @@ bool ZendCompilerX64::compile_inst_impl(
 						+ offsetof(zval, u1.type_info))));
 			auto by_value = text_writer.label_create();
 			auto updated = text_writer.label_create();
-			ASM(CMP32ri, checked_reg, ZEND_NATIVE_CHECK_FUNC_ARG_BY_VALUE);
+			ASM(CMP32ri, decision_reg, ZEND_NATIVE_CHECK_FUNC_ARG_BY_VALUE);
 			generate_raw_jump(Jump::je, by_value);
 			ASM(OR32ri, call_info_reg, ZEND_CALL_SEND_ARG_BY_REF);
 			generate_raw_jump(Jump::jmp, updated);
