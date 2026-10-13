@@ -160,6 +160,88 @@ static zend_tpde_local_abi_type machine_plan_value_abi(
 				: ZEND_TPDE_LOCAL_ABI_TRANSFER_BORROWED);
 }
 
+/*
+ * The value a binding names is a number: the result of proven arithmetic or
+ * of a direct call to a member that returns numbers, a numeric constant, a
+ * forwarding assignment or a phi of numbers.
+ */
+static bool machine_plan_value_is_number(
+		const zend_tpde_plan *plan,
+		const zend_tpde_plan *const *component_plans,
+		uint32_t component_count,
+		int32_t value_index, int32_t producer, uint32_t depth) {
+	if (depth > 8) {
+		return false;
+	}
+	if (value_index >= 0
+			&& static_cast<uint32_t>(value_index) < plan->value_count) {
+		const zend_tpde_value &value = plan->values[value_index];
+		if (value.constant
+				&& (value.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+					|| value.exact_type == ZEND_MIR_SCALAR_TYPE_F64)) {
+			return true;
+		}
+		if (producer < 0 && plan->source_value_definition_instructions
+				!= nullptr) {
+			producer = plan->source_value_definition_instructions[
+				value_index];
+		}
+		if (producer < 0 && plan->value_definition_instructions != nullptr) {
+			producer = plan->value_definition_instructions[value_index];
+		}
+	}
+	if (producer < 0
+			|| static_cast<uint32_t>(producer) >= plan->instruction_count) {
+		return false;
+	}
+	const zend_tpde_instruction &instruction = plan->instructions[producer];
+	if (instruction.direct_call != nullptr) {
+		return instruction.component_target_index < component_count
+			&& component_plans[instruction.component_target_index]
+				->returns_number;
+	}
+	if (zend_tpde_typed_forward_assign(instruction)) {
+		const zend_mir_executable_value_ref &operation =
+			instruction.value_operation;
+		if (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+			const zend_mir_value_id id =
+				zend_mir_value_from_synthetic(operation.op1.index);
+			return machine_plan_value_is_number(plan, component_plans,
+				component_count, zend_tpde_value_index(plan, id), -1,
+				depth + 1);
+		}
+		return machine_plan_value_is_number(plan, component_plans,
+			component_count, instruction.source_op1_binding.value_index,
+			instruction.source_op1_binding.definition_instruction_index,
+			depth + 1);
+	}
+	if (instruction.record.opcode == ZEND_MIR_OPCODE_PHI) {
+		for (uint32_t operand = 0; operand < instruction.operand_count;
+				++operand) {
+			if (!machine_plan_value_is_number(plan, component_plans,
+					component_count,
+					zend_tpde_value_index(plan,
+						zend_tpde_operand_at(plan, &instruction, operand)),
+					-1, depth + 1)) {
+				return false;
+			}
+		}
+		return instruction.operand_count != 0;
+	}
+	return zend_tpde_typed_numeric_binary(plan, instruction)
+		&& !zend_tpde_numeric_comparison(
+			instruction.value_operation.source_opcode);
+}
+
+static bool machine_plan_binding_is_number(
+		const zend_tpde_plan *plan,
+		const zend_tpde_plan *const *component_plans,
+		uint32_t component_count,
+		const zend_tpde_source_value_binding &binding) {
+	return machine_plan_value_is_number(plan, component_plans, component_count,
+		binding.value_index, binding.definition_instruction_index, 0);
+}
+
 static int32_t machine_plan_source_value_index(
 		const zend_tpde_plan *plan,
 		const zend_mir_source_operand_ref &operand) {
@@ -462,7 +544,7 @@ static bool try_freeze_typed_body_signature(
 			}
 			/* A number returned as int or float is checked at the return. */
 			if (zend_tpde_machine_kind_is_number(plan->return_abi.machine_kind)
-					&& zend_tpde_binding_is_number(plan, component_plans,
+					&& machine_plan_binding_is_number(plan, component_plans,
 						component_count, instruction.source_op1_binding)) {
 				continue;
 			}
@@ -603,7 +685,7 @@ static bool try_freeze_typed_body_signature(
 							== ZEND_MIR_SCALAR_TYPE_F64)) {
 				source = machine_plan_value_abi(
 					plan, static_cast<uint32_t>(literal));
-			} else if (zend_tpde_binding_is_number(plan, component_plans,
+			} else if (machine_plan_binding_is_number(plan, component_plans,
 					component_count, binding)) {
 				int32_t producer = binding.definition_instruction_index;
 				if (producer < 0 && binding.value_index >= 0
@@ -727,7 +809,7 @@ static bool try_freeze_typed_body_signature(
 				&& current_return.valid
 				&& current_return.machine_kind
 					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& zend_tpde_binding_is_number(plan, component_plans,
+				&& machine_plan_binding_is_number(plan, component_plans,
 					component_count, instruction.source_op1_binding)) {
 			*may_fail = *may_fail || plan->return_abi.machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_I64;
@@ -1157,7 +1239,7 @@ static bool freeze_typed_component_calls(
 			}
 			/* A proven arithmetic result, or the result of a member that
 			 * returns numbers, owns nothing. */
-			const bool number_binding = zend_tpde_binding_is_number(
+			const bool number_binding = machine_plan_binding_is_number(
 				plan, component_plans, component_count, binding);
 			if (number_binding
 					&& (!caller_abi.valid
@@ -1802,24 +1884,13 @@ static bool machine_plan_value_needs_result_assignment(
 static int32_t machine_plan_guarded_mutation_value_index(
 		const zend_tpde_plan *plan,
 		const zend_tpde_instruction &instruction) {
-	zend_tpde_long_assign_op long_assign{};
-	zend_tpde_long_incdec long_incdec{};
-	if (!instruction.has_value_operation
-			|| !instruction.mutation_lazy_scalar
-			|| !((zend_tpde_long_assign_op_at(
-						instruction, &long_assign)
-						&& !long_assign.has_result)
-					|| (zend_tpde_long_incdec_at(
-						instruction, &long_incdec)
-						&& !long_incdec.has_result))
-			|| instruction.value_operation
-				.op1_definition_ssa_variable_id_plus_one == 0) {
+	const uint32_t mutation_ssa =
+		zend_tpde_register_mutation_ssa_plus_one(instruction, false);
+	if (!instruction.mutation_lazy_scalar || mutation_ssa == 0) {
 		return -1;
 	}
 	return zend_tpde_value_index(
-		plan, zend_mir_value_from_original_ssa(
-			instruction.value_operation
-				.op1_definition_ssa_variable_id_plus_one - 1));
+		plan, zend_mir_value_from_original_ssa(mutation_ssa - 1));
 }
 
 static void freeze_machine_scalar_definitions(zend_tpde_plan *plan) {
@@ -2926,10 +2997,8 @@ static void freeze_component_numeric_operands(
 		return instruction.has_value_operation
 			&& instruction.value_operation.opcode
 				== ZEND_MIR_OPCODE_VALUE_BINARY_OP
-			&& (opcode == ZEND_ADD || opcode == ZEND_SUB
-				|| opcode == ZEND_MUL || opcode == ZEND_IS_SMALLER
-				|| opcode == ZEND_IS_SMALLER_OR_EQUAL
-				|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL)
+			&& (zend_tpde_numeric_arithmetic(opcode)
+				|| zend_tpde_numeric_comparison(opcode))
 			&& instruction.value_operation.source_position_id
 				< plan.source_opcode_count
 			&& plan.source_opcodes[
@@ -2973,9 +3042,8 @@ static void freeze_component_numeric_operands(
 				&& returns_number[producer.component_target_index] != 0;
 		}
 		return producer.numeric_operands_proven
-			&& (producer.value_operation.source_opcode == ZEND_ADD
-				|| producer.value_operation.source_opcode == ZEND_SUB
-				|| producer.value_operation.source_opcode == ZEND_MUL);
+			&& zend_tpde_numeric_arithmetic(
+				producer.value_operation.source_opcode);
 	};
 	for (uint32_t member = 0; member < component_count; ++member) {
 		zend_tpde_plan &plan = plans[member];

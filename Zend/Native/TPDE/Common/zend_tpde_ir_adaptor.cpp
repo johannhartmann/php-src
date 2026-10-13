@@ -109,23 +109,11 @@ bool ZendIRAdaptor::direct_internal_source_argument_stable(
 
 IRValueRef ZendIRAdaptor::mutation_value_ref(
 		const zend_tpde_instruction &instruction) const {
-	zend_tpde_long_assign_op long_assign{};
-	zend_tpde_long_incdec long_incdec{};
-
-	if (!instruction.has_value_operation
-			|| !((zend_tpde_long_assign_op_at(
-						instruction, &long_assign)
-						&& !long_assign.has_result)
-					|| (zend_tpde_long_incdec_at(
-						instruction, &long_incdec)
-						&& !long_incdec.has_result))
-			|| instruction.value_operation
-				.op1_definition_ssa_variable_id_plus_one == 0) {
-		return INVALID_VALUE_REF;
-	}
-	return value_ref(zend_mir_value_from_original_ssa(
-		instruction.value_operation
-			.op1_definition_ssa_variable_id_plus_one - 1));
+	const uint32_t mutation_ssa =
+		zend_tpde_register_mutation_ssa_plus_one(instruction, false);
+	return mutation_ssa == 0
+		? INVALID_VALUE_REF
+		: value_ref(zend_mir_value_from_original_ssa(mutation_ssa - 1));
 }
 
 bool ZendIRAdaptor::storage_assigned_by_reference(
@@ -2256,26 +2244,8 @@ bool ZendIRAdaptor::Builder::init_value_tables() {
 				reference.stable_storage_or_layout_id] = index;
 		}
 	}
-	for (uint32_t index = 0; index < plan_->instruction_count; ++index) {
-		const zend_tpde_instruction &candidate =
-			plan_->instructions[index];
-		if (candidate.has_value_operation
-				&& candidate.record.opcode
-					== ZEND_MIR_OPCODE_VALUE_ASSIGN_REF) {
-			for (const zend_mir_storage_id storage : {
-					candidate.value_operation.op1_storage_id,
-					candidate.value_operation.op2_storage_id}) {
-				if (zend_mir_id_is_valid(storage)) {
-					reference_assigned_storages_.push_back(storage);
-				}
-			}
-		}
-	}
-	std::ranges::sort(reference_assigned_storages_);
-	reference_assigned_storages_.erase(
-		std::unique(reference_assigned_storages_.begin(),
-			reference_assigned_storages_.end()),
-		reference_assigned_storages_.end());
+	zend_tpde_collect_reference_assigned_storages(
+		plan_, reference_assigned_storages_);
 	if (function_mode_ == FunctionMode::ZendEntry) {
 		arguments_.push_back(IRValueRef{EXECUTE_DATA_VALUE});
 		arguments_.push_back(

@@ -2711,6 +2711,53 @@ bool zend_tpde_block_successor_at(
 	uint32_t successor_index,
 	zend_mir_block_id *out);
 
+/*
+ * The source SSA variable, plus one, of the CV definition a long ASSIGN_OP or
+ * INCDEC without a result mutates in its register, or 0. slot_incdec admits
+ * an INCDEC only on a slot operand: lazy mutation also replaces the
+ * loop-carried source identity, which SSA component boundaries do not keep.
+ */
+static inline uint32_t zend_tpde_register_mutation_ssa_plus_one(
+	const zend_tpde_instruction &instruction, bool slot_incdec)
+{
+	zend_tpde_long_assign_op long_assign{};
+	zend_tpde_long_incdec long_incdec{};
+	if (!((zend_tpde_long_assign_op_at(instruction, &long_assign)
+				&& !long_assign.has_result)
+			|| (zend_tpde_long_incdec_at(instruction, &long_incdec)
+				&& !long_incdec.has_result
+				&& (!slot_incdec
+					|| instruction.value_operation.op1.kind
+						== ZEND_MIR_SOURCE_OPERAND_SLOT)))) {
+		return 0;
+	}
+	return instruction.value_operation.op1_definition_ssa_variable_id_plus_one;
+}
+
+/* Appends the storages ASSIGN_REF binds to storages, then sorts them and
+ * drops duplicates. */
+static inline void zend_tpde_collect_reference_assigned_storages(
+	const zend_tpde_plan *plan, std::vector<zend_mir_storage_id> &storages)
+{
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		const zend_tpde_instruction &candidate = plan->instructions[index];
+		if (candidate.has_value_operation
+				&& candidate.record.opcode
+					== ZEND_MIR_OPCODE_VALUE_ASSIGN_REF) {
+			for (const zend_mir_storage_id storage : {
+					candidate.value_operation.op1_storage_id,
+					candidate.value_operation.op2_storage_id}) {
+				if (zend_mir_id_is_valid(storage)) {
+					storages.push_back(storage);
+				}
+			}
+		}
+	}
+	std::sort(storages.begin(), storages.end());
+	storages.erase(
+		std::unique(storages.begin(), storages.end()), storages.end());
+}
+
 static inline const zend_tpde_source_call_phase_entry *
 zend_tpde_source_call_phase_at(
 	const zend_tpde_plan *plan, uint32_t source_position)
@@ -2805,6 +2852,20 @@ static inline bool zend_tpde_direct_call_has_argument_guard(
 	return false;
 }
 
+/* The arithmetic of two numbers that cannot fail: overflow continues in
+ * double precision. */
+static inline bool zend_tpde_numeric_arithmetic(uint32_t opcode)
+{
+	return opcode == ZEND_ADD || opcode == ZEND_SUB || opcode == ZEND_MUL;
+}
+
+/* The comparisons of two numbers that cannot fail: NaN compares unordered. */
+static inline bool zend_tpde_numeric_comparison(uint32_t opcode)
+{
+	return opcode == ZEND_IS_SMALLER || opcode == ZEND_IS_SMALLER_OR_EQUAL
+		|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
+}
+
 static inline bool zend_tpde_known_numeric_type(uint8_t known)
 {
 	return known == IS_LONG || known == IS_DOUBLE
@@ -2825,13 +2886,8 @@ static inline bool zend_tpde_numeric_binary_proven(
 	if (!zend_tpde_linux_inline_forms
 			|| !instruction.has_value_operation
 			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
-			|| (operation.source_opcode != ZEND_ADD
-				&& operation.source_opcode != ZEND_SUB
-				&& operation.source_opcode != ZEND_MUL
-				&& operation.source_opcode != ZEND_IS_SMALLER
-				&& operation.source_opcode != ZEND_IS_SMALLER_OR_EQUAL
-				&& operation.source_opcode != ZEND_IS_EQUAL
-				&& operation.source_opcode != ZEND_IS_NOT_EQUAL)
+			|| (!zend_tpde_numeric_arithmetic(operation.source_opcode)
+				&& !zend_tpde_numeric_comparison(operation.source_opcode))
 			|| plan->source_opcodes == nullptr
 			|| operation.source_position_id >= plan->source_opcode_count) {
 		return false;
@@ -2880,12 +2936,6 @@ static inline bool zend_tpde_typed_forward_assign(
 		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
 			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
 		&& operation.result.ssa_variable_id != ZEND_MIR_ID_INVALID;
-}
-
-static inline bool zend_tpde_numeric_comparison(uint32_t opcode)
-{
-	return opcode == ZEND_IS_SMALLER || opcode == ZEND_IS_SMALLER_OR_EQUAL
-		|| opcode == ZEND_IS_EQUAL || opcode == ZEND_IS_NOT_EQUAL;
 }
 
 static inline bool zend_tpde_user_multi_branch_at(
@@ -3269,90 +3319,6 @@ static inline bool zend_tpde_typed_body_frame_transport(
 		const zend_tpde_instruction &instruction)
 {
 	return zend_tpde_scalar_diamond_frame_transport(plan, instruction);
-}
-
-/*
- * The value a binding names is a number: the result of proven arithmetic or
- * of a direct call to a member that returns numbers, a numeric constant, a
- * forwarding assignment or a phi of numbers.
- */
-static inline bool zend_tpde_value_is_number(
-	const zend_tpde_plan *plan,
-	const zend_tpde_plan *const *component_plans,
-	uint32_t component_count,
-	int32_t value_index, int32_t producer, uint32_t depth)
-{
-	if (depth > 8) {
-		return false;
-	}
-	if (value_index >= 0
-			&& static_cast<uint32_t>(value_index) < plan->value_count) {
-		const zend_tpde_value &value = plan->values[value_index];
-		if (value.constant
-				&& (value.exact_type == ZEND_MIR_SCALAR_TYPE_I64
-					|| value.exact_type == ZEND_MIR_SCALAR_TYPE_F64)) {
-			return true;
-		}
-		if (producer < 0 && plan->source_value_definition_instructions
-				!= nullptr) {
-			producer = plan->source_value_definition_instructions[
-				value_index];
-		}
-		if (producer < 0 && plan->value_definition_instructions != nullptr) {
-			producer = plan->value_definition_instructions[value_index];
-		}
-	}
-	if (producer < 0
-			|| static_cast<uint32_t>(producer) >= plan->instruction_count) {
-		return false;
-	}
-	const zend_tpde_instruction &instruction = plan->instructions[producer];
-	if (instruction.direct_call != nullptr) {
-		return instruction.component_target_index < component_count
-			&& component_plans[instruction.component_target_index]
-				->returns_number;
-	}
-	if (zend_tpde_typed_forward_assign(instruction)) {
-		const zend_mir_executable_value_ref &operation =
-			instruction.value_operation;
-		if (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-			const zend_mir_value_id id =
-				zend_mir_value_from_synthetic(operation.op1.index);
-			return zend_tpde_value_is_number(plan, component_plans,
-				component_count, zend_tpde_value_index(plan, id), -1,
-				depth + 1);
-		}
-		return zend_tpde_value_is_number(plan, component_plans,
-			component_count, instruction.source_op1_binding.value_index,
-			instruction.source_op1_binding.definition_instruction_index,
-			depth + 1);
-	}
-	if (instruction.record.opcode == ZEND_MIR_OPCODE_PHI) {
-		for (uint32_t operand = 0; operand < instruction.operand_count;
-				++operand) {
-			if (!zend_tpde_value_is_number(plan, component_plans,
-					component_count,
-					zend_tpde_value_index(plan,
-						zend_tpde_operand_at(plan, &instruction, operand)),
-					-1, depth + 1)) {
-				return false;
-			}
-		}
-		return instruction.operand_count != 0;
-	}
-	return zend_tpde_typed_numeric_binary(plan, instruction)
-		&& !zend_tpde_numeric_comparison(
-			instruction.value_operation.source_opcode);
-}
-
-static inline bool zend_tpde_binding_is_number(
-	const zend_tpde_plan *plan,
-	const zend_tpde_plan *const *component_plans,
-	uint32_t component_count,
-	const zend_tpde_source_value_binding &binding)
-{
-	return zend_tpde_value_is_number(plan, component_plans, component_count,
-		binding.value_index, binding.definition_instruction_index, 0);
 }
 
 /*

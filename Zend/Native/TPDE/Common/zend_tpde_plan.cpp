@@ -1844,8 +1844,6 @@ static void sort_unique_storages(std::vector<zend_mir_storage_id> &storages) {
 static void collect_phi_and_reference_storages(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	std::vector<zend_mir_storage_id> &phi_storages = builder.phi_storages;
-	std::vector<zend_mir_storage_id> &reference_assigned_storages =
-		builder.reference_assigned_storages;
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		const zend_tpde_instruction &candidate = plan->instructions[i];
 		if (candidate.record.opcode == ZEND_MIR_OPCODE_PHI
@@ -1860,23 +1858,10 @@ static void collect_phi_and_reference_storages(plan_builder &builder) {
 				}
 			}
 		}
-		if (candidate.has_value_operation
-				&& candidate.record.opcode
-					== ZEND_MIR_OPCODE_VALUE_ASSIGN_REF) {
-			const zend_mir_storage_id op1_storage =
-				candidate.value_operation.op1_storage_id;
-			const zend_mir_storage_id op2_storage =
-				candidate.value_operation.op2_storage_id;
-			if (zend_mir_id_is_valid(op1_storage)) {
-				reference_assigned_storages.push_back(op1_storage);
-			}
-			if (zend_mir_id_is_valid(op2_storage)) {
-				reference_assigned_storages.push_back(op2_storage);
-			}
-		}
 	}
 	sort_unique_storages(phi_storages);
-	sort_unique_storages(reference_assigned_storages);
+	zend_tpde_collect_reference_assigned_storages(
+		plan, builder.reference_assigned_storages);
 }
 
 static bool storage_has_phi(
@@ -2182,33 +2167,17 @@ static void freeze_lazy_mutation(plan_builder &builder, uint32_t i) {
 					&& storage_lazy_capable(builder,
 						plan->instructions[i].value_operation
 							.op1_storage_id)))) {
-		zend_tpde_long_assign_op long_assign{};
-		zend_tpde_long_incdec long_incdec{};
 		const zend_mir_executable_value_ref &operation =
 			plan->instructions[i].value_operation;
-		const bool register_mutation =
-			(zend_tpde_long_assign_op_at(
-					plan->instructions[i], &long_assign)
-				&& !long_assign.has_result)
-			|| (zend_tpde_long_incdec_at(
-					plan->instructions[i], &long_incdec)
-				&& !long_incdec.has_result
-				/*
-				 * Lazy mutation also replaces the loop-carried source
-				 * identity, which SSA component boundaries do not
-				 * keep: it requires the slot form.
-				 */
-				&& operation.op1.kind
-					== ZEND_MIR_SOURCE_OPERAND_SLOT);
 		const uint32_t mutation_ssa =
-			operation.op1_definition_ssa_variable_id_plus_one;
+			zend_tpde_register_mutation_ssa_plus_one(
+				plan->instructions[i], true);
 		const int32_t mutation_value =
 			mutation_ssa == 0 ? -1
 			: zend_tpde_value_index(
 				plan, zend_mir_value_from_original_ssa(
 					mutation_ssa - 1));
-		if (register_mutation
-				&& source_op_array != nullptr
+		if (source_op_array != nullptr
 				&& source_op_array->function_name != nullptr
 				&& zend_mir_id_is_valid(
 					operation.op1_storage_id)
