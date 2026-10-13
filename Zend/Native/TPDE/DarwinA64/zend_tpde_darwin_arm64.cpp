@@ -374,6 +374,19 @@ public:
 			static_cast<uint32_t>(offsetof(zend_execute_data, opline)),
 			scratch, 8);
 	}
+	/* Whether a GuardedFast node's control block has its continuation as
+	 * successor 0 and its cold block as successor 1 (Adaptor::InstNode). */
+	bool guarded_successors_match(const Adaptor::InstNode &node) const {
+		const auto guarded_successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		return !(node.control_block == UINT32_MAX
+			|| node.continuation_block == UINT32_MAX
+			|| guarded_successors.size() < 2
+			|| static_cast<uint32_t>(guarded_successors[0])
+				!= node.continuation_block
+			|| static_cast<uint32_t>(guarded_successors[1])
+				!= node.argument_index);
+	}
 	/* GC_REFCOUNT(counted) += amount, through scratch. */
 	void emit_gc_addref(AsmReg counted, AsmReg scratch, uint32_t amount = 1) {
 		load_off(scratch, counted,
@@ -5360,18 +5373,12 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
+				|| node.continuation_block == UINT32_MAX
+				|| !guarded_successors_match(node)) {
 			return false;
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() < 2
-				|| static_cast<uint32_t>(successors[0])
-					!= node.continuation_block
-				|| static_cast<uint32_t>(successors[1])
-					!= node.argument_index) {
-			return false;
-		}
 
 		auto slow = text_writer.label_create();
 		auto done = text_writer.label_create();
@@ -5655,18 +5662,12 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
+				|| node.continuation_block == UINT32_MAX
+				|| !guarded_successors_match(node)) {
 			return false;
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() < 2
-				|| static_cast<uint32_t>(successors[0])
-					!= node.continuation_block
-				|| static_cast<uint32_t>(successors[1])
-					!= node.argument_index) {
-			return false;
-		}
 		auto slow = text_writer.label_create();
 		auto released = text_writer.label_create();
 		auto [frame_ref, frame] =
@@ -5751,13 +5752,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
 			const auto guarded_successors =
 				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-					!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 			if (!node.operands.empty()
@@ -6350,15 +6345,7 @@ bool ZendCompilerA64::compile_inst_impl(
 					&& adaptor->machine_kind(node.operands[1])
 						== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL));
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 		}
@@ -6791,18 +6778,12 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
+				|| node.continuation_block == UINT32_MAX
+				|| !guarded_successors_match(node)) {
 			return false;
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() < 2
-				|| static_cast<uint32_t>(successors[0])
-					!= node.continuation_block
-				|| static_cast<uint32_t>(successors[1])
-					!= node.argument_index) {
-			return false;
-		}
 		const bool scalar_value =
 			node.packed_append_value_operand_index < node.operands.size()
 			&& adaptor->representation(node.operands[
@@ -7115,18 +7096,12 @@ bool ZendCompilerA64::compile_inst_impl(
 		}
 		if (node.kind != Adaptor::InstKind::GuardedFast
 				|| node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX) {
+				|| node.continuation_block == UINT32_MAX
+				|| !guarded_successors_match(node)) {
 			return false;
 		}
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (successors.size() < 2
-				|| static_cast<uint32_t>(successors[0])
-					!= node.continuation_block
-				|| static_cast<uint32_t>(successors[1])
-					!= node.argument_index) {
-			return false;
-		}
 		if (register_string) {
 			auto [frame_ref, frame] = val_ref_single(node.operands[1]);
 			auto frame_scratch = std::move(frame).into_scratch();
@@ -7217,15 +7192,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 		}
@@ -7418,15 +7385,7 @@ bool ZendCompilerA64::compile_inst_impl(
 		if (node.kind != Adaptor::InstKind::GuardedFast) {
 			return false;
 		}
-		const auto guarded_successors =
-			adaptor->block_succs(IRBlockRef{node.control_block});
-		if (node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| guarded_successors.size() < 2
-				|| static_cast<uint32_t>(guarded_successors[0])
-					!= node.continuation_block
-				|| static_cast<uint32_t>(guarded_successors[1])
-					!= node.argument_index) {
+		if (!guarded_successors_match(node)) {
 			return false;
 		}
 		auto slow = text_writer.label_create();
@@ -7609,15 +7568,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 		}
@@ -7871,15 +7822,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 		}
@@ -8065,15 +8008,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 		}
@@ -8375,15 +8310,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			return branch_to_guarded_cold();
 		}
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 		}
@@ -8772,15 +8699,7 @@ bool ZendCompilerA64::compile_inst_impl(
 			&& node.operands[1] == IRValueRef{Adaptor::FRAME_VALUE};
 		const bool direct_cv = layout.cv_index != UINT32_MAX;
 		if (node.kind == Adaptor::InstKind::GuardedFast) {
-			const auto guarded_successors =
-				adaptor->block_succs(IRBlockRef{node.control_block});
-			if (node.control_block == UINT32_MAX
-					|| node.continuation_block == UINT32_MAX
-					|| guarded_successors.size() < 2
-					|| static_cast<uint32_t>(guarded_successors[0])
-						!= node.continuation_block
-					|| static_cast<uint32_t>(guarded_successors[1])
-						!= node.argument_index) {
+			if (!guarded_successors_match(node)) {
 				return false;
 			}
 			if (!direct_cv) {
