@@ -102,6 +102,54 @@ static zend_native_image_metrics collect_plan_metrics(
 	return metrics;
 }
 
+/* Destroys the first count plans and frees the component's plan arrays. */
+static void destroy_component_plans(
+	zend_tpde_plan *plans, const zend_tpde_plan **plan_refs, uint32_t count) {
+	for (uint32_t index = 0; index < count; ++index) {
+		destroy_plan(&plans[index]);
+	}
+	std::free(plan_refs);
+	std::free(plans);
+}
+
+/*
+ * Appends a plan's call descriptors to the image's arrays, which have room
+ * for them; the image owns them afterwards.
+ */
+static void append_call_descriptors(
+	zend_native_image *image, zend_tpde_plan *plan) {
+	if (plan->direct_call_count != 0) {
+		std::memcpy(
+			image->direct_calls + image->direct_call_count,
+			plan->direct_calls,
+			static_cast<size_t>(plan->direct_call_count)
+				* sizeof(*image->direct_calls));
+	}
+	image->direct_call_count += plan->direct_call_count;
+	plan->direct_call_count = 0;
+	if (plan->direct_internal_call_count != 0) {
+		std::memcpy(
+			image->direct_internal_calls
+				+ image->direct_internal_call_count,
+			plan->direct_internal_calls,
+			static_cast<size_t>(
+				plan->direct_internal_call_count)
+				* sizeof(*image->direct_internal_calls));
+	}
+	image->direct_internal_call_count +=
+		plan->direct_internal_call_count;
+	plan->direct_internal_call_count = 0;
+	if (plan->user_call_count != 0) {
+		std::memcpy(
+			image->user_calls + image->user_call_count,
+			plan->user_calls,
+			static_cast<size_t>(plan->user_call_count)
+				* sizeof(*image->user_calls));
+	}
+	image->user_call_count += plan->user_call_count;
+	plan->user_call_count = 0;
+}
+
 } // namespace zend::native::tpde::plan_detail
 
 using namespace zend::native::tpde::plan_detail;
@@ -213,30 +261,18 @@ extern "C" zend_result zend_tpde_compile_component(
 		plan_refs[initialized] = &plans[initialized];
 	}
 	if (initialized != member_count) {
-		for (uint32_t index = 0; index <= initialized; ++index) {
-			destroy_plan(&plans[index]);
-		}
-		std::free(plan_refs);
-		std::free(plans);
+		destroy_component_plans(plans, plan_refs, initialized + 1);
 		return FAILURE;
 	}
 	if (!freeze_component_machine_plan(
 			plans, plan_refs, member_count, diag)) {
-		for (uint32_t index = 0; index < member_count; ++index) {
-			destroy_plan(&plans[index]);
-		}
-		std::free(plan_refs);
-		std::free(plans);
+		destroy_component_plans(plans, plan_refs, member_count);
 		return FAILURE;
 	}
 	zend_native_image *image = static_cast<zend_native_image *>(
 		std::calloc(1, sizeof(*image)));
 	if (image == nullptr) {
-		for (uint32_t index = 0; index < member_count; ++index) {
-			destroy_plan(&plans[index]);
-		}
-		std::free(plan_refs);
-		std::free(plans);
+		destroy_component_plans(plans, plan_refs, member_count);
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"unable to allocate a native image");
 		return FAILURE;
@@ -253,11 +289,7 @@ extern "C" zend_result zend_tpde_compile_component(
 	image->component_entries = static_cast<zend_native_component_entry *>(
 		std::calloc(member_count, sizeof(*image->component_entries)));
 	if (image->component_entries == nullptr) {
-		for (uint32_t index = 0; index < member_count; ++index) {
-			destroy_plan(&plans[index]);
-		}
-		std::free(plan_refs);
-		std::free(plans);
+		destroy_component_plans(plans, plan_refs, member_count);
 		zend_native_image_destroy(image);
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -341,44 +373,11 @@ extern "C" zend_result zend_tpde_compile_component(
 		}
 		if (result == SUCCESS) {
 			for (uint32_t index = 0; index < member_count; ++index) {
-				if (plans[index].direct_call_count != 0) {
-					std::memcpy(
-						image->direct_calls + image->direct_call_count,
-						plans[index].direct_calls,
-						static_cast<size_t>(plans[index].direct_call_count)
-							* sizeof(*image->direct_calls));
-				}
-				image->direct_call_count += plans[index].direct_call_count;
-				plans[index].direct_call_count = 0;
-				if (plans[index].direct_internal_call_count != 0) {
-					std::memcpy(
-						image->direct_internal_calls
-							+ image->direct_internal_call_count,
-						plans[index].direct_internal_calls,
-						static_cast<size_t>(
-							plans[index].direct_internal_call_count)
-							* sizeof(*image->direct_internal_calls));
-				}
-				image->direct_internal_call_count +=
-					plans[index].direct_internal_call_count;
-				plans[index].direct_internal_call_count = 0;
-				if (plans[index].user_call_count != 0) {
-					std::memcpy(
-						image->user_calls + image->user_call_count,
-						plans[index].user_calls,
-						static_cast<size_t>(plans[index].user_call_count)
-							* sizeof(*image->user_calls));
-				}
-				image->user_call_count += plans[index].user_call_count;
-				plans[index].user_call_count = 0;
+				append_call_descriptors(image, &plans[index]);
 			}
 		}
 	}
-	for (uint32_t index = 0; index < member_count; ++index) {
-		destroy_plan(&plans[index]);
-	}
-	std::free(plan_refs);
-	std::free(plans);
+	destroy_component_plans(plans, plan_refs, member_count);
 	if (result == FAILURE) {
 		if (diag != nullptr && diag->code == ZEND_NATIVE_DIAGNOSTIC_OK) {
 			zend_tpde_set_diagnostic(diag,

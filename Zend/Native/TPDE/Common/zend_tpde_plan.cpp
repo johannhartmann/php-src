@@ -102,16 +102,7 @@ void destroy_plan(zend_tpde_plan *plan) {
 		std::free(
 			plan->instructions[index].direct_call_argument_guard_types);
 	}
-	for (uint32_t index = 0; index < plan->direct_call_count; ++index) {
-		std::free(plan->direct_calls[index]);
-	}
-	for (uint32_t index = 0;
-			index < plan->direct_internal_call_count; ++index) {
-		std::free(plan->direct_internal_calls[index]);
-	}
-	for (uint32_t index = 0; index < plan->user_call_count; ++index) {
-		zend_native_user_call_descriptor_free(plan->user_calls[index]);
-	}
+	free_call_descriptors(plan);
 	for (uint32_t index = 0;
 			index < plan->source_multi_branch_case_count; ++index) {
 		std::free(plan->source_multi_branch_cases[index].string_key);
@@ -172,9 +163,6 @@ void destroy_plan(zend_tpde_plan *plan) {
 	std::free(plan->machine_references);
 	std::free(plan->entry_undef_temporary_indices);
 	std::free(plan->entry_undef_temporary_fused_only);
-	std::free(plan->direct_calls);
-	std::free(plan->direct_internal_calls);
-	std::free(plan->user_calls);
 	std::memset(plan, 0, sizeof(*plan));
 }
 
@@ -386,14 +374,8 @@ static bool freeze_source_multi_branches(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
 	zend_native_diagnostic *const diag = builder.diag;
-	plan->source_multi_branches =
-		static_cast<zend_tpde_source_multi_branch *>(std::calloc(
-			plan->source_opcode_count,
-			sizeof(*plan->source_multi_branches)));
-	if (plan->source_multi_branches == nullptr) {
-		zend_tpde_set_diagnostic(diag,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to freeze source multiway metadata");
+	if (!plan_alloc(plan->source_multi_branches, plan->source_opcode_count,
+			diag, "unable to freeze source multiway metadata")) {
 		return false;
 	}
 	uint64_t branch_case_count = 0;
@@ -422,14 +404,8 @@ static bool freeze_source_multi_branches(plan_builder &builder) {
 	plan->source_multi_branch_case_count =
 		static_cast<uint32_t>(branch_case_count);
 	if (branch_case_count != 0) {
-		plan->source_multi_branch_cases =
-			static_cast<zend_tpde_multi_branch_case *>(std::calloc(
-				branch_case_count,
-				sizeof(*plan->source_multi_branch_cases)));
-		if (plan->source_multi_branch_cases == nullptr) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-				"unable to freeze source multiway cases");
+		if (!plan_alloc(plan->source_multi_branch_cases, branch_case_count,
+				diag, "unable to freeze source multiway cases")) {
 			return false;
 		}
 	}
@@ -550,13 +526,8 @@ static bool freeze_source_opcodes(plan_builder &builder) {
 	plan->source_temporary_count =
 		source_op_array != nullptr ? source_op_array->T : 0;
 	if (plan->source_opcode_count != 0) {
-		plan->source_opcodes = static_cast<zend_tpde_source_opcode *>(
-			std::calloc(plan->source_opcode_count,
-				sizeof(*plan->source_opcodes)));
-		if (plan->source_opcodes == nullptr) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-				"unable to freeze source opcode metadata");
+		if (!plan_alloc(plan->source_opcodes, plan->source_opcode_count,
+				diag, "unable to freeze source opcode metadata")) {
 			return false;
 		}
 		for (uint32_t index = 0;
@@ -1959,12 +1930,9 @@ static bool freeze_storage_alias(plan_builder &builder) {
 		: source_op_array->num_args
 			+ ((source_op_array->fn_flags & ZEND_ACC_VARIADIC) != 0 ? 1 : 0);
 	if (!storage_may_alias.empty()) {
-		plan->operand_observed_storages = static_cast<uint8_t *>(
-			std::calloc(storage_may_alias.size(), 1));
-		if (plan->operand_observed_storages == nullptr) {
-			zend_tpde_set_diagnostic(diag,
-				ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-				"unable to freeze operand-observed storages");
+		if (!plan_alloc(plan->operand_observed_storages,
+				storage_may_alias.size(), diag,
+				"unable to freeze operand-observed storages")) {
 			return false;
 		}
 		plan->operand_observed_storage_count =

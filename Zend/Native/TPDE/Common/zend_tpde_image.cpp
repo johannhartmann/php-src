@@ -399,6 +399,52 @@ bool prepare_image_symbols(
 	return true;
 }
 
+/*
+ * Room for count call descriptors of each kind and as many internal call
+ * cells; false when an allocation failed.
+ */
+static bool allocate_call_descriptors(
+	zend_native_image *image, uint32_t count) {
+	image->owned_internal_call_cells =
+		static_cast<zend_native_internal_call_cell **>(std::calloc(
+			count, sizeof(*image->owned_internal_call_cells)));
+	image->direct_calls =
+		static_cast<zend_native_direct_call_descriptor **>(std::calloc(
+			count, sizeof(*image->direct_calls)));
+	image->direct_internal_calls =
+		static_cast<zend_native_direct_internal_call_descriptor **>(
+			std::calloc(count, sizeof(*image->direct_internal_calls)));
+	image->user_calls =
+		static_cast<zend_native_user_call_descriptor **>(std::calloc(
+			count, sizeof(*image->user_calls)));
+	return image->owned_internal_call_cells != nullptr
+		&& image->direct_calls != nullptr
+		&& image->direct_internal_calls != nullptr
+		&& image->user_calls != nullptr;
+}
+
+/* Hands an image's call descriptors and internal call cells to its code. */
+static void move_call_descriptors(
+	zend_native_code *code, zend_native_image *image) {
+	code->direct_calls = image->direct_calls;
+	code->direct_call_count = image->direct_call_count;
+	image->direct_calls = nullptr;
+	image->direct_call_count = 0;
+	code->direct_internal_calls = image->direct_internal_calls;
+	code->direct_internal_call_count = image->direct_internal_call_count;
+	image->direct_internal_calls = nullptr;
+	image->direct_internal_call_count = 0;
+	code->user_calls = image->user_calls;
+	code->user_call_count = image->user_call_count;
+	image->user_calls = nullptr;
+	image->user_call_count = 0;
+	code->owned_internal_call_cells = image->owned_internal_call_cells;
+	code->owned_internal_call_cell_count =
+		image->owned_internal_call_cell_count;
+	image->owned_internal_call_cells = nullptr;
+	image->owned_internal_call_cell_count = 0;
+}
+
 } // namespace zend::native::tpde::plan_detail
 
 using namespace zend::native::tpde::plan_detail;
@@ -855,25 +901,10 @@ extern "C" zend_result zend_native_image_deserialize(
 				std::calloc(header.binding_count,
 					sizeof(*image->symbol_bindings)));
 		/* Each binding owns at most one cell or descriptor. */
-		image->owned_internal_call_cells =
-			static_cast<zend_native_internal_call_cell **>(std::calloc(
-				header.binding_count,
-				sizeof(*image->owned_internal_call_cells)));
-		image->direct_calls =
-			static_cast<zend_native_direct_call_descriptor **>(std::calloc(
-				header.binding_count, sizeof(*image->direct_calls)));
-		image->direct_internal_calls =
-			static_cast<zend_native_direct_internal_call_descriptor **>(
-				std::calloc(header.binding_count,
-					sizeof(*image->direct_internal_calls)));
-		image->user_calls =
-			static_cast<zend_native_user_call_descriptor **>(std::calloc(
-				header.binding_count, sizeof(*image->user_calls)));
+		const bool call_descriptors_allocated =
+			allocate_call_descriptors(image, header.binding_count);
 		if (image->symbol_bindings == nullptr
-				|| image->owned_internal_call_cells == nullptr
-				|| image->direct_calls == nullptr
-				|| image->direct_internal_calls == nullptr
-				|| image->user_calls == nullptr) {
+				|| !call_descriptors_allocated) {
 			goto allocation_failure;
 		}
 		image->symbol_binding_capacity = header.binding_count;
@@ -1128,49 +1159,15 @@ extern "C" zend_result zend_native_publish_image(
 		 * slots at publication. Transfer their storage with the mapping so
 		 * callers may destroy the intermediate image immediately afterward.
 		 */
-		(*out_code)->direct_calls = image->direct_calls;
-		(*out_code)->direct_call_count = image->direct_call_count;
-		image->direct_calls = nullptr;
-		image->direct_call_count = 0;
-		(*out_code)->direct_internal_calls = image->direct_internal_calls;
-		(*out_code)->direct_internal_call_count =
-			image->direct_internal_call_count;
-		image->direct_internal_calls = nullptr;
-		image->direct_internal_call_count = 0;
-		(*out_code)->user_calls = image->user_calls;
-		(*out_code)->user_call_count = image->user_call_count;
-		image->user_calls = nullptr;
-		image->user_call_count = 0;
-		(*out_code)->owned_internal_call_cells =
-			image->owned_internal_call_cells;
-		(*out_code)->owned_internal_call_cell_count =
-			image->owned_internal_call_cell_count;
-		image->owned_internal_call_cells = nullptr;
-		image->owned_internal_call_cell_count = 0;
+		move_call_descriptors(*out_code, image);
 	}
 	return result;
 }
 
 extern "C" void zend_native_image_destroy(zend_native_image *image) {
 	if (image != nullptr) {
-		for (uint32_t index = 0; index < image->direct_call_count; ++index) {
-			std::free(image->direct_calls[index]);
-		}
-		std::free(image->direct_calls);
-		for (uint32_t index = 0;
-				index < image->direct_internal_call_count; ++index) {
-			std::free(image->direct_internal_calls[index]);
-		}
-		std::free(image->direct_internal_calls);
-		for (uint32_t index = 0; index < image->user_call_count; ++index) {
-			zend_native_user_call_descriptor_free(image->user_calls[index]);
-		}
-		std::free(image->user_calls);
-		for (uint32_t index = 0;
-				index < image->owned_internal_call_cell_count; ++index) {
-			std::free(image->owned_internal_call_cells[index]);
-		}
-		std::free(image->owned_internal_call_cells);
+		free_call_descriptors(image);
+		free_internal_call_cells(image);
 		std::free(image->component_entries);
 		if (image->destroy_target_state != nullptr) {
 			image->destroy_target_state(image->target_state);
@@ -1197,24 +1194,8 @@ extern "C" void zend_native_code_destroy(zend_native_code *code) {
 	if (previous != 1) {
 		return;
 	}
-	for (uint32_t index = 0; index < owner->direct_call_count; ++index) {
-		std::free(owner->direct_calls[index]);
-	}
-	std::free(owner->direct_calls);
-	for (uint32_t index = 0;
-			index < owner->direct_internal_call_count; ++index) {
-		std::free(owner->direct_internal_calls[index]);
-	}
-	std::free(owner->direct_internal_calls);
-	for (uint32_t index = 0; index < owner->user_call_count; ++index) {
-		zend_native_user_call_descriptor_free(owner->user_calls[index]);
-	}
-	std::free(owner->user_calls);
-	for (uint32_t index = 0;
-			index < owner->owned_internal_call_cell_count; ++index) {
-		std::free(owner->owned_internal_call_cells[index]);
-	}
-	std::free(owner->owned_internal_call_cells);
+	free_call_descriptors(owner);
+	free_internal_call_cells(owner);
 	std::free(owner->component_entries);
 	std::free(owner->component_fast_entries);
 	std::free(owner->component_exact_entries);

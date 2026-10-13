@@ -36,6 +36,37 @@ bool prepare_image_symbols(
 	zend_native_image *image,
 	zend_native_diagnostic *diag);
 
+/*
+ * Frees the direct, direct internal and user call descriptors a plan, an
+ * image or native code owns, with their arrays.
+ */
+template <typename Owner>
+void free_call_descriptors(Owner *owner) {
+	for (uint32_t index = 0; index < owner->direct_call_count; ++index) {
+		std::free(owner->direct_calls[index]);
+	}
+	std::free(owner->direct_calls);
+	for (uint32_t index = 0;
+			index < owner->direct_internal_call_count; ++index) {
+		std::free(owner->direct_internal_calls[index]);
+	}
+	std::free(owner->direct_internal_calls);
+	for (uint32_t index = 0; index < owner->user_call_count; ++index) {
+		zend_native_user_call_descriptor_free(owner->user_calls[index]);
+	}
+	std::free(owner->user_calls);
+}
+
+/* Frees the internal call cells an image or native code owns. */
+template <typename Owner>
+void free_internal_call_cells(Owner *owner) {
+	for (uint32_t index = 0;
+			index < owner->owned_internal_call_cell_count; ++index) {
+		std::free(owner->owned_internal_call_cells[index]);
+	}
+	std::free(owner->owned_internal_call_cells);
+}
+
 /* Source and type analysis (zend_tpde_plan_analysis.cpp). */
 bool source_descriptor_operand(
 	const zend_op_array *op_array,
@@ -313,6 +344,23 @@ bool freeze_deopt_exits(
 void destroy_deopt_landing_adaptor(zend_tpde_plan *plan);
 
 /* Plan construction and lookup indices (zend_tpde_plan.cpp). */
+
+/*
+ * Allocates count zeroed elements into out; false, with an allocation
+ * diagnostic of the given message, when that fails.
+ */
+template <typename T>
+[[nodiscard]] bool plan_alloc(T *&out, size_t count,
+	zend_native_diagnostic *diag, const char *message) {
+	out = static_cast<T *>(std::calloc(count, sizeof(T)));
+	if (out == nullptr) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED, message);
+		return false;
+	}
+	return true;
+}
+
 bool checked_count(uint32_t count);
 uint32_t id_index_capacity(uint32_t count);
 bool id_index_insert(

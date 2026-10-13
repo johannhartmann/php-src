@@ -2353,14 +2353,9 @@ static bool freeze_machine_operand_transports(
 	if (plan->instruction_operand_count == 0) {
 		return true;
 	}
-	plan->instruction_operand_transports =
-		static_cast<zend_tpde_operand_transport *>(std::calloc(
-			plan->instruction_operand_count,
-			sizeof(*plan->instruction_operand_transports)));
-	if (plan->instruction_operand_transports == nullptr) {
-		zend_tpde_set_diagnostic(diag,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to freeze machine operand transports");
+	if (!plan_alloc(plan->instruction_operand_transports,
+			plan->instruction_operand_count, diag,
+			"unable to freeze machine operand transports")) {
 		return false;
 	}
 

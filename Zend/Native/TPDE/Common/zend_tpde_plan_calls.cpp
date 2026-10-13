@@ -392,13 +392,8 @@ bool freeze_source_call_phases(
 		return true;
 	}
 
-	plan->source_call_phases =
-		static_cast<zend_tpde_source_call_phase_entry *>(std::calloc(
-			plan->source_opcode_count, sizeof(*plan->source_call_phases)));
-	if (plan->source_call_phases == nullptr) {
-		zend_tpde_set_diagnostic(diag,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to allocate source-call phase table");
+	if (!plan_alloc(plan->source_call_phases, plan->source_opcode_count,
+			diag, "unable to allocate source-call phase table")) {
 		return false;
 	}
 	for (uint32_t source = 0; source < plan->source_opcode_count; ++source) {
