@@ -9529,10 +9529,12 @@ bool ZendCompilerA64::compile_inst_impl(
 			});
 		case ZEND_MIR_OPCODE_F64_EQ:
 			return floating_compare(Jump::Jeq);
+		/* FCMP with a NaN operand sets C and V: MI and LS are false then,
+		 * as PHP's < and <= are. */
 		case ZEND_MIR_OPCODE_F64_LT:
-			return floating_compare(Jump::Jlt);
+			return floating_compare(Jump::Jmi);
 		case ZEND_MIR_OPCODE_F64_LE:
-			return floating_compare(Jump::Jle);
+			return floating_compare(Jump::Jls);
 		case ZEND_MIR_OPCODE_F64_CMP: {
 			auto [left_pair, right_pair] = binary();
 			auto &[left_ref, left] = left_pair;
@@ -9542,8 +9544,9 @@ bool ZendCompilerA64::compile_inst_impl(
 			ScratchReg less{this};
 			auto less_reg = less.alloc_gp();
 			ASM(FCMP_d, left.load_to_reg(), right.load_to_reg());
-			generate_raw_set(Jump::Jlt, less_reg);
-			generate_raw_set(Jump::Jgt, result_reg);
+			/* An unordered compare is 1, like ZEND_THREEWAY_COMPARE. */
+			generate_raw_set(Jump::Jmi, less_reg);
+			generate_raw_set(Jump::Jhi, result_reg);
 			ASM(SUBx, result_reg, result_reg, less_reg);
 			result.set_modified();
 			return true;

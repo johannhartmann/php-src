@@ -19495,13 +19495,16 @@ bool ZendCompilerX64::compile_inst_impl(
 			auto &[left_ref, left] = left_pair;
 			auto &[right_ref, right] = right_pair;
 			auto [result_ref, result] = result_ref_single(node.result);
-			ASM(SSE_UCOMISDrr, left.load_to_reg(), right.load_to_reg());
+			/* Unordered sets CF: with the operands swapped, NaN counts as
+			 * greater and yields 1, as ZEND_THREEWAY_COMPARE does. */
+			auto left_reg = left.load_to_reg();
+			ASM(SSE_UCOMISDrr, right.load_to_reg(), left_reg);
 			ScratchReg less{this};
 			ScratchReg greater{this};
 			auto less_reg = less.alloc_gp();
 			auto greater_reg = greater.alloc_gp();
-			generate_raw_set(Jump::jb, less_reg);
-			generate_raw_set(Jump::ja, greater_reg);
+			generate_raw_set(Jump::ja, less_reg);
+			generate_raw_set(Jump::jb, greater_reg);
 			ASM(SUB64rr, greater_reg, less_reg);
 			result.set_value(std::move(greater));
 			return true;
