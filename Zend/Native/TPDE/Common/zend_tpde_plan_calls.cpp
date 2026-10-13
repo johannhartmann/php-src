@@ -1011,6 +1011,7 @@ static bool direct_user_call_descriptor_eligible(const plan_builder &builder,
 	return direct_descriptor;
 }
 
+[[nodiscard]]
 static zend_native_direct_call_descriptor *create_direct_user_call_descriptor(
 	const plan_builder &builder, uint32_t i, const zend_mir_call_site_ref &site,
 	const zend_mir_call_target_ref &target, zend_function *expected_function,
@@ -1434,6 +1435,7 @@ static void freeze_direct_call_argument(plan_builder &builder,
 		trivial_frame && inline_argument && inline_parameter;
 }
 
+[[nodiscard]]
 static bool freeze_direct_call_arguments(plan_builder &builder, uint32_t i,
 	const zend_mir_call_site_ref &site,
 	zend_native_direct_call_descriptor *descriptor, direct_call_frame &frame) {
@@ -1565,6 +1567,7 @@ static bool freeze_direct_call_arguments(plan_builder &builder, uint32_t i,
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_direct_call_inline_frame(
 	const plan_builder &builder, uint32_t i, const zend_mir_call_site_ref &site,
 	int32_t binding_index, zend_native_direct_call_descriptor *descriptor,
@@ -1661,6 +1664,7 @@ static bool freeze_direct_call_inline_frame(
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_direct_user_call(plan_builder &builder, uint32_t i,
 	const zend_mir_call_site_ref &site, const zend_mir_call_target_ref &target,
 	int32_t binding_index, zend_function *expected_function,
@@ -1688,6 +1692,7 @@ static bool freeze_direct_user_call(plan_builder &builder, uint32_t i,
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_source_user_call(plan_builder &builder, uint32_t i,
 	const zend_mir_call_site_ref &site, const zend_mir_call_target_ref &target,
 	bool fragment_call) {
@@ -1776,6 +1781,7 @@ static bool freeze_source_user_call(plan_builder &builder, uint32_t i,
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_direct_user_call(plan_builder &builder, uint32_t i,
 	const zend_mir_call_site_ref &site, const zend_mir_call_target_ref &target,
 	bool fragment_call) {
@@ -1836,6 +1842,7 @@ static bool plan_direct_user_call(plan_builder &builder, uint32_t i,
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_direct_internal_call(
 	plan_builder &builder, uint32_t i, const zend_mir_call_site_ref &site) {
 	zend_tpde_plan *const plan = builder.plan;
@@ -2023,6 +2030,7 @@ static bool freeze_direct_internal_call(
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_direct_internal_call(plan_builder &builder, uint32_t i,
 	const zend_mir_call_site_ref &site, bool fragment_call) {
 	zend_tpde_plan *const plan = builder.plan;

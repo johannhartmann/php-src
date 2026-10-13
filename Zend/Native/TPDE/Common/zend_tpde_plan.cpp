@@ -224,7 +224,8 @@ static uint32_t source_operand_may_be(
  * zend_native_call_fast_receive_prepare() derives the runtime's inline
  * receive: false when that receive does not apply.
  */
-static bool freeze_fast_call_receive(
+[[nodiscard]]
+static bool try_freeze_fast_call_receive(
 	const zend_op_array *op_array, zend_tpde_plan *plan) {
 	const uint32_t scalar_types = (UINT32_C(1) << (IS_RESOURCE + 1)) - 1;
 
@@ -314,7 +315,7 @@ static void freeze_entry_facts(plan_builder &builder) {
 		&& (source_op_array->fn_flags & ZEND_ACC_GENERATOR) == 0
 		&& released_vars <= 64
 		&& source_op_array->num_args <= (uint32_t) source_op_array->last_var
-		&& freeze_fast_call_receive(source_op_array, plan);
+		&& try_freeze_fast_call_receive(source_op_array, plan);
 	plan->fast_call_counted_cvs = ~UINT64_C(0);
 	if (plan->fast_call_eligible && source_ssa != nullptr
 			&& source_ssa->vars != nullptr
@@ -351,6 +352,7 @@ static void freeze_entry_facts(plan_builder &builder) {
 		? static_cast<uint32_t>(source_op_array->last_literal) : 0;
 }
 
+[[nodiscard]]
 static bool read_mir_function(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;
@@ -370,6 +372,7 @@ static bool read_mir_function(plan_builder &builder) {
 }
 
 /* The multiway branches of SWITCH_LONG, SWITCH_STRING and MATCH. */
+[[nodiscard]]
 static bool freeze_source_multi_branches(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -511,6 +514,7 @@ static bool freeze_source_multi_branches(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_source_opcodes(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -580,6 +584,7 @@ static bool freeze_source_opcodes(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_compiled_variable_uses(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -633,6 +638,7 @@ static bool freeze_compiled_variable_uses(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_source_cfg(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -720,6 +726,7 @@ static void read_view_counts(plan_builder &builder) {
 	builder.frame_slot_count = view->frame_slot_count(view->context);
 }
 
+[[nodiscard]]
 static bool freeze_user_opcode_operations(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -814,6 +821,7 @@ static bool freeze_user_opcode_operations(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool check_source_frame_bounds(plan_builder &builder) {
 	const zend_op_array *const source_op_array = builder.source_op_array;
 	zend_native_diagnostic *const diag = builder.diag;
@@ -838,6 +846,7 @@ static bool check_source_frame_bounds(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool check_record_counts(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const uint32_t constant_count = builder.constant_count;
@@ -866,6 +875,7 @@ static bool check_record_counts(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool allocate_plan_tables(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const uint32_t user_binding_count = builder.user_binding_count;
@@ -957,6 +967,7 @@ static bool allocate_plan_tables(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_instruction_table(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;
@@ -1037,6 +1048,7 @@ static bool freeze_instruction_table(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_call_tables(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_call_view *const calls = builder.calls;
@@ -1112,6 +1124,7 @@ static bool freeze_call_tables(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_value_operations(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_value_view *const value_model = builder.value_model;
@@ -1158,6 +1171,7 @@ static bool freeze_value_operations(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_source_zval_returns(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -1238,6 +1252,7 @@ static bool freeze_source_zval_returns(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_block_graph(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;
@@ -1355,6 +1370,7 @@ static bool freeze_block_graph(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_values(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;
@@ -1452,6 +1468,7 @@ static bool freeze_values(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_constants(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;
@@ -1501,6 +1518,7 @@ static bool freeze_constants(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_value_facts(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;
@@ -1859,6 +1877,7 @@ static bool storage_lazy_capable(
 		&& !storage_assigned_by_reference(builder, storage_id);
 }
 
+[[nodiscard]]
 static bool freeze_storage_alias(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -1967,6 +1986,7 @@ static const zend_tpde_value *unaliased_scalar_previous(
 		? &previous : nullptr;
 }
 
+[[nodiscard]]
 static bool plan_zval_store(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -2200,6 +2220,7 @@ static void freeze_lazy_mutation(plan_builder &builder, uint32_t i) {
 	}
 }
 
+[[nodiscard]]
 static bool plan_multi_branch(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	zend_native_diagnostic *const diag = builder.diag;
@@ -2228,6 +2249,7 @@ static bool plan_multi_branch(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_semantic_echo(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	zend_native_diagnostic *const diag = builder.diag;
@@ -2307,6 +2329,7 @@ static void refine_long_binary_result(plan_builder &builder, uint32_t i) {
 	}
 }
 
+[[nodiscard]]
 static bool plan_verify_return_type(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -2357,6 +2380,7 @@ static bool plan_verify_return_type(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_argument_introspection(
 	plan_builder &builder, uint32_t i, zend_native_runtime_helper_id helper) {
 	zend_tpde_plan *const plan = builder.plan;
@@ -2429,6 +2453,7 @@ static bool plan_argument_introspection(
 }
 
 /* The helpers a value operation's inline and address forms reach. */
+[[nodiscard]]
 static bool require_value_helpers(
 	plan_builder &builder, uint32_t i, zend_native_runtime_helper_id helper) {
 	zend_tpde_plan *const plan = builder.plan;
@@ -2569,6 +2594,7 @@ static bool require_value_helpers(
 	return true;
 }
 
+[[nodiscard]]
 static plan_status plan_value_operation(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -2652,6 +2678,7 @@ static plan_status plan_value_operation(plan_builder &builder, uint32_t i) {
 		? plan_status::continues : plan_status::failed;
 }
 
+[[nodiscard]]
 static bool plan_source_zval_return(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_op_array *const source_op_array = builder.source_op_array;
@@ -2782,6 +2809,7 @@ static bool plan_source_zval_return(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_source_zval_throw(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	zend_native_diagnostic *const diag = builder.diag;
@@ -2814,6 +2842,7 @@ static bool plan_source_zval_throw(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_iterator_branch(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	zend_native_diagnostic *const diag = builder.diag;
@@ -2845,6 +2874,7 @@ static bool plan_iterator_branch(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_boxed_cond_branch(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	zend_native_diagnostic *const diag = builder.diag;
@@ -2938,6 +2968,7 @@ static bool plan_boxed_cond_branch(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_interrupt_statepoint(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;
@@ -2999,6 +3030,7 @@ static bool plan_interrupt_statepoint(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
+[[nodiscard]]
 static bool plan_instructions(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	builder.sites = plan->call_sites;
@@ -3074,6 +3106,7 @@ static bool plan_instructions(plan_builder &builder) {
 }
 
 /* The source effects: exception routes and debug probes. */
+[[nodiscard]]
 static bool freeze_source_effects(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_native_source_effect *const effects = builder.effects;
@@ -3225,6 +3258,7 @@ static bool freeze_source_effects(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool check_instruction_operands(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	zend_native_diagnostic *const diag = builder.diag;
@@ -3256,6 +3290,7 @@ static bool check_instruction_operands(plan_builder &builder) {
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_plan_passes(plan_builder &builder) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_mir_view *const view = builder.view;

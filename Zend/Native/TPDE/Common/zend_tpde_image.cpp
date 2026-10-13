@@ -57,6 +57,7 @@ uint64_t native_image_build_id(zend_native_target target) {
 	return hash;
 }
 
+[[nodiscard]]
 static bool native_buffer_append(
 	zend_native_byte_buffer *buffer, const void *bytes, size_t size) {
 	if (buffer == nullptr || (size != 0 && bytes == nullptr)
@@ -240,6 +241,7 @@ static bool native_descriptor_size(
 	return true;
 }
 
+[[nodiscard]]
 static bool image_add_symbol(
 	zend_native_image *image,
 	zend_native_image_symbol_kind kind,
@@ -403,6 +405,7 @@ bool prepare_image_symbols(
  * Room for count call descriptors of each kind and as many internal call
  * cells; false when an allocation failed.
  */
+[[nodiscard]]
 static bool allocate_call_descriptors(
 	zend_native_image *image, uint32_t count) {
 	image->owned_internal_call_cells =

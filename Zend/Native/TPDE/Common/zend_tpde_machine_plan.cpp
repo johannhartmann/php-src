@@ -221,7 +221,7 @@ bool machine_plan_type_check_supported(
 	}
 }
 
-/* Per-call scratch of freeze_typed_body_signature, reused across members
+/* Per-call scratch of try_freeze_typed_body_signature, reused across members
  * and fixpoint passes. */
 struct typed_body_signature_scratch {
 	std::vector<zend_tpde_local_abi_type> call_result_types;
@@ -246,7 +246,8 @@ static bool plan_receives_variadic(const zend_tpde_plan *plan) {
 
 /* The caller rejects members that receive variadic arguments
  * (plan_receives_variadic). */
-static bool freeze_typed_body_signature(
+[[nodiscard]]
+static bool try_freeze_typed_body_signature(
 		const zend_tpde_plan *plan,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
@@ -1079,6 +1080,7 @@ static bool machine_value_kind_can_be_register_authoritative(
 		|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 }
 
+[[nodiscard]]
 static bool freeze_typed_component_calls(
 		zend_tpde_plan *plan,
 		const zend_tpde_plan *const *component_plans,
@@ -1500,6 +1502,7 @@ static bool machine_plan_value_has_result_representation(
 		value.machine_kind, value.constant, value.register_authoritative);
 }
 
+[[nodiscard]]
 static bool retain_typed_call_materializations(
 		zend_tpde_plan *plan,
 		zend_native_diagnostic *diag) {
@@ -1705,6 +1708,7 @@ void destroy_machine_cfg(zend_tpde_machine_cfg *cfg) {
 	std::memset(cfg, 0, sizeof(*cfg));
 }
 
+[[nodiscard]]
 static bool freeze_machine_cfg_array(
 		uint32_t **out,
 		const std::vector<uint32_t> &values) {
@@ -2346,6 +2350,7 @@ static uint8_t machine_plan_use_value_modes(
  * machine function needs the operand's value (machine_plan_use_value_modes);
  * freeze_machine_required_values reads it for the same uses.
  */
+[[nodiscard]]
 static bool freeze_machine_operand_transports(
 		zend_tpde_plan *plan, std::vector<uint8_t> &operand_value_modes,
 		zend_native_diagnostic *diag) {
@@ -2515,6 +2520,7 @@ static bool freeze_machine_operand_transports(
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_machine_required_values(
 		zend_tpde_plan *plan,
 		const std::vector<uint8_t> &operand_value_modes,
@@ -2642,6 +2648,7 @@ static bool freeze_machine_required_values(
 	return true;
 }
 
+[[nodiscard]]
 static bool freeze_machine_cfg(
 		zend_tpde_plan *plan,
 		bool typed_body,
@@ -3253,7 +3260,7 @@ bool freeze_component_machine_plan(
 			}
 			zend_tpde_local_abi_type return_type{};
 			bool member_may_fail = false;
-			if (!freeze_typed_body_signature(
+			if (!try_freeze_typed_body_signature(
 					&plans[index], component_plans, component_count,
 					candidates.data(), signature_scratch,
 					&return_type, &member_may_fail)) {

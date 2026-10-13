@@ -205,7 +205,7 @@ public:
 		: plan(plan), view(view), source_op_array(source_op_array),
 			diag(diag) {}
 
-	bool freeze();
+	[[nodiscard]] bool freeze();
 
 private:
 	void collect_generator_definitions();
@@ -214,7 +214,7 @@ private:
 		uint32_t block_index, uint32_t before, zend_mir_storage_id storage_id);
 	reaching_scalar_definition reaching_scalar(
 		uint32_t boundary_index, zend_mir_storage_id storage_id);
-	bool read_frame_states();
+	[[nodiscard]] bool read_frame_states();
 	int32_t definition_value(const zend_tpde_instruction &instruction) const;
 	int32_t plain_store_value(const zend_tpde_instruction &instruction) const;
 	void index_definitions_and_plain_stores();
@@ -250,15 +250,18 @@ private:
 		int32_t source_value_index,
 		int32_t source_definition_instruction_index);
 	int32_t source_scalar_definition(zend_mir_storage_id storage_id) const;
-	bool materialize_frame_state(const zend_mir_instruction_record &record);
+	[[nodiscard]] bool materialize_frame_state(
+		const zend_mir_instruction_record &record);
 	void append_reaching_scalar(zend_mir_storage_id storage_id);
 	void materialize_lazy_scalars(const zend_mir_instruction_record &record);
 	void materialize_generator_suspend(
 		const zend_mir_instruction_record &record);
-	bool materialize_helper_inputs(const zend_mir_instruction_record &record);
-	bool materialize_call_arguments(const zend_mir_instruction_record &record);
-	bool materialize_boundary(uint32_t index);
-	bool publish();
+	[[nodiscard]] bool materialize_helper_inputs(
+		const zend_mir_instruction_record &record);
+	[[nodiscard]] bool materialize_call_arguments(
+		const zend_mir_instruction_record &record);
+	[[nodiscard]] bool materialize_boundary(uint32_t index);
+	[[nodiscard]] bool publish();
 
 	zend_tpde_plan *plan;
 	const zend_mir_view *view;

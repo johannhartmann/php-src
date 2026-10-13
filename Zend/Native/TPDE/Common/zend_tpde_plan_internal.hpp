@@ -31,7 +31,7 @@ constexpr uint32_t MAX_RECORDS = UINT32_C(1) << 20;
 
 /* Native image symbols (zend_tpde_image.cpp). */
 uint64_t native_image_build_id(zend_native_target target);
-bool prepare_image_symbols(
+[[nodiscard]] bool prepare_image_symbols(
 	const zend_tpde_plan *plan,
 	zend_native_image *image,
 	zend_native_diagnostic *diag);
@@ -278,22 +278,22 @@ bool nested_call_site_direct_candidate(
 	const zend_native_internal_call_binding *internal_bindings,
 	const zend_op_array *op_array, const zend_ssa *ssa,
 	const zend_mir_call_site_ref &site);
-zend_native_user_call_descriptor *build_user_call_descriptor(
+[[nodiscard]] zend_native_user_call_descriptor *build_user_call_descriptor(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
 	const zend_mir_call_site_ref &site,
 	const zend_mir_instruction_record &record,
 	zend_native_diagnostic *diag);
-bool freeze_source_call_phases(
+[[nodiscard]] bool freeze_source_call_phases(
 	zend_tpde_plan *plan, zend_native_diagnostic *diag);
-bool plan_call_site(plan_builder &builder, uint32_t i);
+[[nodiscard]] bool plan_call_site(plan_builder &builder, uint32_t i);
 
 /* Machine consumers, branch fusion and control-flow flags
  * (zend_tpde_plan_consumers.cpp). */
 uint32_t generator_suspend_value_index(
 	const zend_tpde_plan *plan, const int32_t *definitions,
 	uint32_t suspend_instruction, uint32_t value_index);
-bool freeze_machine_plan_consumers(
+[[nodiscard]] bool freeze_machine_plan_consumers(
 	zend_tpde_plan *plan, zend_native_diagnostic *diag);
 void freeze_fused_compare_branches(zend_tpde_plan *plan);
 void freeze_register_boolean_results(zend_tpde_plan *plan);
@@ -301,7 +301,7 @@ void freeze_machine_control_flow(zend_tpde_plan *plan);
 
 /* Source value bindings, references and frame liveness
  * (zend_tpde_plan_bindings.cpp). */
-bool freeze_source_value_bindings(
+[[nodiscard]] bool freeze_source_value_bindings(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa,
@@ -310,32 +310,32 @@ void freeze_dynamic_fetch_cv_indices(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa);
-bool freeze_machine_references(
+[[nodiscard]] bool freeze_machine_references(
 	zend_tpde_plan *plan,
 	zend_native_diagnostic *diag);
-bool freeze_generator_resume_liveness(
+[[nodiscard]] bool freeze_generator_resume_liveness(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
 	const zend_mir_value_view *value_model,
 	zend_native_diagnostic *diag);
-bool freeze_entry_undef_temporaries(
+[[nodiscard]] bool freeze_entry_undef_temporaries(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
 	zend_native_diagnostic *diag);
 
 /* Deoptimization resume targets and statepoint materializations
  * (zend_tpde_plan_deopt.cpp). */
-bool freeze_deopt_resume_targets(
+[[nodiscard]] bool freeze_deopt_resume_targets(
 	zend_tpde_plan *plan,
 	const zend_op_array *source_op_array,
 	const zend_ssa *source_ssa,
 	zend_native_diagnostic *diag);
-bool freeze_statepoint_materializations(
+[[nodiscard]] bool freeze_statepoint_materializations(
 	zend_tpde_plan *plan,
 	const zend_mir_view *view,
 	const zend_op_array *source_op_array,
 	zend_native_diagnostic *diag);
-bool freeze_deopt_exits(
+[[nodiscard]] bool freeze_deopt_exits(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
@@ -375,7 +375,7 @@ int32_t id_index_find(
 void require_runtime_helper(
 	zend_tpde_plan *plan, zend_native_runtime_helper_id helper);
 void destroy_plan(zend_tpde_plan *plan);
-bool initialize_plan(
+[[nodiscard]] bool initialize_plan(
 	const zend_mir_view *view,
 	const zend_native_call_binding *user_bindings,
 	uint32_t user_binding_count,
@@ -394,7 +394,7 @@ bool machine_plan_type_check_supported(
 		const zend_tpde_plan *plan,
 		const zend_tpde_instruction &instruction);
 void destroy_machine_cfg(zend_tpde_machine_cfg *cfg);
-bool freeze_component_machine_plan(
+[[nodiscard]] bool freeze_component_machine_plan(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
