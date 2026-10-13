@@ -2734,6 +2734,14 @@ static inline uint32_t zend_tpde_register_mutation_ssa_plus_one(
 	return instruction.value_operation.op1_definition_ssa_variable_id_plus_one;
 }
 
+/* Whether planning required the runtime helper (require_runtime_helper()). */
+static inline bool zend_tpde_runtime_helper_required(
+	const zend_tpde_plan *plan, zend_native_runtime_helper_id helper)
+{
+	return (plan->required_runtime_helpers[helper / 64u]
+		& (UINT64_C(1) << (helper % 64u))) != 0;
+}
+
 /* Appends the storages ASSIGN_REF binds to storages, then sorts them and
  * drops duplicates. */
 static inline void zend_tpde_collect_reference_assigned_storages(
@@ -3405,6 +3413,14 @@ const zend_native_image_symbol *zend_tpde_image_symbol_find(
 	zend_native_image_symbol_kind kind,
 	uint32_t id,
 	uint32_t symbol_namespace);
+/*
+ * The image symbol of a runtime helper an emitter calls. Planning must
+ * require every such helper; a debug build asserts that it did, a release
+ * build returns nullptr as zend_tpde_image_symbol_find() does.
+ */
+const zend_native_image_symbol *zend_tpde_required_runtime_symbol(
+	const zend_native_image *image,
+	zend_native_runtime_helper_id helper);
 bool zend_tpde_image_resolve_symbol(
 	const zend_native_image *image,
 	const char *name,

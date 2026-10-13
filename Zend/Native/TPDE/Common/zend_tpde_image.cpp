@@ -324,8 +324,8 @@ bool prepare_image_symbols(
 	zend_native_image *image,
 	zend_native_diagnostic *diag) {
 	for (uint32_t id = 1; id < ZEND_NATIVE_HELPER_COUNT; ++id) {
-		if ((plan->required_runtime_helpers[id / 64u]
-				& (UINT64_C(1) << (id % 64u))) == 0) {
+		if (!zend_tpde_runtime_helper_required(plan,
+				static_cast<zend_native_runtime_helper_id>(id))) {
 			continue;
 		}
 		if (!image_add_symbol(image,
@@ -499,6 +499,17 @@ const zend_native_image_symbol *zend_tpde_image_symbol_find(
 	const uint32_t index =
 		native_image_symbol_index(image, kind, id, symbol_namespace);
 	return index == UINT32_MAX ? nullptr : &image->symbols[index];
+}
+
+const zend_native_image_symbol *zend_tpde_required_runtime_symbol(
+	const zend_native_image *image,
+	zend_native_runtime_helper_id helper) {
+	const zend_native_image_symbol *symbol = zend_tpde_image_symbol_find(
+		image, ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
+		static_cast<uint32_t>(helper), 0);
+	/* prepare_image_symbols() named each helper planning required. */
+	ZEND_ASSERT(symbol != nullptr);
+	return symbol;
 }
 
 bool zend_tpde_image_resolve_symbol(

@@ -261,6 +261,19 @@ IRValueRef ZendIRAdaptor::add_derived_value(
 	return value;
 }
 
+/* An opcode of ZEND_MIR_EXECUTABLE_VALUE_OPCODE_CATALOG. */
+static constexpr bool executable_value_opcode(zend_mir_opcode opcode) {
+	switch (opcode) {
+#define EXECUTABLE_VALUE_CASE(symbol, label, value) \
+		case ZEND_MIR_OPCODE_##symbol:
+		ZEND_MIR_EXECUTABLE_VALUE_OPCODE_CATALOG(EXECUTABLE_VALUE_CASE)
+#undef EXECUTABLE_VALUE_CASE
+			return true;
+		default:
+			return false;
+	}
+}
+
 ZendIRAdaptor::InstKind ZendIRAdaptor::executable_kind(
 		const zend_tpde_instruction &instruction,
 		const zend_mir_instruction_record &record) {
@@ -292,29 +305,16 @@ ZendIRAdaptor::InstKind ZendIRAdaptor::executable_kind(
 			return InstKind::ZvalCopy;
 		case ZEND_MIR_OPCODE_VALUE_FREE:
 			return InstKind::ZvalReleaseFast;
-		case ZEND_MIR_OPCODE_VALUE_MAKE_REF:
-		case ZEND_MIR_OPCODE_VALUE_ASSIGN_REF:
-		case ZEND_MIR_OPCODE_VALUE_SEPARATE:
-		case ZEND_MIR_OPCODE_VALUE_UNSET_CV:
-		case ZEND_MIR_OPCODE_VALUE_CHECK_VAR:
-		case ZEND_MIR_OPCODE_VALUE_CONCAT:
-		case ZEND_MIR_OPCODE_VALUE_FAST_CONCAT:
-		case ZEND_MIR_OPCODE_VALUE_ROPE_INIT:
-		case ZEND_MIR_OPCODE_VALUE_ROPE_ADD:
-		case ZEND_MIR_OPCODE_VALUE_ROPE_END:
-		case ZEND_MIR_OPCODE_VALUE_INIT_ARRAY:
-		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_ELEMENT:
-		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
-		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
-		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
-		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS:
-		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG:
-		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_UNSET:
-		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM_OP:
-		case ZEND_MIR_OPCODE_VALUE_UNSET_DIM:
-		case ZEND_MIR_OPCODE_VALUE_FE_FREE:
-		case ZEND_MIR_OPCODE_VALUE_CAST:
-		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:
+		/* The executable value operations lowered without their helper. */
+		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
+		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
+		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
+		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
+		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
+		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
+		case ZEND_MIR_OPCODE_VALUE_INCDEC:
+			return InstKind::MIR;
 		case ZEND_MIR_OPCODE_VALUE_ECHO:
 		case ZEND_MIR_OPCODE_FUNC_GET_ARGS:
 		case ZEND_MIR_OPCODE_VALUE_COUNT:
@@ -338,24 +338,12 @@ ZendIRAdaptor::InstKind ZendIRAdaptor::executable_kind(
 		case ZEND_MIR_OPCODE_VALUE_CHECK_FUNC_ARG:
 		case ZEND_MIR_OPCODE_VALUE_CHECK_UNDEF_ARGS:
 			return InstKind::SlowPathCall;
-		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
-		case ZEND_MIR_OPCODE_VALUE_ASSIGN_DIM:
-		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
-		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
-		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
-		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
-		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
-		case ZEND_MIR_OPCODE_VALUE_INCDEC:
-		case ZEND_MIR_OPCODE_VALUE_COND_BRANCH:
-		case ZEND_MIR_OPCODE_VALUE_BIND_STATIC_BRANCH:
-		case ZEND_MIR_OPCODE_VALUE_FRAMELESS_BRANCH:
-		case ZEND_MIR_OPCODE_OBJECT_FETCH_R:
-		case ZEND_MIR_OPCODE_OBJECT_ASSIGN:
-		case ZEND_MIR_OPCODE_DYNAMIC_FETCH_R:
-			return InstKind::MIR;
 		default:
-			return InstKind::MIR;
+			break;
 	}
+	/* Every other executable value operation calls its helper. */
+	return executable_value_opcode(instruction.value_operation.opcode)
+		? InstKind::SlowPathCall : InstKind::MIR;
 }
 
 ZendIRAdaptor::ScalarTypeCheckSelection
