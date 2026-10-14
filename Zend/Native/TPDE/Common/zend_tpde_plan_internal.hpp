@@ -346,6 +346,17 @@ void destroy_deopt_landing_adaptor(zend_tpde_plan *plan);
 /* Plan construction and lookup indices (zend_tpde_plan.cpp). */
 
 /*
+ * Allocation failure. An array that a plan, an image or native code owns
+ * outlives the function that builds it and is freed by its owner's destroy
+ * function: it is allocated with std::malloc or std::calloc, mostly into a
+ * zend_tpde_owned, and a failure returns an ALLOCATION_FAILED diagnostic.
+ * Working storage that is gone when the building function returns is a
+ * std::vector or another standard container, not a C allocation; its sizes
+ * stay within the record bounds (checked_count, MAX_RECORDS), and its
+ * allocation failure terminates the process.
+ */
+
+/*
  * Allocates count zeroed elements into out; false, with an allocation
  * diagnostic of the given message, when that fails.
  */

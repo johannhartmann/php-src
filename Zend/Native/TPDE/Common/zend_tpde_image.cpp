@@ -824,8 +824,8 @@ struct image_deserializer {
 	size_t offset;
 	size_t symbol_bytes;
 	size_t component_bytes;
-	/* Per symbol: whether a binding restored it. */
-	bool *bound;
+	/* Per symbol: 1 when a binding restored it. */
+	std::vector<uint8_t> bound;
 };
 
 /* Reads the header and checks that the sections it counts fit. */
@@ -907,9 +907,8 @@ static image_restore restore_image_sections(image_deserializer &state) {
 	if (symbol_bytes != 0) {
 		image->symbols = static_cast<zend_native_image_symbol *>(
 			std::malloc(symbol_bytes));
-		state.bound = static_cast<bool *>(
-			std::calloc(header.symbol_count, sizeof(bool)));
-		if (image->symbols == nullptr || state.bound == nullptr) {
+		state.bound.assign(header.symbol_count, 0);
+		if (image->symbols == nullptr) {
 			return image_restore::allocation_failed;
 		}
 		std::memcpy(image->symbols, bytes + state.offset, symbol_bytes);
@@ -1169,7 +1168,7 @@ static image_restore restore_image_binding(image_deserializer &state) {
 	state.offset += serialized.payload_size;
 	image->symbol_bindings[image->symbol_binding_count++] = {
 		serialized.symbol_index, address};
-	state.bound[serialized.symbol_index] = true;
+	state.bound[serialized.symbol_index] = 1;
 	return image_restore::restored;
 }
 
@@ -1192,12 +1191,11 @@ static image_restore check_image_symbols(const image_deserializer &state) {
 	return image_restore::restored;
 }
 
-/* Frees what a failed restore built and reports why it failed. */
+/* Destroys what a failed restore built and reports why it failed. */
 static zend_result fail_image_restore(
 	image_deserializer &state,
 	image_restore status,
 	zend_native_diagnostic *diag) {
-	std::free(state.bound);
 	zend_native_image_destroy(state.image);
 	if (status == image_restore::invalid) {
 		zend_tpde_set_diagnostic(diag,
@@ -1245,7 +1243,6 @@ extern "C" zend_result zend_native_image_deserialize(
 	if (status != image_restore::restored) {
 		return fail_image_restore(state, status, diag);
 	}
-	std::free(state.bound);
 	*out_image = state.image;
 	return SUCCESS;
 }

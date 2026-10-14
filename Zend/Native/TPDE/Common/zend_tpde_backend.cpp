@@ -2,8 +2,6 @@
 
 #include "Zend/Native/TPDE/Common/zend_tpde_plan_internal.hpp"
 
-#include <new>
-
 namespace zend::native::tpde::plan_detail {
 
 static zend_native_image_metrics collect_plan_metrics(
@@ -104,14 +102,11 @@ static zend_native_image_metrics collect_plan_metrics(
 	return metrics;
 }
 
-/* Destroys the first count plans and frees the component's plan arrays. */
-static void destroy_component_plans(
-	zend_tpde_plan *plans, const zend_tpde_plan **plan_refs, uint32_t count) {
+/* Destroys the first count plans. */
+static void destroy_component_plans(zend_tpde_plan *plans, uint32_t count) {
 	for (uint32_t index = 0; index < count; ++index) {
 		destroy_plan(&plans[index]);
 	}
-	std::free(plan_refs);
-	delete[] plans;
 }
 
 /*
@@ -208,17 +203,10 @@ extern "C" zend_result zend_tpde_compile_component(
 		return FAILURE;
 	}
 
-	auto *plans = new (std::nothrow) zend_tpde_plan[member_count]();
-	auto *plan_refs = static_cast<const zend_tpde_plan **>(
-		std::calloc(member_count, sizeof(zend_tpde_plan *)));
-	if (plans == nullptr || plan_refs == nullptr) {
-		delete[] plans;
-		std::free(plan_refs);
-		zend_tpde_set_diagnostic(diag,
-			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-			"unable to allocate native component plans");
-		return FAILURE;
-	}
+	/* Working storage of this compile (zend_tpde_plan_internal.hpp). */
+	std::vector<zend_tpde_plan> component_plans(member_count);
+	std::vector<const zend_tpde_plan *> plan_refs(member_count);
+	zend_tpde_plan *const plans = component_plans.data();
 	uint32_t initialized = 0;
 	for (; initialized < member_count; ++initialized) {
 		const zend_native_component_member &member = members[initialized];
@@ -262,18 +250,18 @@ extern "C" zend_result zend_tpde_compile_component(
 		plan_refs[initialized] = &plans[initialized];
 	}
 	if (initialized != member_count) {
-		destroy_component_plans(plans, plan_refs, initialized + 1);
+		destroy_component_plans(plans, initialized + 1);
 		return FAILURE;
 	}
 	if (!freeze_component_machine_plan(
-			plans, plan_refs, member_count, diag)) {
-		destroy_component_plans(plans, plan_refs, member_count);
+			plans, plan_refs.data(), member_count, diag)) {
+		destroy_component_plans(plans, member_count);
 		return FAILURE;
 	}
 	zend_native_image *image = static_cast<zend_native_image *>(
 		std::calloc(1, sizeof(*image)));
 	if (image == nullptr) {
-		destroy_component_plans(plans, plan_refs, member_count);
+		destroy_component_plans(plans, member_count);
 		zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 			"unable to allocate a native image");
 		return FAILURE;
@@ -290,7 +278,7 @@ extern "C" zend_result zend_tpde_compile_component(
 	image->component_entries = static_cast<zend_native_component_entry *>(
 		std::calloc(member_count, sizeof(*image->component_entries)));
 	if (image->component_entries == nullptr) {
-		destroy_component_plans(plans, plan_refs, member_count);
+		destroy_component_plans(plans, member_count);
 		zend_native_image_destroy(image);
 		zend_tpde_set_diagnostic(diag,
 			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
@@ -334,7 +322,7 @@ extern "C" zend_result zend_tpde_compile_component(
 		}
 	}
 	zend_result result = symbols_ready
-		? zend_tpde_emit_host(plan_refs, member_count, image, diag)
+		? zend_tpde_emit_host(plan_refs.data(), member_count, image, diag)
 		: FAILURE;
 	if (result == SUCCESS) {
 		uint32_t direct_count = 0;
@@ -378,7 +366,7 @@ extern "C" zend_result zend_tpde_compile_component(
 			}
 		}
 	}
-	destroy_component_plans(plans, plan_refs, member_count);
+	destroy_component_plans(plans, member_count);
 	if (result == FAILURE) {
 		if (diag != nullptr && diag->code == ZEND_NATIVE_DIAGNOSTIC_OK) {
 			zend_tpde_set_diagnostic(diag,
