@@ -5388,9 +5388,9 @@ public:
 		InstContext &ctx, const zend_tpde_instruction &call);
 	bool compiled_variable_used(
 		DirectUserCallContext &du, uint32_t variable_index);
-	void load_generated_result(DirectUserCallContext &du,
+	bool load_generated_result(DirectUserCallContext &du,
 		AsmReg result_frame_reg, bool frame_register_held);
-	void finish_generated_result(DirectUserCallContext &du);
+	bool finish_generated_result(DirectUserCallContext &du);
 	tpde::Label call_slow_target(DirectUserCallContext &du);
 	bool compile_direct_user_inlined_body(DirectUserCallContext &du);
 	bool compile_direct_user_typed_body(DirectUserCallContext &du);
@@ -20109,7 +20109,9 @@ bool ZendCompilerX64::compile_direct_user_descriptor_call(
 				return false;
 			}
 			label_place(du.successful);
-			finish_generated_result(du);
+			if (!finish_generated_result(du)) {
+				return false;
+			}
 			generate_uncond_branch(
 				IRBlockRef{node.continuation_block});
 			return true;
@@ -20131,8 +20133,9 @@ bool ZendCompilerX64::compiled_variable_used(
 
 /* A frame register the caller holds addresses the result
  * slot directly; any other is copied first, as allocating
- * the result may take it. */
-void ZendCompilerX64::load_generated_result(DirectUserCallContext &du,
+ * the result may take it. False for a result part that is
+ * neither payload nor type. */
+bool ZendCompilerX64::load_generated_result(DirectUserCallContext &du,
 		AsmReg result_frame_reg, bool frame_register_held) {
 	const Adaptor::InstNode &node = du.node;
 	if (node.has_result) {
@@ -20169,7 +20172,7 @@ void ZendCompilerX64::load_generated_result(DirectUserCallContext &du,
 							slot + static_cast<int32_t>(offsetof(
 								zval, u1.type_info))));
 				} else {
-					return;
+					return false;
 				}
 				value.set_modified();
 			}
@@ -20201,9 +20204,10 @@ void ZendCompilerX64::load_generated_result(DirectUserCallContext &du,
 			result.set_modified();
 		}
 	}
+	return true;
 }
 
-void ZendCompilerX64::finish_generated_result(DirectUserCallContext &du) {
+bool ZendCompilerX64::finish_generated_result(DirectUserCallContext &du) {
 	const Adaptor::InstNode &node = du.node;
 	const zend_tpde_instruction &call = du.call;
 	if (node.has_result) {
@@ -20222,7 +20226,9 @@ void ZendCompilerX64::finish_generated_result(DirectUserCallContext &du) {
 			ASM(MOV64rr, result_frame_reg,
 				result_frame_value.load_to_reg());
 		}
-		load_generated_result(du, result_frame_reg, true);
+		if (!load_generated_result(du, result_frame_reg, true)) {
+			return false;
+		}
 	}
 	if (du.private_inline_body) {
 		free_stack_slot(
@@ -20232,6 +20238,7 @@ void ZendCompilerX64::finish_generated_result(DirectUserCallContext &du) {
 			static_cast<uint32_t>(du.leaf_private_frame_slot),
 			call.direct_call->frame_size);
 	}
+	return true;
 }
 
 tpde::Label ZendCompilerX64::call_slow_target(DirectUserCallContext &du) {
@@ -22664,7 +22671,10 @@ bool ZendCompilerX64::emit_direct_user_canonical_call(
 			return false;
 		}
 		payload.reset(this);
-		load_generated_result(du, canonical_frame_register(), false);
+		if (!load_generated_result(
+				du, canonical_frame_register(), false)) {
+			return false;
+		}
 		generate_uncond_branch(
 			IRBlockRef{node.continuation_block});
 		return true;
@@ -22672,7 +22682,9 @@ bool ZendCompilerX64::emit_direct_user_canonical_call(
 	if (du.generated_fast_path) {
 		payload.reset(this);
 		label_place(du.successful);
-		finish_generated_result(du);
+		if (!finish_generated_result(du)) {
+			return false;
+		}
 	} else if (node.has_result
 			&& ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
@@ -22681,8 +22693,10 @@ bool ZendCompilerX64::emit_direct_user_canonical_call(
 			val_ref_single(node.operands[du.frame_operand + 2]);
 		auto result_frame_scratch =
 			std::move(result_frame).into_scratch();
-		load_generated_result(du,
-			result_frame_scratch.cur_reg(), true);
+		if (!load_generated_result(du,
+				result_frame_scratch.cur_reg(), true)) {
+			return false;
+		}
 	} else if (node.has_result) {
 		set_payload_result(node.result, std::move(payload));
 	} else {

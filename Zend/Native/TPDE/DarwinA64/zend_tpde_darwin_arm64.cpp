@@ -943,8 +943,8 @@ public:
 		bool register_boxed_condition);
 	bool compile_call_direct_user();
 	bool compiled_variable_used(uint32_t variable_index);
-	void load_generated_result(AsmReg result_frame_reg);
-	void finish_generated_result();
+	bool load_generated_result(AsmReg result_frame_reg);
+	bool finish_generated_result();
 	::tpde::Label call_slow_target();
 	void load_callee_function(AsmReg destination);
 	bool compile_direct_user_inlined_body();
@@ -10184,7 +10184,9 @@ bool ZendCompilerA64::compile_call_direct_user() {
 					return false;
 				}
 				label_place(successful);
-				finish_generated_result();
+				if (!finish_generated_result()) {
+					return false;
+				}
 				generate_uncond_branch(
 					IRBlockRef{node.continuation_block});
 				return true;
@@ -10280,8 +10282,9 @@ bool ZendCompilerA64::compiled_variable_used(uint32_t variable_index) {
 }
 
 /* Defines the node's result from the callee's result zval in the frame
- * at result_frame_reg. */
-void ZendCompilerA64::load_generated_result(AsmReg result_frame_reg) {
+ * at result_frame_reg. False for a result part that is neither payload
+ * nor type. */
+bool ZendCompilerA64::load_generated_result(AsmReg result_frame_reg) {
 	const Adaptor::InstNode &node = inst_context_->node;
 	const zend_tpde_instruction &call = direct_user_call_context_->call;
 	if (node.has_result) {
@@ -10325,7 +10328,7 @@ void ZendCompilerA64::load_generated_result(AsmReg result_frame_reg) {
 				if (role != ZEND_TPDE_MACHINE_PART_PAYLOAD
 						&& role
 							!= ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-					return;
+					return false;
 				}
 				load_off(value_reg, result_slot_reg,
 					role == ZEND_TPDE_MACHINE_PART_PAYLOAD
@@ -10354,11 +10357,12 @@ void ZendCompilerA64::load_generated_result(AsmReg result_frame_reg) {
 			result.set_modified();
 		}
 	}
+	return true;
 }
 
 /* Defines the result of a generated fast call and frees the leaf
  * path's stack slots. */
-void ZendCompilerA64::finish_generated_result() {
+bool ZendCompilerA64::finish_generated_result() {
 	const Adaptor::InstNode &node = inst_context_->node;
 	const zend_tpde_instruction &call = direct_user_call_context_->call;
 	const bool private_inline_body =
@@ -10389,7 +10393,9 @@ void ZendCompilerA64::finish_generated_result() {
 				result_frame_value.load_to_reg(),
 				sizeof(void *));
 		}
-		load_generated_result(result_frame_reg);
+		if (!load_generated_result(result_frame_reg)) {
+			return false;
+		}
 	}
 	if (private_inline_body) {
 		free_stack_slot(
@@ -10399,6 +10405,7 @@ void ZendCompilerA64::finish_generated_result() {
 			static_cast<uint32_t>(leaf_private_frame_slot),
 			call.direct_call->frame_size);
 	}
+	return true;
 }
 
 /* Where a failed guard of the direct user call's fast path goes. */
@@ -12926,7 +12933,9 @@ bool ZendCompilerA64::compile_direct_user_slow_call() {
 			return false;
 		}
 		payload.reset(this);
-		load_generated_result(canonical_frame_register());
+		if (!load_generated_result(canonical_frame_register())) {
+			return false;
+		}
 		generate_uncond_branch(
 			IRBlockRef{node.continuation_block});
 		return true;
@@ -12934,7 +12943,9 @@ bool ZendCompilerA64::compile_direct_user_slow_call() {
 	if (generated_fast_path) {
 		payload.reset(this);
 		label_place(successful);
-		finish_generated_result();
+		if (!finish_generated_result()) {
+			return false;
+		}
 	} else if (node.has_result
 			&& ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
