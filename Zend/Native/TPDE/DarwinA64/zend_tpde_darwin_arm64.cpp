@@ -11554,16 +11554,9 @@ void ZendCompilerA64::guard_direct_user_callee() {
 		ASM(CMPxi, cache_reg, 0);
 		generate_raw_jump(Jump::Jeq, call_slow_target());
 	}
+	/* A CALLER_THIS receiver needs no test: Zend emits
+	 * INIT_METHOD_CALL with an UNUSED op1 only where $this exists. */
 	if (call.direct_call->receiver_kind
-			== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
-		load_off(first_reg, frame_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_execute_data, This)
-					+ offsetof(zval, u1.type_info)), 4);
-		ASM(ANDwi, first_reg, first_reg, Z_TYPE_MASK);
-		ASM(CMPwi, first_reg, IS_OBJECT);
-		generate_raw_jump(Jump::Jne, call_slow_target());
-	} else if (call.direct_call->receiver_kind
 				== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE
 			&& (call.direct_call->flags
 				& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)

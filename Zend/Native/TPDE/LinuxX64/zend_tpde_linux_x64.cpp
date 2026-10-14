@@ -11884,12 +11884,27 @@ bool ZendCompilerX64::copy_slot(
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(source_offset)));
 	}
+	/* A CV source is tested for what Zend's type inference allows:
+	 * the value of ASSIGN is its op2, that of QM_ASSIGN its op1. */
+	const zend_tpde_source_opcode *source_facts =
+		fused_source_opcode(ctx.mir);
+	const uint32_t source_may_be = source_facts == nullptr
+		? UINT32_MAX
+		: &source_operand == &ctx.mir->value_operation.op2
+		? source_facts->op2_may_be
+		: &source_operand == &ctx.mir->value_operation.op1
+		? source_facts->op1_may_be : UINT32_MAX;
 	if (!literal_source && !scalar_source
-			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& (source_may_be & MAY_BE_UNDEF) != 0) {
 		ASM(CMP32ri, source_type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::je, slow);
 	}
 	if (!literal_source && !register_source && !move_source
+			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& (source_may_be & MAY_BE_REF) == 0) {
+		/* Inference rules out a reference. */
+	} else if (!literal_source && !register_source && !move_source
 			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
 		/* A CV bound by global, static or & is read through its
 		 * reference and copied, as ZEND_ASSIGN dereferences it. */
@@ -19604,12 +19619,23 @@ void ZendCompilerX64::emit_condition_result(
 	if (coalesce) {
 		ASM(CMP32ri, tb.value_reg, IS_NULL);
 		/* Undefined and null fall through to the
-		 * default, as isset() decides. */
+		 * default, as isset() decides. A temporary holds neither a
+		 * reference nor an INDIRECT, a CV no INDIRECT and a
+		 * reference only as Zend's type inference allows. */
 		generate_raw_jump(Jump::jbe, tb.falsey);
-		ASM(CMP32ri, tb.value_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::je, tb.slow);
-		ASM(CMP32ri, tb.value_reg, IS_INDIRECT);
-		generate_raw_jump(Jump::je, tb.slow);
+		const zend_mir_source_slot_kind operand_kind =
+			mir.value_operation.op1.slot_kind;
+		if (operand_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& (operand_kind != ZEND_MIR_SOURCE_SLOT_CV
+					|| (condition_types(mir) & MAY_BE_REF) != 0)) {
+			ASM(CMP32ri, tb.value_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::je, tb.slow);
+		}
+		if (operand_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operand_kind != ZEND_MIR_SOURCE_SLOT_CV) {
+			ASM(CMP32ri, tb.value_reg, IS_INDIRECT);
+			generate_raw_jump(Jump::je, tb.slow);
+		}
 		if (from_cv) {
 			auto counted_done =
 				text_writer.label_create();
@@ -21222,16 +21248,9 @@ bool ZendCompilerX64::check_direct_user_callee(DirectUserCallContext &du,
 		ASM(TEST64rr, cache_reg, cache_reg);
 		generate_raw_jump(Jump::je, call_slow_target(du));
 	}
+	/* A CALLER_THIS receiver needs no test: Zend emits
+	 * INIT_METHOD_CALL with an UNUSED op1 only where $this exists. */
 	if (call.direct_call->receiver_kind
-			== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
-		ASM(MOVZXr32m8, act.first_reg,
-			FE_MEM(act.frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zend_execute_data, This)
-						+ offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, act.first_reg, IS_OBJECT);
-		generate_raw_jump(Jump::jne, call_slow_target(du));
-	} else if (call.direct_call->receiver_kind
 				== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE
 			&& (call.direct_call->flags
 				& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
@@ -22549,9 +22568,18 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 					IS_UNDEF);
 				label_place(released);
 			};
+			/* Only the CVs a local callee's type inference lets hold a
+			 * counted value at its return need a test. */
+			const zend_tpde_plan *callee_plan = du.local_component_call
+				? ir().component_plan(call.component_target_index)
+				: nullptr;
+			const uint64_t counted_cvs = callee_plan != nullptr
+				? callee_plan->fast_call_counted_cvs : ~UINT64_C(0);
 			for (uint32_t index = 0;
 					index < du.compiled_variable_count; ++index) {
-				if (compiled_variable_used(du, index)) {
+				if (compiled_variable_used(du, index)
+						&& (index >= 64
+							|| ((counted_cvs >> index) & 1) != 0)) {
 					release_slot(static_cast<int32_t>(
 						(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)));
 				}
