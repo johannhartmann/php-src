@@ -447,6 +447,13 @@ public:
 		}
 		return true;
 	}
+	/* target = the literal table of the function frame executes. */
+	void load_literal_base(AsmReg target, AsmReg frame_reg) {
+		load_off(target, frame_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, func)), 8);
+		load_off(target, target,
+			static_cast<uint32_t>(offsetof(zend_op_array, literals)), 8);
+	}
 	/* Loads the array in the frame slot at offset into array_reg; a slot
 	 * holding no array branches to slow. */
 	void load_frame_array(AsmReg frame_reg, uint32_t offset, AsmReg type_reg,
@@ -4935,6 +4942,9 @@ bool ZendCompilerA64::object_property_write() {
 	auto type_reg = type.alloc_gp();
 	auto low_word_reg = low_word.alloc_gp();
 	auto decision_reg = decision.alloc_gp();
+	/* A literal value is read through the literal base, a slot value
+	 * through the frame. */
+	AsmReg value_base = frame_reg;
 
 	load_off(type_reg, frame_reg,
 		layout.receiver_offset
@@ -4989,7 +4999,11 @@ bool ZendCompilerA64::object_property_write() {
 	ASM(TSTwi, cache_reg, 1u << IS_LONG);
 	generate_raw_jump(Jump::Jeq, slow);
 	if (!scalar_value) {
-		load_off(cache_reg, frame_reg,
+		if (layout.literal_value) {
+			load_literal_base(cache_reg, frame_reg);
+			value_base = cache_reg;
+		}
+		load_off(cache_reg, value_base,
 			layout.value_offset
 				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 			4);
@@ -5011,13 +5025,30 @@ bool ZendCompilerA64::object_property_write() {
 		materialize_constant(static_cast<uint64_t>(IS_LONG),
 			DarwinConfig::GP_BANK, 4, type_reg);
 	} else {
-		load_off(type_reg, frame_reg,
+		if (layout.literal_value) {
+			load_literal_base(low_word_reg, frame_reg);
+			value_base = low_word_reg;
+		}
+		load_off(type_reg, value_base,
 			layout.value_offset
 				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
 			4);
-		ASM(ANDwi, offset_reg, type_reg, Z_TYPE_MASK);
-		ASM(CMPwi, offset_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::Jeq, slow);
+		/* A literal or a temporary is defined and no reference; a CV
+		 * is tested for what Zend's type inference allows. */
+		const uint32_t value_may_be = layout.literal_value
+				|| layout.move_value
+			? 0 : op_data_may_be(mir.value_operation);
+		if ((value_may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0) {
+			ASM(ANDwi, offset_reg, type_reg, Z_TYPE_MASK);
+		}
+		if ((value_may_be & MAY_BE_UNDEF) != 0) {
+			generate_raw_jump(
+				Jump{Jump::Cbz, offset_reg, false}, slow);
+		}
+		if ((value_may_be & MAY_BE_REF) != 0) {
+			ASM(CMPwi, offset_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::Jeq, slow);
+		}
 	}
 
 	load_off(offset_reg, property_reg,
@@ -5044,7 +5075,8 @@ bool ZendCompilerA64::object_property_write() {
 		auto value_reg = value.load_to_reg();
 		ASM(ORRx, low_word_reg, value_reg, value_reg);
 	} else {
-		load_off(low_word_reg, frame_reg, layout.value_offset, 8);
+		/* For a literal, low_word still holds the literal base. */
+		load_off(low_word_reg, value_base, layout.value_offset, 8);
 	}
 	if (!scalar_value && !layout.move_value) {
 		ASM(TSTwi, type_reg,

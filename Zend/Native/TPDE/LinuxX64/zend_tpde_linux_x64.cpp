@@ -17145,8 +17145,19 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 				static_cast<int32_t>(
 					layout.value_offset
 						+ offsetof(zval, u1.type_info))));
-		ASM(CMP8ri, type_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::je, slow);
+		/* A literal or a temporary is defined and no reference; a CV
+		 * is tested for what Zend's type inference allows. */
+		const uint32_t value_may_be = layout.literal_value
+				|| layout.move_value
+			? 0 : op_data_may_be(mir.value_operation);
+		if ((value_may_be & MAY_BE_UNDEF) != 0) {
+			ASM(TEST8rr, type_reg, type_reg);
+			generate_raw_jump(Jump::je, slow);
+		}
+		if ((value_may_be & MAY_BE_REF) != 0) {
+			ASM(CMP8ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::je, slow);
+		}
 	}
 
 	ASM(TEST8mi,
