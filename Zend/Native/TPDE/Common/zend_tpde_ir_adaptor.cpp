@@ -2013,6 +2013,9 @@ private:
 		uint32_t boxed_op1_boundary_operand_index = UINT32_MAX;
 		uint32_t boxed_op2_boundary_operand_index = UINT32_MAX;
 		uint32_t boundary_semantic_operand_count = UINT32_MAX;
+		/* The node emit_instruction_node() added for the instruction;
+		 * later steps may add nodes after it. */
+		uint32_t main_node = UINT32_MAX;
 	};
 	/*
 	 * The fast and the cold node lower_guarded_operation() splits an
@@ -7492,6 +7495,7 @@ void ZendIRAdaptor::Builder::emit_instruction_node(InstContext &ctx) {
 		.inlined_operand_index = ctx.inlined_operand_index,
 		.materialization_operand_index = ctx.materialization_operand_index,
 		.materialization_count = ctx.materialization_count});
+	ctx.main_node = static_cast<uint32_t>(nodes_.size() - 1);
 	nodes_.back().direct_internal_argument_transport =
 		ctx.direct_internal_argument_transport;
 	nodes_.back().assign_op_right_operand_index =
@@ -7594,7 +7598,7 @@ void ZendIRAdaptor::Builder::mark_selected_operation(InstContext &ctx) {
 			!= ScalarTypeCheckSelection::Invalid
 			|| ctx.register_cond_branch
 			|| ctx.register_bool_unary_operand != INVALID_VALUE_REF) {
-		InstNode &selected = nodes_.back();
+		InstNode &selected = nodes_[ctx.main_node];
 		selected.synthetic = true;
 		selected.synthetic_record = ctx.record;
 		selected.synthetic_record.opcode =
