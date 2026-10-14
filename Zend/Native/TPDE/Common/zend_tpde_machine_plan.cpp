@@ -3617,10 +3617,16 @@ static void freeze_typed_body_signatures(
 			}
 			zend_tpde_local_abi_type return_type{};
 			bool member_may_fail = false;
+			/* Only the Linux x64 backend reports a typed-body failure
+			 * to the caller (check_typed_call_status()); elsewhere a body
+			 * that may fail keeps its Zend entry. */
 			if (!try_freeze_typed_body_signature(
 					&plans[index], planner.component_plans, component_count,
 					candidates.data(), planner.signature_scratch,
-					&return_type, &member_may_fail)) {
+					&return_type, &member_may_fail)
+					|| (member_may_fail
+						&& ZEND_NATIVE_HOST_TARGET
+							!= ZEND_NATIVE_TARGET_LINUX_AMD64)) {
 				candidates[index] = 0;
 				changed = true;
 			}
