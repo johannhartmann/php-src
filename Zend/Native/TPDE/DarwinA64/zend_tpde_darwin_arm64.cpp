@@ -702,6 +702,19 @@ public:
 		ASM(CMPx, value, constant_reg);
 	}
 
+	/* compare_unsigned_immediate() for a uint32_t, such as a helper's
+	 * result, whose upper bits AAPCS64 leaves unspecified. */
+	void compare_unsigned_immediate_w(AsmReg value, uint32_t immediate) {
+		if (ASMIF(CMPwi, value, immediate)) {
+			return;
+		}
+		ScratchReg constant{this};
+		auto constant_reg = constant.alloc_gp();
+		materialize_constant(
+			immediate, DarwinConfig::GP_BANK, 4, constant_reg);
+		ASM(CMPw, value, constant_reg);
+	}
+
 	template <typename BranchJump>
 	void generate_branch_to_block(
 			BranchJump jump, IRBlockRef target,
@@ -768,7 +781,7 @@ public:
 					::tpde::a64::AsmReg{::tpde::a64::AsmReg::R16};
 				materialize_constant(flagged_position,
 					DarwinConfig::GP_BANK, 4, expected_reg);
-				ASM(CMPx,
+				ASM(CMPw,
 					::tpde::a64::AsmReg{::tpde::a64::AsmReg::R0},
 					expected_reg);
 				const auto continued = text_writer.label_create();
@@ -13373,12 +13386,12 @@ bool ZendCompilerA64::compile_finally_return() {
 	builder.add_ret(continuation, ::tpde::CCAssignment{});
 	auto continuation_reg = continuation.cur_reg_or_load(this);
 	auto generator_returned = text_writer.label_create();
-	compare_unsigned_immediate(continuation_reg,
+	compare_unsigned_immediate_w(continuation_reg,
 		ZEND_NATIVE_FINALLY_GENERATOR_RETURNED);
 	generate_raw_jump(Jump::Jeq, generator_returned);
 	for_each_finally_continuation([&](uint32_t source_position,
 			IRBlockRef continuation_block) {
-		compare_unsigned_immediate(continuation_reg, source_position);
+		compare_unsigned_immediate_w(continuation_reg, source_position);
 		auto continued = text_writer.label_create();
 		generate_raw_jump(Jump::Jne, continued);
 		generate_exception_branch(continuation_block);
@@ -13392,7 +13405,7 @@ bool ZendCompilerA64::compile_finally_return() {
 		auto expected_reg = expected.alloc_gp();
 		materialize_constant(flagged_position,
 			DarwinConfig::GP_BANK, 4, expected_reg);
-		ASM(CMPx, continuation_reg, expected_reg);
+		ASM(CMPw, continuation_reg, expected_reg);
 		auto continued = text_writer.label_create();
 		generate_raw_jump(Jump::Jne, continued);
 		generate_exception_branch(handler_block);
