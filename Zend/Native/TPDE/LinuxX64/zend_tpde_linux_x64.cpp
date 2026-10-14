@@ -6476,16 +6476,26 @@ bool ZendCompilerX64::compile_unbox_scalar(InstContext &ctx) {
 				ir().machine_kind(node.result))) {
 		return false;
 	}
+	/* A bool zval carries its value in type_info (IS_FALSE or IS_TRUE);
+	 * its payload is undefined. */
+	const bool boolean = ir().machine_kind(node.result)
+		== ZEND_TPDE_MACHINE_VALUE_BOOL;
+	const zend_tpde_machine_part_role source_role = boolean
+		? ZEND_TPDE_MACHINE_PART_TYPE_INFO : ZEND_TPDE_MACHINE_PART_PAYLOAD;
 	auto source = val_ref(node.operands[0]);
 	const ValueParts parts = val_parts(node.operands[0]);
 	auto [result_ref, result] = result_ref_single(node.result);
 	for (uint32_t part = 0; part < parts.count(); ++part) {
-		if (parts.representation.parts[part].semantic_role
-				!= ZEND_TPDE_MACHINE_PART_PAYLOAD) {
+		if (parts.representation.parts[part].semantic_role != source_role) {
 			continue;
 		}
-		auto payload = source.part(part);
-		ASM(MOV64rr, result.alloc_reg(), payload.load_to_reg());
+		auto source_part = source.part(part);
+		if (boolean) {
+			ASM(LEA32rm, result.alloc_reg(),
+				FE_MEM(source_part.load_to_reg(), 0, FE_NOREG, -IS_FALSE));
+		} else {
+			ASM(MOV64rr, result.alloc_reg(), source_part.load_to_reg());
+		}
 		result.set_modified();
 		return true;
 	}
