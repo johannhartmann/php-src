@@ -5392,6 +5392,7 @@ public:
 		AsmReg result_frame_reg, bool frame_register_held);
 	bool finish_generated_result(DirectUserCallContext &du);
 	tpde::Label call_slow_target(DirectUserCallContext &du);
+	bool successful_follows(const DirectUserCallContext &du) const;
 	bool compile_direct_user_inlined_body(DirectUserCallContext &du);
 	bool compile_direct_user_typed_body(DirectUserCallContext &du);
 	bool emit_direct_user_fast_path(DirectUserCallContext &du);
@@ -20160,6 +20161,13 @@ bool ZendCompilerX64::compile_direct_user_descriptor_call(
 	return emit_direct_user_canonical_call(du);
 }
 
+/* A guarded fast call places du.successful right after its fast
+ * path, which then falls through to it. */
+bool ZendCompilerX64::successful_follows(
+		const DirectUserCallContext &du) const {
+	return du.node.kind == Adaptor::InstKind::GuardedFast;
+}
+
 bool ZendCompilerX64::compiled_variable_used(
 		DirectUserCallContext &du, uint32_t variable_index) {
 	const zend_tpde_instruction &call = du.call;
@@ -20952,10 +20960,17 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 		fast_status.cur_reg_or_load(this);
 	ASM(CMP32ri, fast_status_reg,
 		ZEND_NATIVE_RETURNED);
-	auto leaf_returned =
+	/* Any other status is rare: out of the hot code. */
+	auto leaf_failed =
 		text_writer.label_create();
 	generate_raw_jump(
-		Jump::je, leaf_returned);
+		Jump::jne, leaf_failed);
+	if (!successful_follows(du)) {
+		generate_raw_jump(
+			Jump::jmp, du.successful);
+	}
+	cold_begin();
+	label_place(leaf_failed);
 	ASM(CMP32ri, fast_status_reg,
 		ZEND_NATIVE_RETRY);
 	generate_raw_jump(
@@ -20981,10 +20996,8 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 			tpde::CCAssignment{});
 		return_builder.ret();
 	}
-	label_place(leaf_returned);
+	cold_end();
 	fast_status.reset(this);
-	generate_raw_jump(
-		Jump::jmp, du.successful);
 	return true;
 }
 
@@ -22562,10 +22575,16 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 			static_cast<int32_t>(act.activation_size));
 		ASM(MOV64mr,
 			FE_MEM(probe_reg, 0, FE_NOREG, 0), post_callee_reg);
-		generate_raw_jump(Jump::jmp, du.successful);
+		if (!successful_follows(du)) {
+			generate_raw_jump(Jump::jmp, du.successful);
+		}
 	}
 
-	/* Rare completion retains full exception/interrupt cleanup. */
+	/* Rare completion retains full exception/interrupt cleanup,
+	 * out of the hot code unless it is the only one. */
+	if (!receiver_consumed) {
+		cold_begin();
+	}
 	label_place(complete_fast);
 	post_frame_scratch.reset();
 	post_context_scratch.reset();
@@ -22631,6 +22650,9 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 		call.exception_block_id);
 	finish_status.reset(this);
 	generate_raw_jump(Jump::jmp, du.successful);
+	if (!receiver_consumed) {
+		cold_end();
+	}
 	return true;
 }
 
