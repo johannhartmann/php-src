@@ -488,14 +488,17 @@ zend_native_status zend_native_dynamic_fetch_constant(
 	void **cache_slot;
 
 	/* Like the VM, the run-time cache slot names a found constant, which
-	 * answers before the operation is decoded. */
+	 * answers before the operation is decoded. The optimizer contracts
+	 * the result into a CV only while that CV holds no counted value, so
+	 * the store, like the VM's, releases nothing. */
 	cache_slot = execute_data->run_time_cache != NULL
 		? (void **) ((char *) execute_data->run_time_cache + extended_value)
 		: NULL;
 	if (cache_slot != NULL && *cache_slot != NULL
 			&& !IS_SPECIAL_CACHE_VAL(*cache_slot)) {
 		ZEND_ASSERT(ZEND_NATIVE_OPERAND_TYPE(result_operand) == IS_TMP_VAR
-			|| ZEND_NATIVE_OPERAND_TYPE(result_operand) == IS_VAR);
+			|| ZEND_NATIVE_OPERAND_TYPE(result_operand) == IS_VAR
+			|| ZEND_NATIVE_OPERAND_TYPE(result_operand) == IS_CV);
 		ZVAL_COPY_OR_DUP(ZEND_NATIVE_OPERAND_VAR(execute_data, result_operand),
 			&((zend_constant *) *cache_slot)->value);
 		return ZEND_NATIVE_RETURNED;

@@ -17228,7 +17228,8 @@ bool ZendCompilerX64::fetch_constant_inline(InstContext &ctx) {
 		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV)
 		&& zend_mir_id_is_valid(operation.result_storage_id)
 		&& operation.extended_value <= INT32_MAX - sizeof(void *);
 	frame_operands = frame_operands && frame_only_operands(node);
