@@ -4962,6 +4962,89 @@ public:
 	bool copy_temporary_slot(InstContext &ctx);
 	bool free_temporary_slot(InstContext &ctx);
 	int array_element(InstContext &ctx, ElementAccess access);
+	/* How a literal or runtime key is passed to the element lookups. */
+	enum class LiteralKey { None, Index, String, Register };
+	/* An array element access (array_element()) and its key form. */
+	struct ArrayElementContext {
+		InstContext &ctx;
+		const IRInstRef instruction;
+		const Adaptor::InstNode &node;
+		IRInstRef &reuse_read;
+		const zend_mir_executable_value_ref &operation;
+		const ElementAccess access;
+		bool register_key = false;
+		std::span<const IRBlockRef> successors{};
+		bool reads = false;
+		bool tests = false;
+		bool assigns = false;
+		bool writes = false;
+		bool container_literal = false;
+		bool container_temporary = false;
+		bool container_var = false;
+		bool key_literal = false;
+		uint64_t container_offset = 0;
+		uint64_t key_offset = 0;
+		uint64_t result_offset = 0;
+		bool value_literal = false;
+		uint64_t value_offset = 0;
+		bool known_array = false;
+		tpde::Label slow{};
+		tpde::Label absent{};
+		tpde::Label answered{};
+		tpde::Label done{};
+		LiteralKey literal_key = LiteralKey::None;
+		uint64_t literal_key_value = 0;
+		bool register_key_checked = false;
+		bool find_element = false;
+		bool split_string_key = false;
+		bool reuse_store = false;
+		bool reuse_load = false;
+		tpde::Label reuse_cached{};
+		tpde::Label reuse_joined{};
+		/* From the decision on. */
+		AsmReg element_reg{};
+		AsmReg answer_reg{};
+		tpde::Label unknown{};
+	};
+	/* The frame, registers and addresses array_element() owns. */
+	struct ArrayElementRegisters {
+		FrameRegister &frame_scratch;
+		const AsmReg frame_reg;
+		ScratchReg &decision;
+		ScratchReg &answer;
+		ScratchReg &literals;
+		const AsmReg literals_reg;
+		const AsmReg container_base;
+		ValuePart &element;
+		GenericValuePart &container_address;
+		GenericValuePart &key_address;
+	};
+	static auto slot_kind(const zend_mir_source_operand_ref &operand) {
+		return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+			? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
+	}
+	static GenericValuePart address(AsmReg base, uint64_t offset) {
+		return GenericValuePart{GenericValuePart::Expr{
+			base, static_cast<int64_t>(offset)}};
+	}
+	int array_element_layout(ArrayElementContext &ae);
+	void find_element_filter(ArrayElementContext &ae,
+		ArrayElementRegisters &er, tpde::Label undecided);
+	void find_element_call(ArrayElementContext &ae,
+		ArrayElementRegisters &er, AsmReg out_reg, uint64_t mode);
+	template <typename StringLookup, typename GeneralLookup>
+	bool string_key_split(ArrayElementContext &ae,
+		ArrayElementRegisters &er, StringLookup &&string_lookup,
+		GeneralLookup &&general_lookup, ValuePart &out);
+	int array_element_isset(
+		ArrayElementContext &ae, ArrayElementRegisters &er);
+	int array_element_lookup(
+		ArrayElementContext &ae, ArrayElementRegisters &er);
+	int array_element_decide(
+		ArrayElementContext &ae, ArrayElementRegisters &er);
+	int array_element_result(
+		ArrayElementContext &ae, ArrayElementRegisters &er);
 	int array_element_register(InstContext &ctx);
 	bool read_array(InstContext &ctx);
 	bool fused_into_branch_placeholder(InstContext &ctx);
@@ -11747,10 +11830,165 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			|| node.continuation_block == UINT32_MAX) {
 		return 0;
 	}
+	ArrayElementContext ae{ctx, instruction, node, reuse_read, operation,
+		access};
+	if (const int layout = array_element_layout(ae); layout <= 0) {
+		return layout;
+	}
+	ae.slow = text_writer.label_create();
+	ae.absent = text_writer.label_create();
+	ae.answered = text_writer.label_create();
+	ae.done = text_writer.label_create();
+	auto [frame_ref, frame] =
+		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
+	auto frame_scratch = frame_register(std::move(frame));
+	auto frame_reg = frame_scratch.cur_reg();
+	ScratchReg decision{this};
+	ScratchReg answer{this};
+	/* A literal key the compiler can read is passed as what it is: an
+	 * integer index, or a string with its hash. A runtime key Zend's
+	 * type inference proves may be an integer and never a string is
+	 * passed as an index read from its slot; unless it is proven an
+	 * integer (neither undefined nor a reference), any other type
+	 * takes the helper. */
+	ae.literal_key = LiteralKey::None;
+	ae.literal_key_value = 0;
+	ae.register_key_checked = false;
+	{
+		const zend_tpde_plan *plan = ir().plan();
+		if (ae.register_key) {
+			ae.literal_key = LiteralKey::Register;
+		} else if (!ae.key_literal && unlocked_gp_registers() >= 10
+				&& plan->source_opcodes != nullptr
+				&& operation.source_position_id
+					< plan->source_opcode_count) {
+			const zend_tpde_source_opcode &source =
+				plan->source_opcodes[operation.source_position_id];
+			const uint32_t may_be = source.op2_may_be
+				& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF
+					| MAY_BE_INDIRECT);
+			if (source.op2_type != IS_CONST
+					&& source.op2_var == ae.key_offset
+					&& source.op2_may_be != UINT32_MAX
+					&& (may_be & MAY_BE_LONG) != 0
+					&& (may_be & MAY_BE_STRING) == 0) {
+				ae.literal_key = LiteralKey::Register;
+				ae.register_key_checked = may_be != MAY_BE_LONG;
+			}
+		}
+		if (ae.key_literal && plan->source_literals != nullptr
+				&& operation.op2.index < plan->source_literal_count) {
+			const zval *literal =
+				&plan->source_literals[operation.op2.index];
+			if (Z_TYPE_P(literal) == IS_LONG) {
+				ae.literal_key = LiteralKey::Index;
+				ae.literal_key_value =
+					static_cast<uint64_t>(Z_LVAL_P(literal));
+			} else if (Z_TYPE_P(literal) == IS_STRING
+					&& ZSTR_H(Z_STR_P(literal)) != 0) {
+				ae.literal_key = LiteralKey::String;
+				ae.literal_key_value = ZSTR_H(Z_STR_P(literal));
+			}
+		}
+	}
+	ScratchReg literals{this};
+	AsmReg literals_reg = frame_reg;
+	if (ae.container_literal || ae.value_literal
+			|| (ae.key_literal && ae.literal_key != LiteralKey::Index)) {
+		literals_reg = literals.alloc_gp();
+		emit_literal_base(literals_reg, frame_reg);
+	}
+	/* The operation consumes a temporary key: one that needs a release
+	 * (a counted string) takes the helper. */
+	if (slot_kind(operation.op2) == ZEND_MIR_SOURCE_SLOT_TMP
+			&& !ae.register_key) {
+		emit_counted_check(frame_reg, static_cast<int32_t>(ae.key_offset),
+			ae.slow);
+	}
+	/* An assignment may insert into the array before it stores the
+	 * value, so the value is checked first: defined and not a
+	 * reference. An array value is copied after the insertion as
+	 * ZEND_ASSIGN_DIM copies it: only the container's own zval holds
+	 * the unshared array, which is another storage (see above) or the
+	 * target of a VAR's INDIRECT, where the VM stores it the same. */
+	if (ae.assigns && !ae.value_literal) {
+		ScratchReg value_type{this};
+		const AsmReg type_reg = value_type.alloc_gp();
+		ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(ae.value_offset
+				+ offsetof(zval, u1.v.type))));
+		ASM(CMP32ri, type_reg, IS_UNDEF);
+		generate_raw_jump(Jump::je, ae.slow);
+		ASM(CMP32ri, type_reg, IS_REFERENCE);
+		generate_raw_jump(Jump::je, ae.slow);
+	}
+	const AsmReg container_base =
+		ae.container_literal ? literals_reg : frame_reg;
+	ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
+	auto container_address = address(container_base, ae.container_offset);
+	auto key_address = ae.key_literal
+		? address(literals_reg, ae.key_offset)
+		: address(frame_reg, ae.key_offset);
+	/*
+	 * A probe that cannot decide a key (a string without its hash, a
+	 * bucket key of the same hash that is another string, a numeric
+	 * string) finds the element in C out of the hot code, with the
+	 * probe's result encoding, before anything takes the helper.
+	 */
+	static_assert(ZEND_NATIVE_FIND_UNKNOWN == ZEND_NATIVE_ELEMENT_UNKNOWN
+		&& ZEND_NATIVE_FIND_ABSENT == ZEND_NATIVE_ELEMENT_ABSENT
+		&& ZEND_NATIVE_FIND_ISSET_UNKNOWN == ZEND_NATIVE_ISSET_UNKNOWN);
+	ae.find_element = !ae.writes && !ae.register_key
+		&& ae.literal_key != LiteralKey::Index
+		&& ae.literal_key != LiteralKey::Register
+		&& optional_runtime_symbol(
+			ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
+	/*
+	 * A runtime key: a string looks up inline, any other key (an
+	 * integer, a reference) out of line, both into one register. Only
+	 * with a register to spare, so that neither lookup evicts.
+	 */
+	ae.split_string_key = !ae.key_literal
+		&& unlocked_gp_registers() >= 10;
+	/* An isset whose element a read reuses finds it in the general
+	 * form, which also leaves its address; a read that reuses one skips
+	 * its own lookup. */
+	ae.reuse_store = access == ElementAccess::Isset
+		&& reuse_read != IRInstRef{UINT32_MAX} && !ae.container_temporary
+		&& !ae.register_key && ae.literal_key != LiteralKey::Register;
+	ae.reuse_load = (access == ElementAccess::Read
+			|| (access == ElementAccess::Write && !ae.container_var))
+		&& lookup_reuse_armed(instruction) && !ae.register_key
+		&& ae.literal_key != LiteralKey::Register
+		&& unlocked_gp_registers() >= 10;
+	ArrayElementRegisters er{frame_scratch, frame_reg, decision, answer,
+		literals, literals_reg, container_base, element, container_address,
+		key_address};
+	/* isset() of an array element decides in one snippet: set, not
+	 * set, or the helper's. */
+	if (access == ElementAccess::Isset && !ae.container_temporary
+			&& !ae.reuse_store) {
+		return array_element_isset(ae, er);
+	}
+	if (array_element_lookup(ae, er) < 0
+			|| array_element_decide(ae, er) < 0) {
+		return -1;
+	}
+	return array_element_result(ae, er);
+}
+
+/*
+ * The operation's form, operands and offsets; 1 when array_element()
+ * applies, else what it returns.
+ */
+int ZendCompilerX64::array_element_layout(ArrayElementContext &ae) {
+	const Adaptor::InstNode &node = ae.node;
+	const zend_mir_executable_value_ref &operation = ae.operation;
+	const ElementAccess access = ae.access;
 	/* A read's integer key may be a register value that its frame
 	 * slot does not canonically hold: the first operand, an exact
 	 * integer, used from its register. */
-	const bool register_key = (access == ElementAccess::Read
+	ae.register_key = (access == ElementAccess::Read
 			|| access == ElementAccess::Coalesce
 			|| access == ElementAccess::Write)
 		&& operation.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -11777,7 +12015,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		 * constant of a literal integer key is read from the literal
 		 * table. */
 		uint64_t constant_bits = 0;
-		if ((register_key && operand == node.operands[0])
+		if ((ae.register_key && operand == node.operands[0])
 				|| ir().machine_reference(operand, nullptr)
 				|| (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
 					&& ir().constant(operand, &constant_bits)
@@ -11816,41 +12054,36 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		}
 		published.emplace_back(operand, storage);
 	}
-	const auto successors = adaptor->guarded_successors_of(node);
-	auto slot_kind = [](const zend_mir_source_operand_ref &operand) {
-		return operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
-				|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA
-			? operand.slot_kind : ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
-	};
-	const bool reads = access == ElementAccess::Read
+	ae.successors = adaptor->guarded_successors_of(node);
+	ae.reads = access == ElementAccess::Read
 		|| access == ElementAccess::Coalesce;
-	const bool tests = access == ElementAccess::Isset
+	ae.tests = access == ElementAccess::Isset
 		|| access == ElementAccess::Empty;
 	/* An assignment replaces an existing element in place: the write
 	 * fetch's lookup, then the value. */
-	const bool assigns = access == ElementAccess::Assign;
-	const bool writes = access == ElementAccess::Write || assigns;
-	const bool container_literal =
+	ae.assigns = access == ElementAccess::Assign;
+	ae.writes = access == ElementAccess::Write || ae.assigns;
+	ae.container_literal =
 		operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-	const bool container_temporary =
+	ae.container_temporary =
 		slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_TMP;
 	/* The VAR of a write fetch holds a previous fetch's INDIRECT. */
-	const bool container_var = writes
+	ae.container_var = ae.writes
 		&& slot_kind(operation.op1) == ZEND_MIR_SOURCE_SLOT_VAR;
-	const bool key_literal =
+	ae.key_literal =
 		operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
-	if ((!container_literal && !container_temporary && !container_var
+	if ((!ae.container_literal && !ae.container_temporary && !ae.container_var
 				&& slot_kind(operation.op1) != ZEND_MIR_SOURCE_SLOT_CV)
-			|| (writes && (container_literal || container_temporary
+			|| (ae.writes && (ae.container_literal || ae.container_temporary
 				|| node.has_result))
-			|| (!key_literal
+			|| (!ae.key_literal
 				&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_CV
 				&& slot_kind(operation.op2) != ZEND_MIR_SOURCE_SLOT_TMP)
-			|| (!assigns
+			|| (!ae.assigns
 				&& slot_kind(operation.result) != ZEND_MIR_SOURCE_SLOT_TMP
 				&& slot_kind(operation.result)
 					!= ZEND_MIR_SOURCE_SLOT_VAR)
-			|| (assigns
+			|| (ae.assigns
 				&& (operation.result.kind
 						!= ZEND_MIR_SOURCE_OPERAND_UNUSED
 					|| (operation.auxiliary.kind
@@ -11865,17 +12098,17 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 								operation.auxiliary_storage_id)
 							|| operation.auxiliary_storage_id
 								== operation.op1_storage_id))))
-			|| (!container_literal
+			|| (!ae.container_literal
 				&& !zend_mir_id_is_valid(operation.op1_storage_id))
-			|| (!key_literal && !register_key
+			|| (!ae.key_literal && !ae.register_key
 				&& !zend_mir_id_is_valid(operation.op2_storage_id))
-			|| (!assigns
+			|| (!ae.assigns
 				&& (!zend_mir_id_is_valid(operation.result_storage_id)
 					|| operation.result_storage_id
 						== operation.op1_storage_id
 					|| operation.result_storage_id
 						== operation.op2_storage_id))
-			|| (node.has_result && reads
+			|| (node.has_result && ae.reads
 				&& !((ir().machine_kind(node.result)
 							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 						&& val_parts(node.result).count() == 2)
@@ -11884,7 +12117,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 						&& ir().exact_type(node.result)
 							== ZEND_MIR_SCALAR_TYPE_I64
 						&& val_parts(node.result).count() == 1)))
-			|| (node.has_result && tests
+			|| (node.has_result && ae.tests
 				&& val_parts(node.result).count() != 1)
 			|| (node.has_result && access == ElementAccess::Coalesce
 				&& ir().machine_kind(node.result)
@@ -11894,20 +12127,20 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	auto frame_offset = [](zend_mir_storage_id storage) {
 		return frame_slot_offset(storage);
 	};
-	const uint64_t container_offset = container_literal
+	ae.container_offset = ae.container_literal
 		? uint64_t{operation.op1.index} * sizeof(zval)
 		: frame_offset(operation.op1_storage_id);
-	const uint64_t key_offset = key_literal
+	ae.key_offset = ae.key_literal
 		? uint64_t{operation.op2.index} * sizeof(zval)
 		: !zend_mir_id_is_valid(operation.op2_storage_id) ? 0
 		: frame_offset(operation.op2_storage_id);
-	const uint64_t result_offset = assigns
+	ae.result_offset = ae.assigns
 		? 0 : frame_offset(operation.result_storage_id);
-	const bool value_literal = assigns
+	ae.value_literal = ae.assigns
 		&& operation.auxiliary.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 	/* An assignment's literal key is an integer or a string with its
 	 * hash, which the compiler made non-numeric. */
-	if (assigns && key_literal
+	if (ae.assigns && ae.key_literal
 			&& (ir().plan()->source_literals == nullptr
 				|| operation.op2.index
 					>= ir().plan()->source_literal_count
@@ -11919,17 +12152,17 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 							operation.op2.index])) == 0)))) {
 		return 0;
 	}
-	const uint64_t value_offset = !assigns ? 0
-		: value_literal
+	ae.value_offset = !ae.assigns ? 0
+		: ae.value_literal
 			? uint64_t{operation.auxiliary.index} * sizeof(zval)
 			: frame_offset(operation.auxiliary_storage_id);
 	/* A CV container Zend's type inference proves to be an array,
 	 * neither undefined nor a reference: the known_* lookups take its
 	 * table without testing the zval. Some of them need one scratch
 	 * register more than the general lookups. */
-	const bool known_array = [&] {
+	ae.known_array = [&] {
 		const zend_tpde_plan *plan = ir().plan();
-		if (container_literal || container_temporary || container_var
+		if (ae.container_literal || ae.container_temporary || ae.container_var
 				|| unlocked_gp_registers() < 10
 				|| plan->source_opcodes == nullptr
 				|| operation.source_position_id
@@ -11939,347 +12172,230 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		const zend_tpde_source_opcode &source =
 			plan->source_opcodes[operation.source_position_id];
 		return source.op1_type == IS_CV
-			&& source.op1_var == container_offset
+			&& source.op1_var == ae.container_offset
 			&& (source.op1_may_be & (MAY_BE_ANY | MAY_BE_UNDEF
 					| MAY_BE_REF | MAY_BE_INDIRECT)) == MAY_BE_ARRAY;
 	}();
 	/* The lookup snippets use up to seven scratch registers; with the
 	 * literal register held across them, one stays spare. */
-	if (container_offset > INT32_MAX - sizeof(zval)
-			|| key_offset > INT32_MAX - sizeof(zval)
-			|| result_offset > INT32_MAX - sizeof(zval)
-			|| value_offset > INT32_MAX - sizeof(zval)
+	if (ae.container_offset > INT32_MAX - sizeof(zval)
+			|| ae.key_offset > INT32_MAX - sizeof(zval)
+			|| ae.result_offset > INT32_MAX - sizeof(zval)
+			|| ae.value_offset > INT32_MAX - sizeof(zval)
 			|| unlocked_gp_registers() < 9) {
 		return 0;
 	}
 	for (const auto &[operand, storage] : published) {
-		if (!materialize_cold_operand(ctx, operand, storage)) {
+		if (!materialize_cold_operand(ae.ctx, operand, storage)) {
 			return -1;
 		}
 	}
+	return 1;
+}
 
-	auto slow = text_writer.label_create();
-	auto absent = text_writer.label_create();
-	auto answered = text_writer.label_create();
-	auto done = text_writer.label_create();
-	auto [frame_ref, frame] =
-		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
-	auto frame_scratch = frame_register(std::move(frame));
-	auto frame_reg = frame_scratch.cur_reg();
-	ScratchReg decision{this};
-	ScratchReg answer{this};
-	/* A literal key the compiler can read is passed as what it is: an
-	 * integer index, or a string with its hash. A runtime key Zend's
-	 * type inference proves may be an integer and never a string is
-	 * passed as an index read from its slot; unless it is proven an
-	 * integer (neither undefined nor a reference), any other type
-	 * takes the helper. */
-	enum class LiteralKey { None, Index, String, Register };
-	LiteralKey literal_key = LiteralKey::None;
-	uint64_t literal_key_value = 0;
-	bool register_key_checked = false;
+void ZendCompilerX64::find_element_filter(ArrayElementContext &ae,
+		ArrayElementRegisters &er, tpde::Label undecided) {
+	emit_find_element_filter(er.container_base,
+		static_cast<int32_t>(ae.container_offset),
+		ae.key_literal ? er.literals_reg : er.frame_reg,
+		static_cast<int32_t>(ae.key_offset), undecided);
+}
+
+void ZendCompilerX64::find_element_call(ArrayElementContext &ae,
+		ArrayElementRegisters &er, AsmReg out_reg, uint64_t mode) {
+	emit_find_element_call(out_reg, mode, er.frame_reg, er.container_base,
+		static_cast<int32_t>(ae.container_offset),
+		ae.key_literal ? er.literals_reg : er.frame_reg,
+		static_cast<int32_t>(ae.key_offset));
+}
+
+template <typename StringLookup, typename GeneralLookup>
+bool ZendCompilerX64::string_key_split(ArrayElementContext &ae,
+		ArrayElementRegisters &er, StringLookup &&string_lookup,
+		GeneralLookup &&general_lookup, ValuePart &out) {
+	ScratchReg common{this};
+	const AsmReg common_reg = common.alloc_gp();
+	auto other = text_writer.label_create();
+	auto joined = text_writer.label_create();
+	ASM(CMP8mi, FE_MEM(er.frame_reg, 0, FE_NOREG,
+		static_cast<int32_t>(ae.key_offset
+			+ offsetof(zval, u1.v.type))), IS_STRING);
+	generate_raw_jump(Jump::jne, other);
 	{
-		const zend_tpde_plan *plan = ir().plan();
-		if (register_key) {
-			literal_key = LiteralKey::Register;
-		} else if (!key_literal && unlocked_gp_registers() >= 10
-				&& plan->source_opcodes != nullptr
-				&& operation.source_position_id
-					< plan->source_opcode_count) {
-			const zend_tpde_source_opcode &source =
-				plan->source_opcodes[operation.source_position_id];
-			const uint32_t may_be = source.op2_may_be
-				& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF
-					| MAY_BE_INDIRECT);
-			if (source.op2_type != IS_CONST
-					&& source.op2_var == key_offset
-					&& source.op2_may_be != UINT32_MAX
-					&& (may_be & MAY_BE_LONG) != 0
-					&& (may_be & MAY_BE_STRING) == 0) {
-				literal_key = LiteralKey::Register;
-				register_key_checked = may_be != MAY_BE_LONG;
-			}
+		ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!string_lookup(value)) {
+			return false;
 		}
-		if (key_literal && plan->source_literals != nullptr
-				&& operation.op2.index < plan->source_literal_count) {
-			const zval *literal =
-				&plan->source_literals[operation.op2.index];
-			if (Z_TYPE_P(literal) == IS_LONG) {
-				literal_key = LiteralKey::Index;
-				literal_key_value =
-					static_cast<uint64_t>(Z_LVAL_P(literal));
-			} else if (Z_TYPE_P(literal) == IS_STRING
-					&& ZSTR_H(Z_STR_P(literal)) != 0) {
-				literal_key = LiteralKey::String;
-				literal_key_value = ZSTR_H(Z_STR_P(literal));
-			}
+		mov(common_reg, value.cur_reg_or_load(this), 8);
+		value.reset(this);
+	}
+	const bool cold_other = !text_writer.in_cold_area();
+	if (cold_other) {
+		cold_begin();
+	} else {
+		generate_raw_jump(Jump::jmp, joined);
+	}
+	label_place(other);
+	{
+		ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+		if (!general_lookup(value)) {
+			return false;
 		}
+		mov(common_reg, value.cur_reg_or_load(this), 8);
+		value.reset(this);
 	}
-	ScratchReg literals{this};
-	AsmReg literals_reg = frame_reg;
-	if (container_literal || value_literal
-			|| (key_literal && literal_key != LiteralKey::Index)) {
-		literals_reg = literals.alloc_gp();
-		emit_literal_base(literals_reg, frame_reg);
+	if (cold_other) {
+		generate_raw_jump(Jump::jmp, joined);
+		cold_end();
 	}
-	auto address = [](AsmReg base, uint64_t offset) {
-		return GenericValuePart{GenericValuePart::Expr{
-			base, static_cast<int64_t>(offset)}};
-	};
-	/* The operation consumes a temporary key: one that needs a release
-	 * (a counted string) takes the helper. */
-	if (slot_kind(operation.op2) == ZEND_MIR_SOURCE_SLOT_TMP
-			&& !register_key) {
-		emit_counted_check(frame_reg, static_cast<int32_t>(key_offset),
-			slow);
+	label_place(joined);
+	out.set_value(this, std::move(common));
+	return true;
+}
+
+int ZendCompilerX64::array_element_isset(
+		ArrayElementContext &ae, ArrayElementRegisters &er) {
+	const Adaptor::InstNode &node = ae.node;
+	ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
+	bool tested;
+	if (ae.literal_key == LiteralKey::Index) {
+		tested = (ae.known_array
+		? EncodeBase::encode_zend_native_known_isset_idx(
+			std::move(er.container_address),
+			GenericValuePart{ValuePartRef{this, ae.literal_key_value, 8,
+				tpde::x64::PlatformConfig::GP_BANK}}, value)
+		: EncodeBase::encode_zend_native_array_isset_idx(
+			std::move(er.container_address),
+			GenericValuePart{ValuePartRef{this, ae.literal_key_value, 8,
+				tpde::x64::PlatformConfig::GP_BANK}}, value));
+	} else if (ae.literal_key == LiteralKey::String) {
+		ScratchReg name{this};
+		ASM(MOV64rm, name.alloc_gp(),
+			FE_MEM(er.literals_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.key_offset)));
+		tested = (ae.known_array
+		? EncodeBase::encode_zend_native_known_isset_str(
+			std::move(er.container_address),
+			GenericValuePart{std::move(name)},
+			GenericValuePart{ValuePartRef{this, ae.literal_key_value, 8,
+				tpde::x64::PlatformConfig::GP_BANK}}, value)
+		: EncodeBase::encode_zend_native_array_isset_str(
+			std::move(er.container_address),
+			GenericValuePart{std::move(name)},
+			GenericValuePart{ValuePartRef{this, ae.literal_key_value, 8,
+				tpde::x64::PlatformConfig::GP_BANK}}, value));
+	} else if (ae.key_literal) {
+		tested = (ae.known_array
+		? EncodeBase::encode_zend_native_known_isset_literal(
+			std::move(er.container_address), std::move(er.key_address),
+			value)
+		: EncodeBase::encode_zend_native_array_isset_literal(
+			std::move(er.container_address), std::move(er.key_address),
+			value));
+	} else if (ae.split_string_key) {
+		tested = string_key_split(ae, er,
+			[&](ValuePart &out) {
+				return (ae.known_array
+		? EncodeBase::encode_zend_native_known_isset_string_key(
+					address(er.container_base, ae.container_offset),
+					address(er.frame_reg, ae.key_offset), out)
+		: EncodeBase::encode_zend_native_array_isset_string_key(
+					address(er.container_base, ae.container_offset),
+					address(er.frame_reg, ae.key_offset), out));
+			},
+			[&](ValuePart &out) {
+				return (ae.known_array
+		? EncodeBase::encode_zend_native_known_isset_key(
+					address(er.container_base, ae.container_offset),
+					address(er.frame_reg, ae.key_offset), out)
+		: EncodeBase::encode_zend_native_array_isset_key(
+					address(er.container_base, ae.container_offset),
+					address(er.frame_reg, ae.key_offset), out));
+			}, value);
+	} else {
+		tested = (ae.known_array
+		? EncodeBase::encode_zend_native_known_isset_key(
+			std::move(er.container_address), std::move(er.key_address),
+			value)
+		: EncodeBase::encode_zend_native_array_isset_key(
+			std::move(er.container_address), std::move(er.key_address),
+			value));
 	}
-	/* An assignment may insert into the array before it stores the
-	 * value, so the value is checked first: defined and not a
-	 * reference. An array value is copied after the insertion as
-	 * ZEND_ASSIGN_DIM copies it: only the container's own zval holds
-	 * the unshared array, which is another storage (see above) or the
-	 * target of a VAR's INDIRECT, where the VM stores it the same. */
-	if (assigns && !value_literal) {
-		ScratchReg value_type{this};
-		const AsmReg type_reg = value_type.alloc_gp();
-		ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-			static_cast<int32_t>(value_offset
-				+ offsetof(zval, u1.v.type))));
-		ASM(CMP32ri, type_reg, IS_UNDEF);
-		generate_raw_jump(Jump::je, slow);
-		ASM(CMP32ri, type_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::je, slow);
+	if (!tested) {
+		return -1;
 	}
-	const AsmReg container_base =
-		container_literal ? literals_reg : frame_reg;
-	ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
-	auto container_address = address(container_base, container_offset);
-	auto key_address = key_literal
-		? address(literals_reg, key_offset)
-		: address(frame_reg, key_offset);
-	/*
-	 * A probe that cannot decide a key (a string without its hash, a
-	 * bucket key of the same hash that is another string, a numeric
-	 * string) finds the element in C out of the hot code, with the
-	 * probe's result encoding, before anything takes the helper.
-	 */
-	static_assert(ZEND_NATIVE_FIND_UNKNOWN == ZEND_NATIVE_ELEMENT_UNKNOWN
-		&& ZEND_NATIVE_FIND_ABSENT == ZEND_NATIVE_ELEMENT_ABSENT
-		&& ZEND_NATIVE_FIND_ISSET_UNKNOWN == ZEND_NATIVE_ISSET_UNKNOWN);
-	const bool find_element = !writes && !register_key
-		&& literal_key != LiteralKey::Index
-		&& literal_key != LiteralKey::Register
-		&& optional_runtime_symbol(
-			ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid();
-	auto find_element_filter = [&](tpde::Label undecided) {
-		emit_find_element_filter(container_base,
-			static_cast<int32_t>(container_offset),
-			key_literal ? literals_reg : frame_reg,
-			static_cast<int32_t>(key_offset), undecided);
-	};
-	auto find_element_call = [&](AsmReg out_reg, uint64_t mode) {
-		emit_find_element_call(out_reg, mode, frame_reg, container_base,
-			static_cast<int32_t>(container_offset),
-			key_literal ? literals_reg : frame_reg,
-			static_cast<int32_t>(key_offset));
-	};
-	/*
-	 * A runtime key: a string looks up inline, any other key (an
-	 * integer, a reference) out of line, both into one register. Only
-	 * with a register to spare, so that neither lookup evicts.
-	 */
-	const bool split_string_key = !key_literal
-		&& unlocked_gp_registers() >= 10;
-	auto string_key_split = [&](auto &&string_lookup,
-			auto &&general_lookup, ValuePart &out) -> bool {
-		ScratchReg common{this};
-		const AsmReg common_reg = common.alloc_gp();
-		auto other = text_writer.label_create();
-		auto joined = text_writer.label_create();
-		ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-			static_cast<int32_t>(key_offset
-				+ offsetof(zval, u1.v.type))), IS_STRING);
-		generate_raw_jump(Jump::jne, other);
-		{
-			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!string_lookup(value)) {
-				return false;
-			}
-			mov(common_reg, value.cur_reg_or_load(this), 8);
-			value.reset(this);
-		}
-		const bool cold_other = !text_writer.in_cold_area();
-		if (cold_other) {
+	auto decision_reg = er.decision.alloc_gp();
+	auto answer_reg = er.answer.alloc_gp();
+	mov(answer_reg, value.cur_reg_or_load(this), 8);
+	value.reset(this);
+	ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
+	if (ae.find_element) {
+		auto complete = text_writer.label_create();
+		auto known = text_writer.label_create();
+		generate_raw_jump(Jump::je, complete);
+		const bool cold_find = !text_writer.in_cold_area();
+		if (cold_find) {
 			cold_begin();
 		} else {
-			generate_raw_jump(Jump::jmp, joined);
+			generate_raw_jump(Jump::jmp, known);
 		}
-		label_place(other);
-		{
-			ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-			if (!general_lookup(value)) {
-				return false;
-			}
-			mov(common_reg, value.cur_reg_or_load(this), 8);
-			value.reset(this);
-		}
-		if (cold_other) {
-			generate_raw_jump(Jump::jmp, joined);
+		label_place(complete);
+		find_element_filter(ae, er, ae.slow);
+		find_element_call(ae, er, answer_reg,
+			ZEND_NATIVE_FIND_TEST | ZEND_NATIVE_FIND_ISSET);
+		ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
+		generate_raw_jump(Jump::je, ae.slow);
+		generate_raw_jump(Jump::jmp, known);
+		if (cold_find) {
 			cold_end();
 		}
-		label_place(joined);
-		out.set_value(this, std::move(common));
-		return true;
-	};
-	/* An isset whose element a read reuses finds it in the general
-	 * form, which also leaves its address; a read that reuses one skips
-	 * its own lookup. */
-	const bool reuse_store = access == ElementAccess::Isset
-		&& reuse_read != IRInstRef{UINT32_MAX} && !container_temporary
-		&& !register_key && literal_key != LiteralKey::Register;
-	const bool reuse_load = (access == ElementAccess::Read
-			|| (access == ElementAccess::Write && !container_var))
-		&& lookup_reuse_armed(instruction) && !register_key
-		&& literal_key != LiteralKey::Register
-		&& unlocked_gp_registers() >= 10;
-	/* isset() of an array element decides in one snippet: set, not
-	 * set, or the helper's. */
-	if (access == ElementAccess::Isset && !container_temporary
-			&& !reuse_store) {
-		ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
-		bool tested;
-		if (literal_key == LiteralKey::Index) {
-			tested = (known_array
-			? EncodeBase::encode_zend_native_known_isset_idx(
-				std::move(container_address),
-				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-					tpde::x64::PlatformConfig::GP_BANK}}, value)
-			: EncodeBase::encode_zend_native_array_isset_idx(
-				std::move(container_address),
-				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-					tpde::x64::PlatformConfig::GP_BANK}}, value));
-		} else if (literal_key == LiteralKey::String) {
-			ScratchReg name{this};
-			ASM(MOV64rm, name.alloc_gp(),
-				FE_MEM(literals_reg, 0, FE_NOREG,
-					static_cast<int32_t>(key_offset)));
-			tested = (known_array
-			? EncodeBase::encode_zend_native_known_isset_str(
-				std::move(container_address),
-				GenericValuePart{std::move(name)},
-				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-					tpde::x64::PlatformConfig::GP_BANK}}, value)
-			: EncodeBase::encode_zend_native_array_isset_str(
-				std::move(container_address),
-				GenericValuePart{std::move(name)},
-				GenericValuePart{ValuePartRef{this, literal_key_value, 8,
-					tpde::x64::PlatformConfig::GP_BANK}}, value));
-		} else if (key_literal) {
-			tested = (known_array
-			? EncodeBase::encode_zend_native_known_isset_literal(
-				std::move(container_address), std::move(key_address),
-				value)
-			: EncodeBase::encode_zend_native_array_isset_literal(
-				std::move(container_address), std::move(key_address),
-				value));
-		} else if (split_string_key) {
-			tested = string_key_split(
-				[&](ValuePart &out) {
-					return (known_array
-			? EncodeBase::encode_zend_native_known_isset_string_key(
-						address(container_base, container_offset),
-						address(frame_reg, key_offset), out)
-			: EncodeBase::encode_zend_native_array_isset_string_key(
-						address(container_base, container_offset),
-						address(frame_reg, key_offset), out));
-				},
-				[&](ValuePart &out) {
-					return (known_array
-			? EncodeBase::encode_zend_native_known_isset_key(
-						address(container_base, container_offset),
-						address(frame_reg, key_offset), out)
-			: EncodeBase::encode_zend_native_array_isset_key(
-						address(container_base, container_offset),
-						address(frame_reg, key_offset), out));
-				}, value);
-		} else {
-			tested = (known_array
-			? EncodeBase::encode_zend_native_known_isset_key(
-				std::move(container_address), std::move(key_address),
-				value)
-			: EncodeBase::encode_zend_native_array_isset_key(
-				std::move(container_address), std::move(key_address),
-				value));
-		}
-		if (!tested) {
-			return -1;
-		}
-		auto decision_reg = decision.alloc_gp();
-		auto answer_reg = answer.alloc_gp();
-		mov(answer_reg, value.cur_reg_or_load(this), 8);
-		value.reset(this);
-		ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
-		if (find_element) {
-			auto complete = text_writer.label_create();
-			auto known = text_writer.label_create();
-			generate_raw_jump(Jump::je, complete);
-			const bool cold_find = !text_writer.in_cold_area();
-			if (cold_find) {
-				cold_begin();
-			} else {
-				generate_raw_jump(Jump::jmp, known);
-			}
-			label_place(complete);
-			find_element_filter(slow);
-			find_element_call(answer_reg,
-				ZEND_NATIVE_FIND_TEST | ZEND_NATIVE_FIND_ISSET);
-			ASM(CMP64ri, answer_reg, ZEND_NATIVE_ISSET_UNKNOWN);
-			generate_raw_jump(Jump::je, slow);
-			generate_raw_jump(Jump::jmp, known);
-			if (cold_find) {
-				cold_end();
-			}
-			label_place(known);
-		} else {
-			generate_raw_jump(Jump::je, slow);
-		}
-		literals.reset();
-		if (node.has_result) {
-			auto [result_ref, result] = result_ref_single(node.result);
-			mov(result.alloc_reg(), answer_reg, 8);
-			result.set_modified();
-		} else {
-			/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
-			ASM(ADD32ri, answer_reg, IS_FALSE);
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
-						+ offsetof(zval, u1.type_info))),
-				answer_reg);
-		}
-		answer.reset();
-		finish_guarded(slow, done, std::move(decision), frame_scratch,
-			successors);
-		return 1;
+		label_place(known);
+	} else {
+		generate_raw_jump(Jump::je, ae.slow);
 	}
-	auto reuse_cached = text_writer.label_create();
-	auto reuse_joined = text_writer.label_create();
-	if (reuse_store) {
+	er.literals.reset();
+	if (node.has_result) {
+		auto [result_ref, result] = result_ref_single(node.result);
+		mov(result.alloc_reg(), answer_reg, 8);
+		result.set_modified();
+	} else {
+		/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
+		ASM(ADD32ri, answer_reg, IS_FALSE);
+		ASM(MOV32mr,
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset
+					+ offsetof(zval, u1.type_info))),
+			answer_reg);
+	}
+	er.answer.reset();
+	finish_guarded(ae.slow, ae.done, std::move(er.decision), er.frame_scratch,
+		ae.successors);
+	return 1;
+}
+
+/* The element: the reuse of an isset's, or a lookup. */
+int ZendCompilerX64::array_element_lookup(
+		ArrayElementContext &ae, ArrayElementRegisters &er) {
+	const Adaptor::InstNode &node = ae.node;
+	const ElementAccess access = ae.access;
+	ae.reuse_cached = text_writer.label_create();
+	ae.reuse_joined = text_writer.label_create();
+	if (ae.reuse_store) {
 		ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
-	} else if (reuse_load) {
+	} else if (ae.reuse_load) {
 		/* A write fetch changes the found element in place only in an
 		 * array without another owner (zend_native_probe_array_w()); the
 		 * isset found it, so the CV holds an array, maybe through a
 		 * reference. */
 		auto shared = text_writer.label_create();
-		if (writes) {
+		if (ae.writes) {
 			ScratchReg table{this};
 			const AsmReg table_reg = table.alloc_gp();
 			auto direct = text_writer.label_create();
-			ASM(MOV64rm, table_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(container_offset)));
-			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(container_offset
+			ASM(MOV64rm, table_reg, FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.container_offset)));
+			ASM(CMP8mi, FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.container_offset
 					+ offsetof(zval, u1.v.type))), IS_REFERENCE);
 			emit_cold_branch(Jump::je, direct, [&] {
 				ASM(MOV64rm, table_reg, FE_MEM(table_reg, 0, FE_NOREG,
@@ -12291,7 +12407,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			generate_raw_jump(Jump::jne, shared);
 		}
 		ASM(CMP64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
-		generate_raw_jump(Jump::jne, reuse_cached);
+		generate_raw_jump(Jump::jne, ae.reuse_cached);
 		label_place(shared);
 	}
 	/*
@@ -12301,16 +12417,16 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	 * zend_hash_lookup() inline at every site. NULL (UNKNOWN) takes the
 	 * helper.
 	 */
-	const bool lookup_call = assigns
-		&& literal_key != LiteralKey::Index
-		&& literal_key != LiteralKey::Register;
+	const bool lookup_call = ae.assigns
+		&& ae.literal_key != LiteralKey::Index
+		&& ae.literal_key != LiteralKey::Register;
 	bool found;
 	if (lookup_call) {
-		if (container_var) {
-			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(container_offset
+		if (ae.container_var) {
+			ASM(CMP8mi, FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.container_offset
 					+ offsetof(zval, u1.v.type))), IS_INDIRECT);
-			generate_raw_jump(Jump::jne, slow);
+			generate_raw_jump(Jump::jne, ae.slow);
 		}
 		ScratchReg looked{this};
 		const AsmReg looked_reg = looked.alloc_gp();
@@ -12322,257 +12438,265 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 				 * register neither base uses, as the frame or the
 				 * literals may sit in either argument register. */
 				const AsmReg key_base =
-					key_literal ? literals_reg : frame_reg;
+					ae.key_literal ? er.literals_reg : er.frame_reg;
 				FeRegGP key_temp = FE_AX;
 				for (const auto &[id, reg] : {std::pair{AsmReg::AX, FE_AX},
 						std::pair{AsmReg::CX, FE_CX},
 						std::pair{AsmReg::DX, FE_DX}}) {
-					if (frame_reg.id() != id && key_base.id() != id) {
+					if (er.frame_reg.id() != id && key_base.id() != id) {
 						key_temp = reg;
 						break;
 					}
 				}
 				ASM(LEA64rm, key_temp, FE_MEM(key_base, 0, FE_NOREG,
-					static_cast<int32_t>(key_offset)));
+					static_cast<int32_t>(ae.key_offset)));
 				/* The container's zval: the CV, or the target of the
 				 * VAR's INDIRECT. */
-				if (container_var) {
-					ASM(MOV64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(container_offset)));
+				if (ae.container_var) {
+					ASM(MOV64rm, FE_DI, FE_MEM(er.frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(ae.container_offset)));
 				} else {
-					ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(container_offset)));
+					ASM(LEA64rm, FE_DI, FE_MEM(er.frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(ae.container_offset)));
 				}
 				ASM(MOV64rr, FE_SI, key_temp);
 			}, [&] {
 				ASM(MOV64rr, looked_reg, FE_AX);
 			});
-		element.set_value(this, std::move(looked));
+		er.element.set_value(this, std::move(looked));
 		found = true;
-	} else if (literal_key != LiteralKey::None) {
+	} else if (ae.literal_key != LiteralKey::None) {
 		ScratchReg key_index{this};
-		if (register_key_checked) {
-			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(key_offset
+		if (ae.register_key_checked) {
+			ASM(CMP8mi, FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.key_offset
 					+ offsetof(zval, u1.v.type))), IS_LONG);
-			generate_raw_jump(Jump::jne, slow);
+			generate_raw_jump(Jump::jne, ae.slow);
 		}
-		if (register_key) {
+		if (ae.register_key) {
 			auto [key_ref, key_part] = val_ref_single(node.operands[0]);
 			ASM(MOV64rr, key_index.alloc_gp(), key_part.load_to_reg());
-		} else if (literal_key == LiteralKey::Register) {
-			ASM(MOV64rm, key_index.alloc_gp(), FE_MEM(frame_reg, 0,
-				FE_NOREG, static_cast<int32_t>(key_offset)));
+		} else if (ae.literal_key == LiteralKey::Register) {
+			ASM(MOV64rm, key_index.alloc_gp(), FE_MEM(er.frame_reg, 0,
+				FE_NOREG, static_cast<int32_t>(ae.key_offset)));
 		}
 		auto constant = [&]() {
-			return literal_key == LiteralKey::Register
+			return ae.literal_key == LiteralKey::Register
 				? GenericValuePart{std::move(key_index)}
-				: GenericValuePart{ValuePartRef{this, literal_key_value,
+				: GenericValuePart{ValuePartRef{this, ae.literal_key_value,
 					8, tpde::x64::PlatformConfig::GP_BANK}};
 		};
-		const bool index = literal_key == LiteralKey::Index
-			|| literal_key == LiteralKey::Register;
+		const bool index = ae.literal_key == LiteralKey::Index
+			|| ae.literal_key == LiteralKey::Register;
 		ScratchReg name{this};
 		if (!index) {
 			ASM(MOV64rm, name.alloc_gp(),
-				FE_MEM(literals_reg, 0, FE_NOREG,
-					static_cast<int32_t>(key_offset)));
+				FE_MEM(er.literals_reg, 0, FE_NOREG,
+					static_cast<int32_t>(ae.key_offset)));
 		}
 		auto name_part = [&]() {
 			return GenericValuePart{std::move(name)};
 		};
-		if (assigns && !index) {
+		if (ae.assigns && !index) {
 			return -1;
-		} else if (assigns) {
-			found = container_var
+		} else if (ae.assigns) {
+			found = ae.container_var
 				? EncodeBase::encode_zend_native_indirect_assign_idx(
-					std::move(container_address), constant(), element)
+					std::move(er.container_address), constant(), er.element)
 				: EncodeBase::encode_zend_native_array_assign_idx(
-					std::move(container_address), constant(), element);
-		} else if (container_var) {
+					std::move(er.container_address), constant(), er.element);
+		} else if (ae.container_var) {
 			found = index
 				? EncodeBase::encode_zend_native_indirect_find_idx_w(
-					std::move(container_address), constant(), element)
+					std::move(er.container_address), constant(), er.element)
 				: EncodeBase::encode_zend_native_indirect_find_str_w(
-					std::move(container_address), name_part(),
-					constant(), element);
-		} else if (writes) {
+					std::move(er.container_address), name_part(),
+					constant(), er.element);
+		} else if (ae.writes) {
 			found = index
-				? (known_array
+				? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_idx_w(
-					std::move(container_address), constant(), element)
+					std::move(er.container_address), constant(), er.element)
 			: EncodeBase::encode_zend_native_array_find_idx_w(
-					std::move(container_address), constant(), element))
-				: (known_array
+					std::move(er.container_address), constant(), er.element))
+				: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_str_w(
-					std::move(container_address), name_part(),
-					constant(), element)
+					std::move(er.container_address), name_part(),
+					constant(), er.element)
 			: EncodeBase::encode_zend_native_array_find_str_w(
-					std::move(container_address), name_part(),
-					constant(), element));
-		} else if (tests || access == ElementAccess::Coalesce) {
+					std::move(er.container_address), name_part(),
+					constant(), er.element));
+		} else if (ae.tests || access == ElementAccess::Coalesce) {
 			found = index
-				? (known_array
+				? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_idx(
-					std::move(container_address), constant(), element)
+					std::move(er.container_address), constant(), er.element)
 			: EncodeBase::encode_zend_native_array_test_idx(
-					std::move(container_address), constant(), element))
-				: (known_array
+					std::move(er.container_address), constant(), er.element))
+				: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_str(
-					std::move(container_address), name_part(),
-					constant(), element)
+					std::move(er.container_address), name_part(),
+					constant(), er.element)
 			: EncodeBase::encode_zend_native_array_test_str(
-					std::move(container_address), name_part(),
-					constant(), element));
+					std::move(er.container_address), name_part(),
+					constant(), er.element));
 		} else {
 			found = index
-				? (known_array
+				? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_idx(
-					std::move(container_address), constant(), element)
+					std::move(er.container_address), constant(), er.element)
 			: EncodeBase::encode_zend_native_array_find_idx(
-					std::move(container_address), constant(), element))
-				: (known_array
+					std::move(er.container_address), constant(), er.element))
+				: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_str(
-					std::move(container_address), name_part(),
-					constant(), element)
+					std::move(er.container_address), name_part(),
+					constant(), er.element)
 			: EncodeBase::encode_zend_native_array_find_str(
-					std::move(container_address), name_part(),
-					constant(), element));
+					std::move(er.container_address), name_part(),
+					constant(), er.element));
 		}
 	} else
 	{
 		/* Keyed assignments take lookup_call. */
-		ZEND_ASSERT(!assigns);
-		if (container_var) {
-			found = key_literal
+		ZEND_ASSERT(!ae.assigns);
+		if (ae.container_var) {
+			found = ae.key_literal
 				? EncodeBase::encode_zend_native_indirect_find_literal_w(
-					std::move(container_address), std::move(key_address),
-					element)
+					std::move(er.container_address), std::move(er.key_address),
+					er.element)
 				: EncodeBase::encode_zend_native_indirect_find_key_w(
-					std::move(container_address), std::move(key_address),
-					element);
-		} else if (writes) {
-			found = key_literal
-				? (known_array
+					std::move(er.container_address), std::move(er.key_address),
+					er.element);
+		} else if (ae.writes) {
+			found = ae.key_literal
+				? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_literal_w(
-					std::move(container_address), std::move(key_address),
-					element)
+					std::move(er.container_address), std::move(er.key_address),
+					er.element)
 			: EncodeBase::encode_zend_native_array_find_literal_w(
-					std::move(container_address), std::move(key_address),
-					element))
-				: (known_array
+					std::move(er.container_address), std::move(er.key_address),
+					er.element))
+				: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_key_w(
-					std::move(container_address), std::move(key_address),
-					element)
+					std::move(er.container_address), std::move(er.key_address),
+					er.element)
 			: EncodeBase::encode_zend_native_array_find_key_w(
-					std::move(container_address), std::move(key_address),
-					element));
-		} else if (split_string_key) {
-			const bool testing = tests || access == ElementAccess::Coalesce;
-			found = string_key_split(
+					std::move(er.container_address), std::move(er.key_address),
+					er.element));
+		} else if (ae.split_string_key) {
+			const bool testing = ae.tests || access == ElementAccess::Coalesce;
+			found = string_key_split(ae, er,
 				[&](ValuePart &out) {
 					return testing
-						? (known_array
+						? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_string_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out)
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out)
 			: EncodeBase::encode_zend_native_array_test_string_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out))
-						: (known_array
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out))
+						: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_string_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out)
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out)
 			: EncodeBase::encode_zend_native_array_find_string_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out));
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out));
 				},
 				[&](ValuePart &out) {
 					return testing
-						? (known_array
+						? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out)
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out)
 			: EncodeBase::encode_zend_native_array_test_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out))
-						: (known_array
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out))
+						: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out)
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out)
 			: EncodeBase::encode_zend_native_array_find_key(
-							address(container_base, container_offset),
-							address(frame_reg, key_offset), out));
-				}, element);
-		} else if (tests || access == ElementAccess::Coalesce) {
+							address(er.container_base, ae.container_offset),
+							address(er.frame_reg, ae.key_offset), out));
+				}, er.element);
+		} else if (ae.tests || access == ElementAccess::Coalesce) {
 			/* An undefined or null container has no element to test. */
-			found = key_literal
-				? (known_array
+			found = ae.key_literal
+				? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_literal(
-					std::move(container_address), std::move(key_address),
-					element)
+					std::move(er.container_address), std::move(er.key_address),
+					er.element)
 			: EncodeBase::encode_zend_native_array_test_literal(
-					std::move(container_address), std::move(key_address),
-					element))
-				: (known_array
+					std::move(er.container_address), std::move(er.key_address),
+					er.element))
+				: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_key(
-					std::move(container_address), std::move(key_address),
-					element)
+					std::move(er.container_address), std::move(er.key_address),
+					er.element)
 			: EncodeBase::encode_zend_native_array_test_key(
-					std::move(container_address), std::move(key_address),
-					element));
+					std::move(er.container_address), std::move(er.key_address),
+					er.element));
 		} else {
-			found = key_literal
-				? (known_array
+			found = ae.key_literal
+				? (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_literal(
-					std::move(container_address), std::move(key_address),
-					element)
+					std::move(er.container_address), std::move(er.key_address),
+					er.element)
 			: EncodeBase::encode_zend_native_array_find_literal(
-					std::move(container_address), std::move(key_address),
-					element))
-				: (known_array
+					std::move(er.container_address), std::move(er.key_address),
+					er.element))
+				: (ae.known_array
 			? EncodeBase::encode_zend_native_known_find_key(
-					std::move(container_address), std::move(key_address),
-					element)
+					std::move(er.container_address), std::move(er.key_address),
+					er.element)
 			: EncodeBase::encode_zend_native_array_find_key(
-					std::move(container_address), std::move(key_address),
-					element));
+					std::move(er.container_address), std::move(er.key_address),
+					er.element));
 		}
 	}
 	if (!found) {
 		return -1;
 	}
-	const AsmReg element_reg = element.cur_reg_or_load(this);
+	return 1;
+}
+
+/* The probe's answer: found, absent, inserted or undecided. */
+int ZendCompilerX64::array_element_decide(
+		ArrayElementContext &ae, ArrayElementRegisters &er) {
+	IRInstRef &reuse_read = ae.reuse_read;
+	const ElementAccess access = ae.access;
+	ae.element_reg = er.element.cur_reg_or_load(this);
 	/* The isset stored only an element it found: its reuse skips the
 	 * probe's answer tests. */
 	auto element_ready = text_writer.label_create();
-	if (reuse_load) {
-		generate_raw_jump(Jump::jmp, reuse_joined);
-		label_place(reuse_cached);
-		ASM(MOV64rm, element_reg,
+	if (ae.reuse_load) {
+		generate_raw_jump(Jump::jmp, ae.reuse_joined);
+		label_place(ae.reuse_cached);
+		ASM(MOV64rm, ae.element_reg,
 			FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()));
 		generate_raw_jump(Jump::jmp, element_ready);
-		label_place(reuse_joined);
+		label_place(ae.reuse_joined);
 	}
 	/* Held from here on; the lookup needed the registers before. */
-	auto decision_reg = decision.alloc_gp();
-	auto answer_reg = answer.alloc_gp();
-	auto unknown = text_writer.label_create();
+	auto decision_reg = er.decision.alloc_gp();
+	ae.answer_reg = er.answer.alloc_gp();
+	ae.unknown = text_writer.label_create();
 	/* A read of a CV that is not an array may be a string offset: the
 	 * one-character string, looked up out of the hot code. */
 	const bool string_reads = access == ElementAccess::Read
-		&& !known_array && !container_literal && !container_temporary
-		&& !register_key
-		&& (literal_key == LiteralKey::Index || !key_literal);
+		&& !ae.known_array && !ae.container_literal && !ae.container_temporary
+		&& !ae.register_key
+		&& (ae.literal_key == LiteralKey::Index || !ae.key_literal);
 	auto string_offset = text_writer.label_create();
 	auto element_found = text_writer.label_create();
-	const auto undecided = access == ElementAccess::Coalesce ? unknown
-		: string_reads ? string_offset : slow;
+	const auto undecided = access == ElementAccess::Coalesce ? ae.unknown
+		: string_reads ? string_offset : ae.slow;
 	auto decide = text_writer.label_create();
 	label_place(decide);
-	ASM(CMP64ri, element_reg,
+	ASM(CMP64ri, ae.element_reg,
 		static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
-	if (find_element) {
+	if (ae.find_element) {
 		/* The C lookup's answer passes the same test again; one it
 		 * cannot decide either goes where the probe's would. */
 		auto complete = text_writer.label_create();
@@ -12585,11 +12709,11 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			generate_raw_jump(Jump::jmp, decided);
 		}
 		label_place(complete);
-		find_element_filter(undecided);
-		find_element_call(element_reg,
-			tests || access == ElementAccess::Coalesce
+		find_element_filter(ae, er, undecided);
+		find_element_call(ae, er, ae.element_reg,
+			ae.tests || access == ElementAccess::Coalesce
 				? ZEND_NATIVE_FIND_TEST : 0);
-		ASM(CMP64ri, element_reg,
+		ASM(CMP64ri, ae.element_reg,
 			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
 		generate_raw_jump(Jump::jb, undecided);
 		generate_raw_jump(Jump::jmp, decide);
@@ -12604,21 +12728,21 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	 * helper does that. An assignment under an integer key into a CV's
 	 * unshared array inserts the null element out of line instead and
 	 * stores into it as into an existing one. */
-	const bool insert_index = assigns && !container_var
-		&& !container_temporary && !container_literal
-		&& (literal_key == LiteralKey::Index
-			|| literal_key == LiteralKey::Register)
+	const bool insert_index = ae.assigns && !ae.container_var
+		&& !ae.container_temporary && !ae.container_literal
+		&& (ae.literal_key == LiteralKey::Index
+			|| ae.literal_key == LiteralKey::Register)
 		/* A register key of a string-key assignment has no helper. */
 		&& optional_runtime_symbol(
 			ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX).valid();
 	auto insert = text_writer.label_create();
 	auto inserted = text_writer.label_create();
 	generate_raw_jump(Jump::je, insert_index ? insert
-		: access == ElementAccess::Read || writes ? slow : absent);
+		: access == ElementAccess::Read || ae.writes ? ae.slow : ae.absent);
 	label_place(element_ready);
-	if (reuse_store) {
+	if (ae.reuse_store) {
 		ASM(MOV64mr, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()),
-			element_reg);
+			ae.element_reg);
 		lookup_reuse_reads_.push_back(static_cast<uint32_t>(reuse_read));
 	}
 	if (insert_index) {
@@ -12630,30 +12754,30 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		}
 		label_place(insert);
 		const uint64_t live_registers = static_cast<uint64_t>(
-			register_file.used) & ~(uint64_t{1} << element_reg.id());
+			register_file.used) & ~(uint64_t{1} << ae.element_reg.id());
 		emit_preserving_call(live_registers,
 			ZEND_NATIVE_HELPER_ARRAY_INSERT_INDEX, [&] {
 				const auto key_to_si = [&] {
-					if (literal_key == LiteralKey::Index) {
+					if (ae.literal_key == LiteralKey::Index) {
 						ASM(MOV64ri, FE_SI,
-							static_cast<int64_t>(literal_key_value));
+							static_cast<int64_t>(ae.literal_key_value));
 					} else {
-						ASM(MOV64rm, FE_SI, FE_MEM(frame_reg, 0, FE_NOREG,
-							static_cast<int32_t>(key_offset)));
+						ASM(MOV64rm, FE_SI, FE_MEM(er.frame_reg, 0, FE_NOREG,
+							static_cast<int32_t>(ae.key_offset)));
 					}
 				};
 				/* The frame may sit in either argument register. */
-				if (frame_reg.id() == AsmReg{AsmReg::DI}.id()) {
+				if (er.frame_reg.id() == AsmReg{AsmReg::DI}.id()) {
 					key_to_si();
-					ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(container_offset)));
+					ASM(LEA64rm, FE_DI, FE_MEM(er.frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(ae.container_offset)));
 				} else {
-					ASM(LEA64rm, FE_DI, FE_MEM(frame_reg, 0, FE_NOREG,
-						static_cast<int32_t>(container_offset)));
+					ASM(LEA64rm, FE_DI, FE_MEM(er.frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(ae.container_offset)));
 					key_to_si();
 				}
 			}, [&] {
-				ASM(MOV64rr, element_reg, FE_AX);
+				ASM(MOV64rr, ae.element_reg, FE_AX);
 			});
 		generate_raw_jump(Jump::jmp, inserted);
 		if (cold_insert) {
@@ -12673,28 +12797,28 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER,
 			ZEND_NATIVE_HELPER_CHAR_STRINGS);
 		if (!chars.has_reg()) {
-			generate_raw_jump(Jump::jmp, slow);
+			generate_raw_jump(Jump::jmp, ae.slow);
 		} else {
 			auto chars_scratch = std::move(chars).into_scratch(this);
 			ValuePart offset_element{
 				tpde::x64::PlatformConfig::GP_BANK, 8};
-			const bool encoded = literal_key == LiteralKey::Index
+			const bool encoded = ae.literal_key == LiteralKey::Index
 				? EncodeBase::encode_zend_native_string_offset_idx(
-					address(container_base, container_offset),
-					GenericValuePart{ValuePartRef{this, literal_key_value,
+					address(er.container_base, ae.container_offset),
+					GenericValuePart{ValuePartRef{this, ae.literal_key_value,
 						8, tpde::x64::PlatformConfig::GP_BANK}},
 					GenericValuePart{std::move(chars_scratch)}, offset_element)
 				: EncodeBase::encode_zend_native_string_offset_key(
-					address(container_base, container_offset),
-					address(frame_reg, key_offset),
+					address(er.container_base, ae.container_offset),
+					address(er.frame_reg, ae.key_offset),
 					GenericValuePart{std::move(chars_scratch)}, offset_element);
 			if (!encoded) {
 				return -1;
 			}
-			mov(element_reg, offset_element.cur_reg_or_load(this), 8);
+			mov(ae.element_reg, offset_element.cur_reg_or_load(this), 8);
 			offset_element.reset(this);
-			ASM(TEST64rr, element_reg, element_reg);
-			generate_raw_jump(Jump::je, slow);
+			ASM(TEST64rr, ae.element_reg, ae.element_reg);
+			generate_raw_jump(Jump::je, ae.slow);
 			generate_raw_jump(Jump::jmp, element_found);
 		}
 		if (cold_string) {
@@ -12702,44 +12826,53 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		}
 		label_place(element_found);
 	}
-	if (container_temporary) {
+	if (ae.container_temporary) {
 		ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 		if (!EncodeBase::encode_zend_native_container_shared(
-				address(frame_reg, container_offset), shared)) {
+				address(er.frame_reg, ae.container_offset), shared)) {
 			return -1;
 		}
 		const AsmReg shared_reg = shared.cur_reg_or_load(this);
 		ASM(TEST64rr, shared_reg, shared_reg);
 		shared.reset(this);
-		generate_raw_jump(Jump::je, slow);
+		generate_raw_jump(Jump::je, ae.slow);
 	}
+	return 1;
+}
+
+/* The access on the found element, and the result. */
+int ZendCompilerX64::array_element_result(
+		ArrayElementContext &ae, ArrayElementRegisters &er) {
+	const Adaptor::InstNode &node = ae.node;
+	const zend_mir_executable_value_ref &operation = ae.operation;
+	const ElementAccess access = ae.access;
 	if (access == ElementAccess::Read && node.has_result
 			&& ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
 		/* An integer result needs an element whose type is exactly
 		 * IS_LONG, tested in memory. */
-		ASM(CMP32mi, FE_MEM(element_reg, 0, FE_NOREG,
+		ASM(CMP32mi, FE_MEM(ae.element_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_LONG);
-		generate_raw_jump(Jump::jne, slow);
+		generate_raw_jump(Jump::jne, ae.slow);
 		auto [result_ref, result] = result_ref_single(node.result);
 		if (!EncodeBase::encode_zend_native_load_u64(
-				address(element_reg, 0), result)) {
+				address(ae.element_reg, 0), result)) {
 			return -1;
 		}
 		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset)),
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset)),
 			result.load_to_reg());
 		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset
 					+ offsetof(zval, u1.type_info))),
 			IS_LONG);
-	} else if (reads) {
+	} else if (ae.reads) {
 		ValuePart payload{tpde::x64::PlatformConfig::GP_BANK, 8};
 		ValuePart type_info{tpde::x64::PlatformConfig::GP_BANK, 8};
 		if (!EncodeBase::encode_zend_native_zval_copy_deref(
-				address(element_reg, 0), payload, type_info)) {
+				address(ae.element_reg, 0), payload, type_info)) {
 			return -1;
 		}
 		const AsmReg payload_reg = payload.cur_reg_or_load(this);
@@ -12747,12 +12880,12 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		/* The owned copy lives in the result temporary; a boxed register
 		 * result mirrors it, as the cold path reloads it. */
 		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset)),
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset)),
 			payload_reg);
 		ASM(MOV32mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset
 					+ offsetof(zval, u1.type_info))),
 			type_info_reg);
 		if (node.has_result && access == ElementAccess::Read) {
@@ -12767,38 +12900,38 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		payload.reset(this);
 		type_info.reset(this);
 		if (access == ElementAccess::Coalesce) {
-			generate_raw_jump(Jump::jmp, answered);
+			generate_raw_jump(Jump::jmp, ae.answered);
 			/* Not an array: a scalar container reads as null. */
-			label_place(unknown);
+			label_place(ae.unknown);
 			ValuePart scalar{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_zval_is_scalar(
-					address(container_base, container_offset), scalar)) {
+					address(er.container_base, ae.container_offset), scalar)) {
 				return -1;
 			}
 			const AsmReg scalar_reg = scalar.cur_reg_or_load(this);
 			ASM(TEST64rr, scalar_reg, scalar_reg);
 			scalar.reset(this);
-			generate_raw_jump(Jump::je, slow);
-			label_place(absent);
-			if (container_temporary) {
+			generate_raw_jump(Jump::je, ae.slow);
+			label_place(ae.absent);
+			if (ae.container_temporary) {
 				ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 				if (!EncodeBase::encode_zend_native_container_shared(
-						address(frame_reg, container_offset), shared)) {
+						address(er.frame_reg, ae.container_offset), shared)) {
 					return -1;
 				}
 				const AsmReg shared_reg = shared.cur_reg_or_load(this);
 				ASM(TEST64rr, shared_reg, shared_reg);
 				shared.reset(this);
-				generate_raw_jump(Jump::je, slow);
+				generate_raw_jump(Jump::je, ae.slow);
 			}
 			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(result_offset
+				FE_MEM(er.frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(ae.result_offset
 						+ offsetof(zval, u1.type_info))),
 				IS_NULL);
-			label_place(answered);
+			label_place(ae.answered);
 		}
-	} else if (assigns) {
+	} else if (ae.assigns) {
 		/* The element's old value needs no release (an appended
 		 * element reads as null), or is a string, whose release runs
 		 * no code: dropped before the store, freed out of line by its
@@ -12807,7 +12940,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		 * counted without opcache. */
 		const int32_t type_offset =
 			static_cast<int32_t>(offsetof(zval, u1.type_info));
-		const AsmReg value_base = value_literal ? literals_reg : frame_reg;
+		const AsmReg value_base = ae.value_literal ? er.literals_reg : er.frame_reg;
 		ScratchReg value_type{this};
 		ScratchReg value_payload{this};
 		const AsmReg type_reg = value_type.alloc_gp();
@@ -12816,12 +12949,12 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			auto released = text_writer.label_create();
 			auto last_owner = text_writer.label_create();
 			ASM(MOV32rm, type_reg,
-				FE_MEM(element_reg, 0, FE_NOREG, type_offset));
+				FE_MEM(ae.element_reg, 0, FE_NOREG, type_offset));
 			ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
 			generate_raw_jump(Jump::je, released);
 			ASM(CMP8ri, type_reg, IS_STRING);
-			generate_raw_jump(Jump::jne, slow);
-			ASM(MOV64rm, payload_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
+			generate_raw_jump(Jump::jne, ae.slow);
+			ASM(MOV64rm, payload_reg, FE_MEM(ae.element_reg, 0, FE_NOREG, 0));
 			ASM(CMP32mi, FE_MEM(payload_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))),
 				1);
@@ -12838,7 +12971,7 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			label_place(last_owner);
 			emit_preserving_call(static_cast<uint64_t>(register_file.used),
 				ZEND_NATIVE_HELPER_ZVAL_RELEASE_SLOW, [&] {
-					ASM(MOV64rr, FE_DI, element_reg);
+					ASM(MOV64rr, FE_DI, ae.element_reg);
 				}, [] {});
 			generate_raw_jump(Jump::jmp, released);
 			if (cold_free) {
@@ -12847,17 +12980,17 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			label_place(released);
 		}
 		ASM(MOV32rm, type_reg, FE_MEM(value_base, 0, FE_NOREG,
-			static_cast<int32_t>(value_offset) + type_offset));
+			static_cast<int32_t>(ae.value_offset) + type_offset));
 		ASM(MOV64rm, payload_reg, FE_MEM(value_base, 0, FE_NOREG,
-			static_cast<int32_t>(value_offset)));
+			static_cast<int32_t>(ae.value_offset)));
 		const zend_tpde_plan *value_plan = ir().plan();
-		const bool counted_literal = value_literal
+		const bool counted_literal = ae.value_literal
 			&& (value_plan->source_literals == nullptr
 				|| operation.auxiliary.index
 					>= value_plan->source_literal_count
 				|| Z_REFCOUNTED(value_plan->source_literals[
 					operation.auxiliary.index]));
-		if (counted_literal || (!value_literal
+		if (counted_literal || (!ae.value_literal
 				&& slot_kind(operation.auxiliary)
 					== ZEND_MIR_SOURCE_SLOT_CV)) {
 			auto uncounted = text_writer.label_create();
@@ -12866,57 +12999,57 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			ASM(ADD32mi, FE_MEM(payload_reg, 0, FE_NOREG, 0), 1);
 			label_place(uncounted);
 		}
-		ASM(MOV64mr, FE_MEM(element_reg, 0, FE_NOREG, 0), payload_reg);
-		ASM(MOV32mr, FE_MEM(element_reg, 0, FE_NOREG, type_offset),
+		ASM(MOV64mr, FE_MEM(ae.element_reg, 0, FE_NOREG, 0), payload_reg);
+		ASM(MOV32mr, FE_MEM(ae.element_reg, 0, FE_NOREG, type_offset),
 			type_reg);
-	} else if (writes) {
+	} else if (ae.writes) {
 		ASM(MOV64mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset)),
-			element_reg);
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset)),
+			ae.element_reg);
 		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset
 					+ offsetof(zval, u1.type_info))),
 			IS_INDIRECT);
 	} else {
 		ValuePart value{tpde::x64::PlatformConfig::GP_BANK, 8};
 		const bool tested = access == ElementAccess::Isset
 			? EncodeBase::encode_zend_native_zval_isset(
-				address(element_reg, 0), value)
+				address(ae.element_reg, 0), value)
 			: EncodeBase::encode_zend_native_zval_empty(
-				address(element_reg, 0), value);
+				address(ae.element_reg, 0), value);
 		if (!tested) {
 			return -1;
 		}
-		mov(answer_reg, value.cur_reg_or_load(this), 8);
+		mov(ae.answer_reg, value.cur_reg_or_load(this), 8);
 		value.reset(this);
 		if (access == ElementAccess::Empty) {
-			ASM(CMP64ri, answer_reg, ZEND_NATIVE_EMPTY_UNKNOWN);
-			generate_raw_jump(Jump::je, slow);
+			ASM(CMP64ri, ae.answer_reg, ZEND_NATIVE_EMPTY_UNKNOWN);
+			generate_raw_jump(Jump::je, ae.slow);
 		}
-		generate_raw_jump(Jump::jmp, answered);
-		label_place(absent);
-		ASM(MOV64ri, answer_reg,
+		generate_raw_jump(Jump::jmp, ae.answered);
+		label_place(ae.absent);
+		ASM(MOV64ri, ae.answer_reg,
 			access == ElementAccess::Empty ? 1 : 0);
-		if (container_temporary) {
+		if (ae.container_temporary) {
 			ValuePart shared{tpde::x64::PlatformConfig::GP_BANK, 8};
 			if (!EncodeBase::encode_zend_native_container_shared(
-					address(frame_reg, container_offset), shared)) {
+					address(er.frame_reg, ae.container_offset), shared)) {
 				return -1;
 			}
 			const AsmReg shared_reg = shared.cur_reg_or_load(this);
 			ASM(TEST64rr, shared_reg, shared_reg);
 			shared.reset(this);
-			generate_raw_jump(Jump::je, slow);
+			generate_raw_jump(Jump::je, ae.slow);
 		}
-		label_place(answered);
+		label_place(ae.answered);
 	}
-	element.reset(this);
-	literals.reset();
-	if (container_temporary) {
+	er.element.reset(this);
+	er.literals.reset();
+	if (ae.container_temporary) {
 		if (!EncodeBase::encode_zend_native_release_shared(
-				address(frame_reg, container_offset))) {
+				address(er.frame_reg, ae.container_offset))) {
 			return -1;
 		}
 	}
@@ -12926,31 +13059,31 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 		auto result_payload = result.part(0);
 		auto result_type = result.part(1);
 		ASM(MOV64rm, result_payload.alloc_reg(),
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset)));
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset)));
 		ASM(MOV32rm, result_type.alloc_reg(),
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset
 					+ offsetof(zval, u1.type_info))));
 		result_payload.set_modified();
 		result_type.set_modified();
-	} else if (tests && node.has_result) {
+	} else if (ae.tests && node.has_result) {
 		auto [result_ref, result] = result_ref_single(node.result);
 		auto result_reg = result.alloc_reg();
-		mov(result_reg, answer_reg, 8);
+		mov(result_reg, ae.answer_reg, 8);
 		result.set_modified();
-	} else if (tests) {
+	} else if (ae.tests) {
 		/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
-		ASM(ADD32ri, answer_reg, IS_FALSE);
+		ASM(ADD32ri, ae.answer_reg, IS_FALSE);
 		ASM(MOV32mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset
 					+ offsetof(zval, u1.type_info))),
-			answer_reg);
+			ae.answer_reg);
 	}
-	answer.reset();
-	finish_guarded(slow, done, std::move(decision), frame_scratch,
-		successors);
+	er.answer.reset();
+	finish_guarded(ae.slow, ae.done, std::move(er.decision), er.frame_scratch,
+		ae.successors);
 	return 1;
 }
 
