@@ -805,26 +805,34 @@ allocation_failure:
 	return FAILURE;
 }
 
-extern "C" zend_result zend_native_image_deserialize(
-	const unsigned char *bytes,
-	size_t size,
-	zend_native_image_decode_reference_t decode_reference,
-	void *reference_context,
-	zend_native_image **out_image,
-	zend_native_diagnostic *diag) {
-	zend_native_serial_image_header header;
-	zend_native_image *image = nullptr;
-	size_t offset;
-	size_t symbol_bytes = 0;
-	size_t component_bytes = 0;
-	bool *bound = nullptr;
+/* How a step of restoring a serialized image ends. */
+enum class image_restore : uint8_t {
+	restored,
+	invalid,
+	allocation_failed,
+};
 
-	if (bytes == nullptr || out_image == nullptr
-			|| decode_reference == nullptr
-			|| size < sizeof(header) || size > MAX_NATIVE_IMAGE_BYTES) {
-		goto invalid_image;
-	}
-	*out_image = nullptr;
+/* What zend_native_image_deserialize() reads and restores. */
+struct image_deserializer {
+	const unsigned char *bytes;
+	size_t size;
+	zend_native_image_decode_reference_t decode_reference;
+	void *reference_context;
+	zend_native_serial_image_header header;
+	zend_native_image *image;
+	/* The next unread byte. */
+	size_t offset;
+	size_t symbol_bytes;
+	size_t component_bytes;
+	/* Per symbol: whether a binding restored it. */
+	bool *bound;
+};
+
+/* Reads the header and checks that the sections it counts fit. */
+static image_restore read_image_header(image_deserializer &state) {
+	const unsigned char *bytes = state.bytes;
+	const size_t size = state.size;
+	zend_native_serial_image_header &header = state.header;
 	std::memcpy(&header, bytes, sizeof(header));
 	if (header.target != ZEND_NATIVE_HOST_TARGET
 			|| header.build_id != native_image_build_id(
@@ -841,29 +849,41 @@ extern "C" zend_result zend_native_image_deserialize(
 			|| header.frame_variable_count < header.argument_count
 			|| header.frame_temporary_count
 				> MAX_RECORDS - header.frame_variable_count) {
-		goto invalid_image;
+		return image_restore::invalid;
 	}
-	offset = sizeof(header);
+	state.offset = sizeof(header);
+	const size_t offset = state.offset;
 	if (header.text_size > size - offset) {
-		goto invalid_image;
+		return image_restore::invalid;
 	}
-	symbol_bytes =
+	state.symbol_bytes =
 		static_cast<size_t>(header.symbol_count)
 			* sizeof(zend_native_image_symbol);
-	if (symbol_bytes > size - offset - header.text_size) {
-		goto invalid_image;
+	if (state.symbol_bytes > size - offset - header.text_size) {
+		return image_restore::invalid;
 	}
-	component_bytes =
+	state.component_bytes =
 		static_cast<size_t>(header.component_count)
 			* sizeof(zend_native_component_entry);
-	if (component_bytes
-			> size - offset - header.text_size - symbol_bytes) {
-		goto invalid_image;
+	if (state.component_bytes
+			> size - offset - header.text_size - state.symbol_bytes) {
+		return image_restore::invalid;
 	}
-	image = static_cast<zend_native_image *>(
-		std::calloc(1, sizeof(*image)));
+	return image_restore::restored;
+}
+
+/* Restores the image with its text, symbols and component entries, and
+ * allocates its bindings. */
+static image_restore restore_image_sections(image_deserializer &state) {
+	const unsigned char *bytes = state.bytes;
+	const zend_native_serial_image_header &header = state.header;
+	const size_t symbol_bytes = state.symbol_bytes;
+	const size_t component_bytes = state.component_bytes;
+	state.image = static_cast<zend_native_image *>(
+		std::calloc(1, sizeof(*state.image)));
+	zend_native_image *image = state.image;
 	if (image == nullptr) {
-		goto allocation_failure;
+		return image_restore::allocation_failed;
 	}
 	image->target = static_cast<zend_native_target>(header.target);
 	image->build_id = header.build_id;
@@ -877,33 +897,33 @@ extern "C" zend_result zend_native_image_deserialize(
 		image->text = static_cast<unsigned char *>(
 			std::malloc(header.text_size));
 		if (image->text == nullptr) {
-			goto allocation_failure;
+			return image_restore::allocation_failed;
 		}
-		std::memcpy(image->text, bytes + offset, header.text_size);
+		std::memcpy(image->text, bytes + state.offset, header.text_size);
 	}
-	offset += header.text_size;
+	state.offset += header.text_size;
 	image->symbol_count = header.symbol_count;
 	image->symbol_capacity = header.symbol_count;
 	if (symbol_bytes != 0) {
 		image->symbols = static_cast<zend_native_image_symbol *>(
 			std::malloc(symbol_bytes));
-		bound = static_cast<bool *>(
+		state.bound = static_cast<bool *>(
 			std::calloc(header.symbol_count, sizeof(bool)));
-		if (image->symbols == nullptr || bound == nullptr) {
-			goto allocation_failure;
+		if (image->symbols == nullptr || state.bound == nullptr) {
+			return image_restore::allocation_failed;
 		}
-		std::memcpy(image->symbols, bytes + offset, symbol_bytes);
+		std::memcpy(image->symbols, bytes + state.offset, symbol_bytes);
 	}
-	offset += symbol_bytes;
+	state.offset += symbol_bytes;
 	image->component_entries = static_cast<zend_native_component_entry *>(
 		std::malloc(component_bytes));
 	if (image->component_entries == nullptr) {
-		goto allocation_failure;
+		return image_restore::allocation_failed;
 	}
 	std::memcpy(
-		image->component_entries, bytes + offset, component_bytes);
+		image->component_entries, bytes + state.offset, component_bytes);
 	image->component_entry_count = header.component_count;
-	offset += component_bytes;
+	state.offset += component_bytes;
 	for (uint32_t index = 0;
 			index < image->component_entry_count; ++index) {
 		const zend_native_component_entry &entry =
@@ -913,7 +933,7 @@ extern "C" zend_result zend_native_image_deserialize(
 				|| entry.frame_variable_count < entry.argument_count
 				|| entry.frame_temporary_count
 					> MAX_RECORDS - entry.frame_variable_count) {
-			goto invalid_image;
+			return image_restore::invalid;
 		}
 	}
 	if (header.binding_count != 0) {
@@ -926,218 +946,308 @@ extern "C" zend_result zend_native_image_deserialize(
 			allocate_call_descriptors(image, header.binding_count);
 		if (image->symbol_bindings == nullptr
 				|| !call_descriptors_allocated) {
-			goto allocation_failure;
+			return image_restore::allocation_failed;
 		}
 		image->symbol_binding_capacity = header.binding_count;
 	}
-	for (uint32_t binding_index = 0;
-			binding_index < header.binding_count; ++binding_index) {
-		zend_native_serial_binding serialized;
-		if (sizeof(serialized) > size - offset) {
-			goto invalid_image;
-		}
-		std::memcpy(&serialized, bytes + offset, sizeof(serialized));
-		offset += sizeof(serialized);
-		if (serialized.symbol_index >= image->symbol_count
-				|| bound[serialized.symbol_index]
-				|| serialized.payload_size > size - offset) {
-			goto invalid_image;
-		}
-		const zend_native_image_symbol &symbol =
-			image->symbols[serialized.symbol_index];
-		const void *address = nullptr;
-		switch (symbol.kind) {
-			case ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL:
-				if (serialized.payload_size != 0
-						|| serialized.primary_reference == 0
-						|| !decode_reference(
-							reference_context,
-							ZEND_NATIVE_IMAGE_REFERENCE_ENTRY_CELL,
-							serialized.primary_reference, &address)
-						|| address == nullptr) {
-					goto invalid_image;
-				}
-				break;
-			case ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL: {
-				if (serialized.payload_size != 0
-						|| serialized.primary_reference == 0
-						|| serialized.receiver_kind
-							> ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
-					goto invalid_image;
-				}
-				auto *cell =
-					static_cast<zend_native_internal_call_cell *>(
-						std::calloc(
-							1, sizeof(zend_native_internal_call_cell)));
-				const void *resolved_function = nullptr;
-				const void *resolved_scope = nullptr;
-				if (cell == nullptr
-						|| !decode_reference(
-							reference_context,
-							ZEND_NATIVE_IMAGE_REFERENCE_FUNCTION,
-							serialized.primary_reference,
-							&resolved_function)
-						|| resolved_function == nullptr
-						|| (serialized.scope_reference != 0
-							&& !decode_reference(
-								reference_context,
-								ZEND_NATIVE_IMAGE_REFERENCE_CLASS,
-								serialized.scope_reference,
-								&resolved_scope))) {
-					std::free(cell);
-					goto invalid_image;
-				}
-				/* The checks of a compiled cell hold for a loaded one. */
-				if (zend_native_internal_call_cell_init(cell,
-						const_cast<zend_function *>(
-							static_cast<const zend_function *>(
-								resolved_function)),
-						const_cast<zend_class_entry *>(
-							static_cast<const zend_class_entry *>(
-								resolved_scope)),
-						static_cast<zend_native_internal_receiver_kind>(
-							serialized.receiver_kind)) != SUCCESS) {
-					std::free(cell);
-					goto invalid_image;
-				}
-				image->owned_internal_call_cells[
-					image->owned_internal_call_cell_count++] = cell;
-				address = cell;
-				break;
-			}
-			case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR: {
-				if (serialized.primary_reference == 0) {
-					goto invalid_image;
-				}
-				auto *descriptor =
-					static_cast<zend_native_direct_call_descriptor *>(
-						std::malloc(serialized.payload_size));
-				if (descriptor == nullptr) {
-					goto allocation_failure;
-				}
-				std::memcpy(
-					descriptor, bytes + offset, serialized.payload_size);
-				size_t expected_size;
-				const void *resolved_function = nullptr;
-				const void *resolved_scope = nullptr;
-				if (!native_descriptor_size(
-						symbol.kind, descriptor, &expected_size)
-						|| expected_size != serialized.payload_size
-						|| descriptor->expected_function != nullptr
-						|| descriptor->called_scope != nullptr
-						|| !decode_reference(
-							reference_context,
-							ZEND_NATIVE_IMAGE_REFERENCE_FUNCTION,
-							serialized.primary_reference,
-							&resolved_function)
-						|| resolved_function == nullptr
-						|| (serialized.scope_reference != 0
-							&& !decode_reference(
-								reference_context,
-								ZEND_NATIVE_IMAGE_REFERENCE_CLASS,
-								serialized.scope_reference,
-								&resolved_scope))) {
-					std::free(descriptor);
-					goto invalid_image;
-				}
-				descriptor->expected_function =
-					const_cast<zend_function *>(
-						static_cast<const zend_function *>(
-							resolved_function));
-				descriptor->called_scope =
-					const_cast<zend_class_entry *>(
-						static_cast<const zend_class_entry *>(
-							resolved_scope));
-				/* The derived flags hold for the function this process
-				 * resolved. */
-				zend_native_direct_call_descriptor_derive(descriptor);
-				image->direct_calls[image->direct_call_count++] = descriptor;
-				address = descriptor;
-				break;
-			}
-			case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR:
-			case ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR: {
-				const bool user_descriptor = symbol.kind
-					== ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR;
-				auto free_descriptor = [user_descriptor](void *allocated) {
-					if (user_descriptor) {
-						zend_native_user_call_descriptor_free(
-							static_cast<zend_native_user_call_descriptor *>(
-								allocated));
-					} else {
-						std::free(allocated);
-					}
-				};
-				void *descriptor = user_descriptor
-					? static_cast<void *>(
-						zend_native_user_call_descriptor_alloc(
-							serialized.payload_size))
-					: std::malloc(serialized.payload_size);
-				if (descriptor == nullptr) {
-					goto allocation_failure;
-				}
-				std::memcpy(
-					descriptor, bytes + offset, serialized.payload_size);
-				size_t expected_size;
-				if (!native_descriptor_size(
-						symbol.kind, descriptor, &expected_size)
-						|| expected_size != serialized.payload_size) {
-					free_descriptor(descriptor);
-					goto invalid_image;
-				}
-				if (symbol.kind
-						== ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR) {
-					image->direct_internal_calls[
-						image->direct_internal_call_count++] =
-							static_cast<
-								zend_native_direct_internal_call_descriptor *>(
-									descriptor);
-				} else {
-					image->user_calls[image->user_call_count++] =
-						static_cast<zend_native_user_call_descriptor *>(
-							descriptor);
-				}
-				address = descriptor;
-				break;
-			}
-			default:
-				goto invalid_image;
-		}
-		offset += serialized.payload_size;
-		image->symbol_bindings[image->symbol_binding_count++] = {
-			serialized.symbol_index, address};
-		bound[serialized.symbol_index] = true;
+	return image_restore::restored;
+}
+
+/* An internal call cell for the function and scope the references name. */
+static image_restore restore_internal_call_cell(
+	image_deserializer &state,
+	const zend_native_serial_binding &serialized,
+	const void **address) {
+	zend_native_image *image = state.image;
+	if (serialized.payload_size != 0
+			|| serialized.primary_reference == 0
+			|| serialized.receiver_kind
+				> ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT) {
+		return image_restore::invalid;
 	}
-	if (offset != size) {
-		goto invalid_image;
+	auto *cell =
+		static_cast<zend_native_internal_call_cell *>(
+			std::calloc(
+				1, sizeof(zend_native_internal_call_cell)));
+	const void *resolved_function = nullptr;
+	const void *resolved_scope = nullptr;
+	if (cell == nullptr
+			|| !state.decode_reference(
+				state.reference_context,
+				ZEND_NATIVE_IMAGE_REFERENCE_FUNCTION,
+				serialized.primary_reference,
+				&resolved_function)
+			|| resolved_function == nullptr
+			|| (serialized.scope_reference != 0
+				&& !state.decode_reference(
+					state.reference_context,
+					ZEND_NATIVE_IMAGE_REFERENCE_CLASS,
+					serialized.scope_reference,
+					&resolved_scope))) {
+		std::free(cell);
+		return image_restore::invalid;
+	}
+	/* The checks of a compiled cell hold for a loaded one. */
+	if (zend_native_internal_call_cell_init(cell,
+			const_cast<zend_function *>(
+				static_cast<const zend_function *>(
+					resolved_function)),
+			const_cast<zend_class_entry *>(
+				static_cast<const zend_class_entry *>(
+					resolved_scope)),
+			static_cast<zend_native_internal_receiver_kind>(
+				serialized.receiver_kind)) != SUCCESS) {
+		std::free(cell);
+		return image_restore::invalid;
+	}
+	image->owned_internal_call_cells[
+		image->owned_internal_call_cell_count++] = cell;
+	*address = cell;
+	return image_restore::restored;
+}
+
+/* A direct call descriptor from its payload, for the function and scope
+ * the references name. */
+static image_restore restore_direct_call_descriptor(
+	image_deserializer &state,
+	const zend_native_serial_binding &serialized,
+	const zend_native_image_symbol &symbol,
+	const void **address) {
+	zend_native_image *image = state.image;
+	if (serialized.primary_reference == 0) {
+		return image_restore::invalid;
+	}
+	auto *descriptor =
+		static_cast<zend_native_direct_call_descriptor *>(
+			std::malloc(serialized.payload_size));
+	if (descriptor == nullptr) {
+		return image_restore::allocation_failed;
+	}
+	std::memcpy(
+		descriptor, state.bytes + state.offset, serialized.payload_size);
+	size_t expected_size;
+	const void *resolved_function = nullptr;
+	const void *resolved_scope = nullptr;
+	if (!native_descriptor_size(
+			symbol.kind, descriptor, &expected_size)
+			|| expected_size != serialized.payload_size
+			|| descriptor->expected_function != nullptr
+			|| descriptor->called_scope != nullptr
+			|| !state.decode_reference(
+				state.reference_context,
+				ZEND_NATIVE_IMAGE_REFERENCE_FUNCTION,
+				serialized.primary_reference,
+				&resolved_function)
+			|| resolved_function == nullptr
+			|| (serialized.scope_reference != 0
+				&& !state.decode_reference(
+					state.reference_context,
+					ZEND_NATIVE_IMAGE_REFERENCE_CLASS,
+					serialized.scope_reference,
+					&resolved_scope))) {
+		std::free(descriptor);
+		return image_restore::invalid;
+	}
+	descriptor->expected_function =
+		const_cast<zend_function *>(
+			static_cast<const zend_function *>(
+				resolved_function));
+	descriptor->called_scope =
+		const_cast<zend_class_entry *>(
+			static_cast<const zend_class_entry *>(
+				resolved_scope));
+	/* The derived flags hold for the function this process
+	 * resolved. */
+	zend_native_direct_call_descriptor_derive(descriptor);
+	image->direct_calls[image->direct_call_count++] = descriptor;
+	*address = descriptor;
+	return image_restore::restored;
+}
+
+/* A direct internal or user call descriptor from its payload. */
+static image_restore restore_call_descriptor(
+	image_deserializer &state,
+	const zend_native_serial_binding &serialized,
+	const zend_native_image_symbol &symbol,
+	const void **address) {
+	zend_native_image *image = state.image;
+	const bool user_descriptor = symbol.kind
+		== ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR;
+	auto free_descriptor = [user_descriptor](void *allocated) {
+		if (user_descriptor) {
+			zend_native_user_call_descriptor_free(
+				static_cast<zend_native_user_call_descriptor *>(
+					allocated));
+		} else {
+			std::free(allocated);
+		}
+	};
+	void *descriptor = user_descriptor
+		? static_cast<void *>(
+			zend_native_user_call_descriptor_alloc(
+				serialized.payload_size))
+		: std::malloc(serialized.payload_size);
+	if (descriptor == nullptr) {
+		return image_restore::allocation_failed;
+	}
+	std::memcpy(
+		descriptor, state.bytes + state.offset, serialized.payload_size);
+	size_t expected_size;
+	if (!native_descriptor_size(
+			symbol.kind, descriptor, &expected_size)
+			|| expected_size != serialized.payload_size) {
+		free_descriptor(descriptor);
+		return image_restore::invalid;
+	}
+	if (symbol.kind
+			== ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR) {
+		image->direct_internal_calls[
+			image->direct_internal_call_count++] =
+				static_cast<
+					zend_native_direct_internal_call_descriptor *>(
+						descriptor);
+	} else {
+		image->user_calls[image->user_call_count++] =
+			static_cast<zend_native_user_call_descriptor *>(
+				descriptor);
+	}
+	*address = descriptor;
+	return image_restore::restored;
+}
+
+/* Restores the next serialized binding and the cell or descriptor it
+ * owns. */
+static image_restore restore_image_binding(image_deserializer &state) {
+	const size_t size = state.size;
+	zend_native_image *image = state.image;
+	zend_native_serial_binding serialized;
+	if (sizeof(serialized) > size - state.offset) {
+		return image_restore::invalid;
+	}
+	std::memcpy(&serialized, state.bytes + state.offset, sizeof(serialized));
+	state.offset += sizeof(serialized);
+	if (serialized.symbol_index >= image->symbol_count
+			|| state.bound[serialized.symbol_index]
+			|| serialized.payload_size > size - state.offset) {
+		return image_restore::invalid;
+	}
+	const zend_native_image_symbol &symbol =
+		image->symbols[serialized.symbol_index];
+	const void *address = nullptr;
+	image_restore status;
+	switch (symbol.kind) {
+		case ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL:
+			if (serialized.payload_size != 0
+					|| serialized.primary_reference == 0
+					|| !state.decode_reference(
+						state.reference_context,
+						ZEND_NATIVE_IMAGE_REFERENCE_ENTRY_CELL,
+						serialized.primary_reference, &address)
+					|| address == nullptr) {
+				return image_restore::invalid;
+			}
+			status = image_restore::restored;
+			break;
+		case ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL:
+			status = restore_internal_call_cell(state, serialized, &address);
+			break;
+		case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_CALL_DESCRIPTOR:
+			status = restore_direct_call_descriptor(
+				state, serialized, symbol, &address);
+			break;
+		case ZEND_NATIVE_IMAGE_SYMBOL_DIRECT_INTERNAL_CALL_DESCRIPTOR:
+		case ZEND_NATIVE_IMAGE_SYMBOL_USER_CALL_DESCRIPTOR:
+			status = restore_call_descriptor(
+				state, serialized, symbol, &address);
+			break;
+		default:
+			return image_restore::invalid;
+	}
+	if (status != image_restore::restored) {
+		return status;
+	}
+	state.offset += serialized.payload_size;
+	image->symbol_bindings[image->symbol_binding_count++] = {
+		serialized.symbol_index, address};
+	state.bound[serialized.symbol_index] = true;
+	return image_restore::restored;
+}
+
+/* Every byte is read, every symbol has a name, and exactly the symbols
+ * other than runtime helpers are bound. */
+static image_restore check_image_symbols(const image_deserializer &state) {
+	const zend_native_image *image = state.image;
+	if (state.offset != state.size) {
+		return image_restore::invalid;
 	}
 	for (uint32_t index = 0; index < image->symbol_count; ++index) {
 		const zend_native_image_symbol &symbol = image->symbols[index];
 		if (std::memchr(symbol.name, '\0', sizeof(symbol.name)) == nullptr
 				|| (symbol.kind == ZEND_NATIVE_IMAGE_SYMBOL_RUNTIME_HELPER
-					? bound[index]
-					: !bound[index])) {
-			goto invalid_image;
+					? state.bound[index]
+					: !state.bound[index])) {
+			return image_restore::invalid;
 		}
 	}
-	std::free(bound);
-	*out_image = image;
-	return SUCCESS;
+	return image_restore::restored;
+}
 
-invalid_image:
-	std::free(bound);
-	zend_native_image_destroy(image);
-	zend_tpde_set_diagnostic(diag,
-		ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-		"serialized native image is incompatible or malformed");
+/* Frees what a failed restore built and reports why it failed. */
+static zend_result fail_image_restore(
+	image_deserializer &state,
+	image_restore status,
+	zend_native_diagnostic *diag) {
+	std::free(state.bound);
+	zend_native_image_destroy(state.image);
+	if (status == image_restore::invalid) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
+			"serialized native image is incompatible or malformed");
+	} else {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to restore serialized native image");
+	}
 	return FAILURE;
-allocation_failure:
-	std::free(bound);
-	zend_native_image_destroy(image);
-	zend_tpde_set_diagnostic(diag,
-		ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
-		"unable to restore serialized native image");
-	return FAILURE;
+}
+
+extern "C" zend_result zend_native_image_deserialize(
+	const unsigned char *bytes,
+	size_t size,
+	zend_native_image_decode_reference_t decode_reference,
+	void *reference_context,
+	zend_native_image **out_image,
+	zend_native_diagnostic *diag) {
+	image_deserializer state{};
+	state.bytes = bytes;
+	state.size = size;
+	state.decode_reference = decode_reference;
+	state.reference_context = reference_context;
+
+	if (bytes == nullptr || out_image == nullptr
+			|| decode_reference == nullptr
+			|| size < sizeof(state.header)
+			|| size > MAX_NATIVE_IMAGE_BYTES) {
+		return fail_image_restore(state, image_restore::invalid, diag);
+	}
+	*out_image = nullptr;
+	image_restore status = read_image_header(state);
+	if (status == image_restore::restored) {
+		status = restore_image_sections(state);
+	}
+	for (uint32_t binding_index = 0; status == image_restore::restored
+			&& binding_index < state.header.binding_count; ++binding_index) {
+		status = restore_image_binding(state);
+	}
+	if (status == image_restore::restored) {
+		status = check_image_symbols(state);
+	}
+	if (status != image_restore::restored) {
+		return fail_image_restore(state, status, diag);
+	}
+	std::free(state.bound);
+	*out_image = state.image;
+	return SUCCESS;
 }
 
 extern "C" void zend_native_serialized_image_destroy(
