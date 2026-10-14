@@ -1381,6 +1381,14 @@ static inline bool zend_tpde_known_numeric_type(uint8_t known)
 }
 
 /*
+ * A binary operation of the numeric opcodes whose source opcode the plan
+ * still holds at its source position, with inline forms enabled.
+ */
+bool zend_tpde_numeric_binary_at(
+	const zend_tpde_plan *plan,
+	const zend_tpde_instruction &instruction);
+
+/*
  * Arithmetic other than division and every ordering or equality comparison
  * of two numbers cannot fail: integer overflow continues in double precision
  * and NaN compares unordered. Such a binary operation needs no slow path.

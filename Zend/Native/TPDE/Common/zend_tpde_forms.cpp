@@ -1732,27 +1732,35 @@ bool zend_tpde_direct_call_has_argument_guard(
 	return false;
 }
 
-bool zend_tpde_numeric_binary_proven(
+bool zend_tpde_numeric_binary_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction &instruction)
 {
 	const zend_mir_executable_value_ref &operation =
 		instruction.value_operation;
-	if (!zend_tpde_linux_inline_forms
-			|| !instruction.has_value_operation
-			|| operation.opcode != ZEND_MIR_OPCODE_VALUE_BINARY_OP
-			|| (!zend_tpde_numeric_arithmetic(operation.source_opcode)
-				&& !zend_tpde_numeric_comparison(operation.source_opcode))
-			|| plan->source_opcodes == nullptr
-			|| operation.source_position_id >= plan->source_opcode_count) {
+	return zend_tpde_linux_inline_forms
+		&& instruction.has_value_operation
+		&& operation.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
+		&& (zend_tpde_numeric_arithmetic(operation.source_opcode)
+			|| zend_tpde_numeric_comparison(operation.source_opcode))
+		&& plan->source_opcodes != nullptr
+		&& operation.source_position_id < plan->source_opcode_count
+		&& plan->source_opcodes[operation.source_position_id].opcode
+			== operation.source_opcode;
+}
+
+bool zend_tpde_numeric_binary_proven(
+	const zend_tpde_plan *plan,
+	const zend_tpde_instruction &instruction)
+{
+	if (!zend_tpde_numeric_binary_at(plan, instruction)) {
 		return false;
 	}
 	const zend_tpde_source_opcode &source =
-		plan->source_opcodes[operation.source_position_id];
-	return source.opcode == operation.source_opcode
-		&& (instruction.numeric_operands_proven
-			|| (zend_tpde_known_numeric_type(source.op1_known_type)
-				&& zend_tpde_known_numeric_type(source.op2_known_type)));
+		plan->source_opcodes[instruction.value_operation.source_position_id];
+	return instruction.numeric_operands_proven
+		|| (zend_tpde_known_numeric_type(source.op1_known_type)
+			&& zend_tpde_known_numeric_type(source.op2_known_type));
 }
 
 bool zend_tpde_typed_numeric_binary(
