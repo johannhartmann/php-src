@@ -22941,6 +22941,28 @@ bool ZendCompilerX64::emit_internal_argument_transfer(
 			|| target_offset > INT32_MAX - sizeof(zval)) {
 		return false;
 	}
+	/* The bound function's parameter decides by value or by reference
+	 * here, as for register arguments; only an unbound cell is tested. */
+	const zend_function *bound_function = call.internal_call_cell != nullptr
+		? call.internal_call_cell->function : nullptr;
+	if (bound_function != nullptr
+			&& ARG_SHOULD_BE_SENT_BY_REF(bound_function, number)) {
+		return false;
+	}
+	/* What the SEND's operand may hold, by Zend's type inference: a
+	 * temporary is never undefined, a reference or INDIRECT. */
+	const zend_tpde_plan *send_plan = ir().plan();
+	const zend_tpde_source_opcode *send_source =
+		send_plan->source_opcodes != nullptr
+			&& send.source_position < send_plan->source_opcode_count
+			&& send_plan->source_opcodes[send.source_position].opcode
+				== send.source_opcode
+		? &send_plan->source_opcodes[send.source_position] : nullptr;
+	const uint32_t send_may_be = send_source == nullptr ? UINT32_MAX
+		: send_source->op1_type == IS_TMP_VAR
+		? send_source->op1_may_be & ~(MAY_BE_UNDEF | MAY_BE_REF
+			| MAY_BE_INDIRECT)
+		: send_source->op1_may_be;
 	auto spilled = spill_target_branch_state();
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
@@ -22953,18 +22975,20 @@ bool ZendCompilerX64::emit_internal_argument_transfer(
 		auto source_reg = source_address.alloc_gp();
 		auto payload_reg = payload.alloc_gp();
 		auto type_reg = type.alloc_gp();
-		auto cell = image_symbol_value(
-			ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
-			call.call_site->target_id);
-		auto cell_scratch = std::move(cell).into_scratch(this);
-		ASM(TEST32mi,
-			FE_MEM(cell_scratch.cur_reg(), 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(
-					zend_native_internal_call_cell,
-					by_value_arguments))),
-			static_cast<int32_t>(UINT32_C(1) << (number - 1)));
-		cell_scratch.reset();
-		generate_raw_jump(Jump::je, slow);
+		if (bound_function == nullptr) {
+			auto cell = image_symbol_value(
+				ZEND_NATIVE_IMAGE_SYMBOL_INTERNAL_CALL_CELL,
+				call.call_site->target_id);
+			auto cell_scratch = std::move(cell).into_scratch(this);
+			ASM(TEST32mi,
+				FE_MEM(cell_scratch.cur_reg(), 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(
+						zend_native_internal_call_cell,
+						by_value_arguments))),
+				static_cast<int32_t>(UINT32_C(1) << (number - 1)));
+			cell_scratch.reset();
+			generate_raw_jump(Jump::je, slow);
+		}
 		ASM(MOV64rm, callee_reg,
 			FE_MEM(canonical_frame_register(), 0, FE_NOREG,
 				static_cast<int32_t>(
@@ -22993,18 +23017,23 @@ bool ZendCompilerX64::emit_internal_argument_transfer(
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
 		ASM(MOVZXr32r8, payload_reg, type_reg);
 		if (from_cv) {
-			auto plain = text_writer.label_create();
-			ASM(CMP32ri, payload_reg, IS_UNDEF);
-			generate_raw_jump(Jump::je, slow);
-			ASM(CMP32ri, payload_reg, IS_REFERENCE);
-			emit_cold_branch(Jump::je, plain, [&] {
-				emit_deref_address(source_reg);
-				ASM(MOV32rm, type_reg,
-					FE_MEM(source_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zval, u1.type_info))));
-			});
-		} else if (from_tmp) {
+			if ((send_may_be & MAY_BE_UNDEF) != 0) {
+				ASM(CMP32ri, payload_reg, IS_UNDEF);
+				generate_raw_jump(Jump::je, slow);
+			}
+			if ((send_may_be & MAY_BE_REF) != 0) {
+				auto plain = text_writer.label_create();
+				ASM(CMP32ri, payload_reg, IS_REFERENCE);
+				emit_cold_branch(Jump::je, plain, [&] {
+					emit_deref_address(source_reg);
+					ASM(MOV32rm, type_reg,
+						FE_MEM(source_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zval, u1.type_info))));
+				});
+			}
+		} else if (from_tmp && (send_may_be
+				& (MAY_BE_REF | MAY_BE_INDIRECT)) != 0) {
 			ASM(CMP32ri, payload_reg, IS_REFERENCE);
 			generate_raw_jump(Jump::je, slow);
 			ASM(CMP32ri, payload_reg, IS_INDIRECT);
@@ -23051,8 +23080,9 @@ bool ZendCompilerX64::emit_internal_argument_transfer(
 						offsetof(zval, u1.type_info))),
 				IS_UNDEF);
 		}
-		generate_raw_jump(Jump::jmp, done);
 	}
+	/* The source setter, out of the hot code. */
+	cold_begin();
 	label_place(slow);
 	{
 		auto source_liveness =
@@ -23068,6 +23098,8 @@ bool ZendCompilerX64::emit_internal_argument_transfer(
 		builder.call(runtime_symbol(
 			ZEND_NATIVE_HELPER_DIRECT_INTERNAL_CALL_SET_SOURCE_ARGUMENT));
 	}
+	generate_raw_jump(Jump::jmp, done);
+	cold_end();
 	label_place(done);
 	reconcile_target_branch_state(spilled);
 	return true;
