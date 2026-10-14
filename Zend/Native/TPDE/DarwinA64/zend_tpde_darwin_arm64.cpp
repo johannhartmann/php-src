@@ -132,6 +132,14 @@ private:
 		const zend_tpde_instruction *call = nullptr;
 	};
 	UserCallContext *user_call_context_ = nullptr;
+	/* The dispatch compile_user_opcode_gateway() emits, for the members
+	 * emitting its dispatch cases. */
+	struct UserOpcodeGatewayContext {
+		const zend_tpde_plan *plan;
+		std::span<const uint32_t> next_landings;
+		::tpde::Label exception;
+	};
+	UserOpcodeGatewayContext *user_opcode_gateway_context_ = nullptr;
 	/*
 	 * The direct user call compile_call_direct_user() compiles, for the
 	 * members compiling its paths.
@@ -796,6 +804,21 @@ public:
 	bool compile_user_opcode_landing();
 	bool compile_user_opcode_dispatch();
 	bool compile_user_opcode_gateway();
+	void compare_position(AsmReg position_reg, uint32_t source);
+	void jump_to_source(uint32_t source);
+	void emit_user_opcode_dispatch_case(
+		const UserOpcodeDispatchCase &dispatch_case);
+	void emit_user_opcode_finally_return(
+		const UserOpcodeDispatchCase &dispatch_case);
+	void emit_user_opcode_catch(const UserOpcodeDispatchCase &dispatch_case);
+	void emit_user_opcode_receive(const UserOpcodeDispatchCase &dispatch_case);
+	void emit_user_opcode_call_fragment(
+		const UserOpcodeDispatchCase &dispatch_case);
+	void emit_user_opcode_multi_branch(
+		const UserOpcodeDispatchCase &dispatch_case);
+	void emit_user_opcode_branch(const UserOpcodeDispatchCase &dispatch_case);
+	void emit_user_opcode_operation(
+		const UserOpcodeDispatchCase &dispatch_case);
 	bool compile_user_call();
 	auto context_register();
 	auto context_argument();
@@ -5704,17 +5727,6 @@ bool ZendCompilerA64::compile_user_opcode_gateway() {
 	generate_raw_jump(Jump::Jeq, dispatch);
 	generate_raw_jump(Jump::jmp, dispatch_to);
 	action.reset(this);
-	auto compare_position = [&](uint32_t source) {
-		if (source <= UINT32_C(0xfff)) {
-			compare_unsigned_immediate(position_reg, source);
-		} else {
-			ScratchReg constant{this};
-			auto constant_reg = constant.alloc_gp();
-			materialize_constant(
-				source, DarwinConfig::GP_BANK, 4, constant_reg);
-			ASM(CMPx, position_reg, constant_reg);
-		}
-	};
 	label_place(continued);
 	ASM(ADDwi, position_reg, position_reg, 1);
 	for (uint32_t source = 0;
@@ -5722,7 +5734,7 @@ bool ZendCompilerA64::compile_user_opcode_gateway() {
 		if (next_landings[source] != source) {
 			continue;
 		}
-		compare_position(source);
+		compare_position(position_reg, source);
 		generate_raw_jump(
 			Jump::Jeq, user_opcode_labels_[source]);
 	}
@@ -5733,7 +5745,7 @@ bool ZendCompilerA64::compile_user_opcode_gateway() {
 		if (next_landings[source] != source) {
 			continue;
 		}
-		compare_position(source);
+		compare_position(position_reg, source);
 		generate_raw_jump(
 			Jump::Jeq, user_opcode_dispatch_labels_[source]);
 	}
@@ -5745,7 +5757,7 @@ bool ZendCompilerA64::compile_user_opcode_gateway() {
 			continue;
 		}
 		auto next_candidate = text_writer.label_create();
-		compare_position(source);
+		compare_position(position_reg, source);
 		generate_raw_jump(Jump::Jne, next_candidate);
 		ASM(CMPwi, selected_opcode_reg,
 			plan->source_opcodes[source].opcode);
@@ -5760,7 +5772,7 @@ bool ZendCompilerA64::compile_user_opcode_gateway() {
 			source_index < dispatch_sources.size(); ++source_index) {
 		const uint32_t source = dispatch_sources[source_index];
 		auto next_candidate = text_writer.label_create();
-		compare_position(source);
+		compare_position(position_reg, source);
 		generate_raw_jump(Jump::Jne, next_candidate);
 		for (size_t target_index = 0;
 				target_index < plan->user_opcode_target_count;
@@ -5777,662 +5789,19 @@ bool ZendCompilerA64::compile_user_opcode_gateway() {
 	generate_raw_jump(Jump::jmp, exception);
 	position.reset();
 	selected_opcode.reset();
+	UserOpcodeGatewayContext gateway{
+		.plan = plan,
+		.next_landings = next_landings,
+		.exception = exception,
+	};
+	const ContextScope<UserOpcodeGatewayContext> gateway_scope{
+		user_opcode_gateway_context_, &gateway};
 	for (size_t case_index = 0; case_index < dispatch_cases.size();
 			++case_index) {
 		const UserOpcodeDispatchCase &dispatch_case =
 			dispatch_cases[case_index];
 		label_place(dispatch_labels[case_index]);
-		const zend_mir_executable_value_ref &operation =
-			*dispatch_case.operation;
-		auto jump_to_source = [&](uint32_t source) {
-			const uint32_t landing =
-				source < next_landings.size()
-					? next_landings[source] : UINT32_MAX;
-			if (landing == UINT32_MAX
-					|| landing >= user_opcode_labels_.size()) {
-				generate_raw_jump(Jump::jmp, exception);
-			} else {
-				generate_raw_jump(
-					Jump::jmp, user_opcode_labels_[landing]);
-			}
-		};
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_NOP) {
-			auto [frame_ref, frame] =
-				val_ref_single(
-					node.operands[dispatch_case.frame_operand]);
-			frame.reset();
-			jump_to_source(dispatch_case.source + 1);
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1) {
-			auto [frame_ref, frame] =
-				val_ref_single(
-					node.operands[dispatch_case.frame_operand]);
-			frame.reset();
-			jump_to_source(
-				plan->user_opcode_source_op1_targets[
-					dispatch_case.source]);
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_CALL) {
-			const uint32_t target =
-				plan->user_opcode_source_op1_targets[
-					dispatch_case.source];
-			if (operation.result_storage_id == ZEND_MIR_ID_INVALID
-					|| target == UINT32_MAX
-					|| operation.result_storage_id
-						> (UINT32_MAX / sizeof(zval))
-							- ZEND_CALL_FRAME_SLOT) {
-				auto [frame_ref, frame] = val_ref_single(
-					node.operands[dispatch_case.frame_operand]);
-				frame.reset();
-				generate_raw_jump(Jump::jmp, exception);
-				continue;
-			}
-			const uint32_t result_offset =
-				static_cast<uint32_t>(
-					(uint64_t{ZEND_CALL_FRAME_SLOT}
-						+ operation.result_storage_id)
-					* sizeof(zval));
-			auto [frame_ref, frame] = val_ref_single(
-				node.operands[dispatch_case.frame_operand]);
-			auto frame_scratch = std::move(frame).into_scratch();
-			ScratchReg value{this};
-			auto value_reg = value.alloc_gp();
-			materialize_constant(
-				UINT64_C(0), DarwinConfig::GP_BANK, 8, value_reg);
-			store_off(frame_scratch.cur_reg(), result_offset,
-				value_reg, 8);
-			materialize_constant(dispatch_case.source,
-				DarwinConfig::GP_BANK, 4, value_reg);
-			store_off(frame_scratch.cur_reg(),
-				result_offset
-					+ static_cast<uint32_t>(
-						offsetof(zval, u2.opline_num)),
-				value_reg, 4);
-			value.reset();
-			frame_scratch.reset();
-			jump_to_source(target);
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN) {
-			if (operation.op1_storage_id == ZEND_MIR_ID_INVALID
-					|| operation.op1.slot_kind
-						!= ZEND_MIR_SOURCE_SLOT_TMP
-					|| operation.op1_storage_id
-						> (UINT32_MAX / sizeof(zval))
-							- ZEND_CALL_FRAME_SLOT) {
-				auto [fast_ref, fast_frame] = val_ref_single(
-					node.operands[dispatch_case.frame_operand]);
-				auto [slow_ref, slow_frame] = val_ref_single(
-					node.operands[
-						dispatch_case.slow_frame_operand]);
-				fast_frame.reset();
-				slow_frame.reset();
-				generate_raw_jump(Jump::jmp, exception);
-				continue;
-			}
-			const uint32_t operand_offset =
-				static_cast<uint32_t>(
-					(uint64_t{ZEND_CALL_FRAME_SLOT}
-						+ operation.op1_storage_id)
-					* sizeof(zval));
-			auto slow_exception = text_writer.label_create();
-			auto [frame_ref, frame] = val_ref_single(
-				node.operands[dispatch_case.frame_operand]);
-			auto frame_scratch = std::move(frame).into_scratch();
-			ScratchReg continuation{this};
-			auto continuation_reg = continuation.alloc_gp();
-			load_off(continuation_reg, frame_scratch.cur_reg(),
-				operand_offset
-					+ static_cast<uint32_t>(
-						offsetof(zval, u2.opline_num)),
-				4);
-			frame_scratch.reset();
-			ASM(CMNwi, continuation_reg, 1);
-			generate_raw_jump(Jump::Jeq, slow_exception);
-			for (uint32_t source = 0;
-					source + 1 < next_landings.size(); ++source) {
-				const uint32_t landing = next_landings[source + 1];
-				if (landing == UINT32_MAX
-						|| landing >= user_opcode_labels_.size()) {
-					continue;
-				}
-				if (source <= UINT32_C(0xfff)) {
-					compare_unsigned_immediate(continuation_reg, source);
-				} else {
-					ScratchReg expected{this};
-					auto expected_reg = expected.alloc_gp();
-					materialize_constant(source,
-						DarwinConfig::GP_BANK, 4, expected_reg);
-					ASM(CMPx, continuation_reg, expected_reg);
-				}
-				auto continued = text_writer.label_create();
-				generate_raw_jump(Jump::Jne, continued);
-				generate_raw_jump(
-					Jump::jmp, user_opcode_labels_[landing]);
-				label_place(continued);
-			}
-			continuation.reset();
-			generate_raw_jump(Jump::jmp, exception);
-			label_place(slow_exception);
-			zend::native::tpde::CCAssignerAppleA64 finally_assigner;
-			CallBuilder finally_call{*this, finally_assigner};
-			finally_call.add_arg(CallArg{
-				node.operands[dispatch_case.slow_frame_operand]});
-			finally_call.add_arg(ValuePart{
-				encode_source_operand(operation.op1), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			finally_call.add_arg(ValuePart{
-				operation.op2_unused_payload, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			finally_call.add_arg(ValuePart{
-				dispatch_case.source, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			finally_call.call(runtime_symbol(dispatch_case.helper));
-			ValuePart selected{DarwinConfig::GP_BANK, 4};
-			finally_call.add_ret(selected, ::tpde::CCAssignment{});
-			auto selected_reg = selected.cur_reg_or_load(this);
-			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-				const zend_mir_instruction_record handler =
-					zend_tpde_instruction_record_at(
-						plan, &plan->instructions[i]);
-				if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
-						&& handler.opcode
-							!= ZEND_MIR_OPCODE_FINALLY_ENTER)
-						|| !zend_mir_id_is_valid(
-							handler.source_position_id)) {
-					continue;
-				}
-				ScratchReg expected{this};
-				auto expected_reg = expected.alloc_gp();
-				materialize_constant(
-					ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
-						| handler.source_position_id,
-					DarwinConfig::GP_BANK, 4, expected_reg);
-				ASM(CMPw, selected_reg, expected_reg);
-				auto continued = text_writer.label_create();
-				generate_raw_jump(Jump::Jne, continued);
-				jump_to_source(handler.source_position_id);
-				label_place(continued);
-			}
-			selected.reset(this);
-			generate_raw_jump(Jump::jmp, exception);
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_CATCH) {
-			zend::native::tpde::CCAssignerAppleA64 catch_assigner;
-			CallBuilder catch_call{*this, catch_assigner};
-			catch_call.add_arg(
-				CallArg{node.operands[dispatch_case.frame_operand]});
-			catch_call.add_arg(ValuePart{
-				encode_source_operand(operation.op1), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			catch_call.add_arg(ValuePart{
-				encode_source_operand(operation.result), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			catch_call.add_arg(ValuePart{
-				operation.extended_value, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			catch_call.add_arg(ValuePart{
-				dispatch_case.source, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			catch_call.call(runtime_symbol(dispatch_case.helper));
-			ValuePart result{DarwinConfig::GP_BANK, 4};
-			catch_call.add_ret(result, ::tpde::CCAssignment{});
-			auto result_reg = result.cur_reg_or_load(this);
-			auto catch_branch = text_writer.label_create();
-			auto catch_matched = text_writer.label_create();
-			ASM(CMPwi, result_reg, ZEND_NATIVE_CATCH_EXCEPTION);
-			generate_raw_jump(Jump::Jeq, exception);
-			ASM(CMPwi, result_reg, ZEND_NATIVE_CATCH_BRANCH);
-			generate_raw_jump(Jump::Jeq, catch_branch);
-			ASM(CMPwi, result_reg, ZEND_NATIVE_CATCH_MATCHED);
-			generate_raw_jump(Jump::Jeq, catch_matched);
-			result.reset(this);
-			generate_raw_jump(Jump::jmp, exception);
-			label_place(catch_branch);
-			jump_to_source(
-				plan->user_opcode_source_op2_targets[
-					dispatch_case.source]);
-			label_place(catch_matched);
-			jump_to_source(dispatch_case.source + 1);
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE) {
-			zend::native::tpde::CCAssignerAppleA64 receive_assigner;
-			CallBuilder receive_call{*this, receive_assigner};
-			receive_call.add_arg(
-				CallArg{node.operands[dispatch_case.frame_operand]});
-			receive_call.add_arg(ValuePart{
-				dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			receive_call.add_arg(ValuePart{
-				operation.op1_unused_payload, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			receive_call.add_arg(ValuePart{
-				encode_source_operand(
-					operation.op2, operation.op2_unused_payload),
-				8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			receive_call.add_arg(ValuePart{
-				operation.op2_unused_payload, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			receive_call.add_arg(ValuePart{
-				encode_source_operand(operation.result), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			receive_call.add_arg(ValuePart{
-				dispatch_case.source, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			receive_call.call(runtime_symbol(dispatch_case.helper));
-			ValuePart status{DarwinConfig::GP_BANK, 4};
-			receive_call.add_ret(status, ::tpde::CCAssignment{});
-			auto status_reg = status.cur_reg_or_load(this);
-			ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
-			auto received = text_writer.label_create();
-			generate_raw_jump(Jump::Jeq, received);
-			status.reset(this);
-			generate_raw_jump(Jump::jmp, exception);
-			label_place(received);
-			jump_to_source(dispatch_case.source + 1);
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT) {
-			zend::native::tpde::CCAssignerAppleA64 fragment_assigner;
-			CallBuilder fragment_call{*this, fragment_assigner};
-			fragment_call.add_arg(
-				CallArg{node.operands[dispatch_case.frame_operand]});
-			fragment_call.add_arg(ValuePart{
-				dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				encode_source_operand(
-					operation.op1, operation.op1_unused_payload),
-				8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				operation.op1_unused_payload, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				encode_source_operand(
-					operation.op2, operation.op2_unused_payload),
-				8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				operation.op2_unused_payload, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				encode_source_operand(
-					operation.result,
-					operation.result_unused_payload),
-				8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				operation.result_unused_payload, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				operation.extended_value, 4,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			fragment_call.add_arg(ValuePart{
-				dispatch_case.source, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			fragment_call.call(runtime_symbol(dispatch_case.helper));
-			ValuePart status{DarwinConfig::GP_BANK, 4};
-			fragment_call.add_ret(status, ::tpde::CCAssignment{});
-			auto status_reg = status.cur_reg_or_load(this);
-			ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
-			auto completed = text_writer.label_create();
-			generate_raw_jump(Jump::Jeq, completed);
-			if (dispatch_case.instruction != nullptr
-					&& zend_mir_id_is_valid(
-						dispatch_case.instruction->exception_block_id)) {
-				auto propagate = text_writer.label_create();
-				ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
-				generate_raw_jump(Jump::Jne, propagate);
-				generate_exception_branch(adaptor->block_ref(
-					dispatch_case.instruction->exception_block_id));
-				label_place(propagate);
-			}
-			{
-				RetBuilder return_builder{
-					*this, *cur_cc_assigner()};
-				return_builder.add(
-					std::move(status), ::tpde::CCAssignment{});
-				return_builder.ret();
-			}
-			label_place(completed);
-			jump_to_source(dispatch_case.source + 1);
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_RETURN) {
-			zend::native::tpde::CCAssignerAppleA64 return_assigner;
-			CallBuilder return_call{*this, return_assigner};
-			return_call.add_arg(
-				CallArg{node.operands[dispatch_case.frame_operand]});
-			return_call.add_arg(ValuePart{
-				dispatch_case.source, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			return_call.add_arg(ValuePart{
-				encode_source_operand(operation.op1), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			return_call.add_arg(ValuePart{
-				dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			return_call.add_arg(ValuePart{
-				operation.extended_value, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			return_call.call(runtime_symbol(dispatch_case.helper));
-			ValuePart status{DarwinConfig::GP_BANK, 4};
-			return_call.add_ret(status, ::tpde::CCAssignment{});
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(
-				std::move(status), ::tpde::CCAssignment{});
-			return_builder.ret();
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_THROW) {
-			zend::native::tpde::CCAssignerAppleA64 throw_assigner;
-			CallBuilder throw_call{*this, throw_assigner};
-			throw_call.add_arg(
-				CallArg{node.operands[dispatch_case.frame_operand]});
-			throw_call.add_arg(ValuePart{
-				encode_source_operand(operation.op1), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			throw_call.add_arg(ValuePart{
-				dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			throw_call.add_arg(ValuePart{
-				dispatch_case.source, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			throw_call.call(runtime_symbol(dispatch_case.helper));
-			ValuePart status{DarwinConfig::GP_BANK, 4};
-			throw_call.add_ret(status, ::tpde::CCAssignment{});
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(
-				std::move(status), ::tpde::CCAssignment{});
-			return_builder.ret();
-			continue;
-		}
-		if (dispatch_case.kind
-				== ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH) {
-			zend_tpde_user_multi_branch layout;
-			if (!zend_tpde_user_multi_branch_at(
-					plan, operation, dispatch_case.target_opcode,
-					&layout)) {
-				auto [frame_ref, frame] = val_ref_single(
-					node.operands[dispatch_case.frame_operand]);
-				frame.reset();
-				generate_raw_jump(Jump::jmp, exception);
-				continue;
-			}
-			std::vector<::tpde::Label> case_labels;
-			case_labels.reserve(layout.case_count);
-			for (uint32_t index = 0;
-					index < layout.case_count;
-					++index) {
-				case_labels.push_back(text_writer.label_create());
-			}
-			auto default_label = text_writer.label_create();
-			auto fallback_label =
-				layout.target_opcode == ZEND_MATCH
-					? default_label : text_writer.label_create();
-			auto long_label = text_writer.label_create();
-			auto string_label = text_writer.label_create();
-			auto [frame_ref, frame] = val_ref_single(
-				node.operands[dispatch_case.frame_operand]);
-			auto frame_scratch = std::move(frame).into_scratch();
-			ScratchReg slot{this};
-			ScratchReg type{this};
-			ScratchReg value{this};
-			ScratchReg probe{this};
-			ScratchReg constant{this};
-			auto slot_reg = slot.alloc_gp();
-			auto type_reg = type.alloc_gp();
-			auto value_reg = value.alloc_gp();
-			auto probe_reg = probe.alloc_gp();
-			auto constant_reg = constant.alloc_gp();
-			add_unsigned_offset(
-				slot_reg, frame_scratch.cur_reg(), layout.operand_offset);
-			load_off(type_reg, slot_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-			auto spilled = spill_before_branch();
-			begin_branch_region();
-			auto dereferenced = text_writer.label_create();
-			ASM(CMPwi, type_reg, IS_REFERENCE);
-			generate_raw_jump(Jump::Jne, dereferenced);
-			load_off(slot_reg, slot_reg, 0, 8);
-			ASM(ADDxi, slot_reg, slot_reg,
-				static_cast<uint32_t>(offsetof(zend_reference, val)));
-			load_off(type_reg, slot_reg,
-				static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
-			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-			label_place(dereferenced);
-			if (layout.target_opcode != ZEND_SWITCH_STRING) {
-				ASM(CMPwi, type_reg, IS_LONG);
-				generate_raw_jump(Jump::Jeq, long_label);
-			}
-			if (layout.target_opcode != ZEND_SWITCH_LONG) {
-				ASM(CMPwi, type_reg, IS_STRING);
-				generate_raw_jump(Jump::Jeq, string_label);
-			}
-			generate_raw_jump(Jump::jmp, fallback_label);
-
-			label_place(long_label);
-			load_off(value_reg, slot_reg, 0, 8);
-			emit_integer_dispatch(
-				layout.cases, layout.case_count, case_labels,
-				value_reg, constant_reg, default_label);
-
-			label_place(string_label);
-			load_off(value_reg, slot_reg, 0, 8);
-			for (uint32_t case_index = 0;
-					case_index < layout.case_count; ++case_index) {
-				const zend_tpde_multi_branch_case &branch_case =
-					layout.cases[case_index];
-				if (branch_case.string_key != nullptr) {
-					auto next_case = text_writer.label_create();
-					const uint64_t length = branch_case.string_length;
-					load_off(probe_reg, value_reg,
-						static_cast<uint32_t>(
-							offsetof(zend_string, len)), 8);
-					materialize_constant(
-						&length, DarwinConfig::GP_BANK, 8,
-						constant_reg);
-					ASM(CMPx, probe_reg, constant_reg);
-					generate_raw_jump(Jump::Jne, next_case);
-					size_t offset = 0;
-					while (offset < branch_case.string_length) {
-						const uint32_t width =
-							branch_case.string_length - offset >= 8 ? 8
-							: branch_case.string_length - offset >= 4 ? 4
-							: branch_case.string_length - offset >= 2 ? 2 : 1;
-						uint64_t expected = 0;
-						memcpy(&expected,
-							branch_case.string_key + offset, width);
-						load_off(probe_reg, value_reg,
-							static_cast<uint32_t>(
-								offsetof(zend_string, val) + offset),
-							width);
-						materialize_constant(
-							&expected, DarwinConfig::GP_BANK,
-							width, constant_reg);
-						ASM(CMPx, probe_reg, constant_reg);
-						generate_raw_jump(Jump::Jne, next_case);
-						offset += width;
-					}
-					generate_raw_jump(
-						Jump::jmp, case_labels[case_index]);
-					label_place(next_case);
-				}
-			}
-			generate_raw_jump(Jump::jmp, default_label);
-
-			for (uint32_t case_index = 0;
-					case_index < layout.case_count; ++case_index) {
-				label_place(case_labels[case_index]);
-				jump_to_source(layout.cases[case_index].target);
-			}
-			label_place(default_label);
-			jump_to_source(layout.default_target);
-			if (layout.target_opcode != ZEND_MATCH) {
-				label_place(fallback_label);
-				jump_to_source(layout.fallback_target);
-			}
-			end_branch_region();
-			release_spilled_regs(spilled);
-			continue;
-		}
-		if (dispatch_case.kind
-					== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2
-				|| dispatch_case.kind
-					== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2
-				|| dispatch_case.kind
-					== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED) {
-			zend::native::tpde::CCAssignerAppleA64 branch_assigner;
-			CallBuilder branch_call{*this, branch_assigner};
-			branch_call.add_arg(
-				CallArg{node.operands[dispatch_case.frame_operand]});
-			branch_call.add_arg(ValuePart{
-				encode_source_operand(operation.op1), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			branch_call.add_arg(ValuePart{
-				encode_source_operand(operation.op2), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			branch_call.add_arg(ValuePart{
-				encode_source_operand(operation.result), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-			branch_call.add_arg(ValuePart{
-				operation.extended_value, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			branch_call.add_arg(ValuePart{
-				dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			branch_call.add_arg(ValuePart{
-				dispatch_case.source, 4, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-			branch_call.call(runtime_symbol(dispatch_case.helper));
-			ValuePart result{DarwinConfig::GP_BANK, 4};
-			branch_call.add_ret(result, ::tpde::CCAssignment{});
-			auto result_reg = result.cur_reg_or_load(this);
-			auto branch_target = text_writer.label_create();
-			auto branch_following = text_writer.label_create();
-			ASM(CMPwi, result_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
-			generate_raw_jump(Jump::Jeq, exception);
-			if (dispatch_case.kind
-					== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2) {
-				ASM(CMPwi, result_reg, ZEND_NATIVE_ITERATOR_NEXT);
-			} else {
-				ASM(CMPwi, result_reg, ZEND_NATIVE_ITERATOR_END);
-			}
-			generate_raw_jump(Jump::Jeq, branch_target);
-			ASM(CMPwi, result_reg,
-				dispatch_case.kind
-						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2
-					? ZEND_NATIVE_ITERATOR_END
-					: ZEND_NATIVE_ITERATOR_NEXT);
-			generate_raw_jump(Jump::Jeq, branch_following);
-			result.reset(this);
-			generate_raw_jump(Jump::jmp, exception);
-			label_place(branch_target);
-			jump_to_source(dispatch_case.kind
-						== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED
-					? plan->user_opcode_source_extended_targets[
-						dispatch_case.source]
-					: plan->user_opcode_source_op2_targets[
-						dispatch_case.source]);
-			label_place(branch_following);
-			jump_to_source(dispatch_case.source + 1);
-			continue;
-		}
-		const bool explicit_object_operands =
-			zend_tpde_helper_has_unused_operand_payloads(
-				dispatch_case.helper);
-		const bool explicit_auxiliary =
-			zend_tpde_helper_has_explicit_auxiliary(
-				dispatch_case.helper);
-		zend::native::tpde::CCAssignerAppleA64 assigner;
-		CallBuilder operation_call{*this, assigner};
-		operation_call.add_arg(
-			CallArg{node.operands[dispatch_case.frame_operand]});
-		operation_call.add_arg(ValuePart{
-			encode_helper_operand(explicit_object_operands,
-				operation.op1, operation.op1_unused_payload), 8,
-			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-		operation_call.add_arg(ValuePart{
-			encode_helper_operand(explicit_object_operands,
-				operation.op2, operation.op2_unused_payload), 8,
-			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-		operation_call.add_arg(ValuePart{
-			encode_helper_operand(explicit_object_operands,
-				operation.result, operation.result_unused_payload), 8,
-			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-		if (explicit_auxiliary) {
-			operation_call.add_arg(ValuePart{
-				encode_helper_operand(explicit_object_operands,
-					operation.auxiliary,
-					operation.auxiliary_unused_payload)
-					| zend_tpde_auxiliary_cache_bits(
-						dispatch_case.helper, operation), 8,
-				DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-		}
-		operation_call.add_arg(ValuePart{
-			operation.extended_value, 4, DarwinConfig::GP_BANK},
-			::tpde::CCAssignment{});
-		operation_call.add_arg(ValuePart{
-			dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
-			::tpde::CCAssignment{});
-		operation_call.add_arg(ValuePart{
-			dispatch_case.source, 4, DarwinConfig::GP_BANK},
-			::tpde::CCAssignment{});
-		operation_call.call(runtime_symbol(dispatch_case.helper));
-		ValuePart status{DarwinConfig::GP_BANK, 4};
-		operation_call.add_ret(status, ::tpde::CCAssignment{});
-		auto status_reg = status.cur_reg_or_load(this);
-		auto completed = text_writer.label_create();
-		ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
-		generate_raw_jump(Jump::Jeq, completed);
-		if (dispatch_case.instruction != nullptr
-				&& zend_mir_id_is_valid(
-					dispatch_case.instruction->exception_block_id)) {
-			auto propagate = text_writer.label_create();
-			ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
-			generate_raw_jump(Jump::Jne, propagate);
-			generate_exception_branch(adaptor->block_ref(
-				dispatch_case.instruction->exception_block_id));
-			label_place(propagate);
-		}
-		{
-			RetBuilder return_builder{*this, *cur_cc_assigner()};
-			return_builder.add(
-				std::move(status), ::tpde::CCAssignment{});
-			return_builder.ret();
-		}
-		label_place(completed);
-		if (ir().user_opcode_result_reload_source(
-					dispatch_case.source)
-				&& dispatch_case.source
-					< user_opcode_result_reload_labels_.size()) {
-			generate_raw_jump(Jump::jmp,
-				user_opcode_result_reload_labels_[
-					dispatch_case.source]);
-			continue;
-		}
-		const uint32_t following =
-			dispatch_case.source + 1 < next_landings.size()
-			? next_landings[dispatch_case.source + 1] : UINT32_MAX;
-		if (following == UINT32_MAX
-				|| following >= user_opcode_labels_.size()) {
-			generate_raw_jump(Jump::jmp, exception);
-		} else {
-			generate_raw_jump(
-				Jump::jmp, user_opcode_labels_[following]);
-		}
+		emit_user_opcode_dispatch_case(dispatch_case);
 	}
 	label_place(return_action);
 	{
@@ -6480,6 +5849,763 @@ bool ZendCompilerA64::compile_user_opcode_gateway() {
 		return_builder.ret();
 	}
 	return true;
+}
+
+/* The code at the dispatch label of one user opcode dispatch case. */
+void ZendCompilerA64::emit_user_opcode_dispatch_case(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_plan *plan = user_opcode_gateway_context_->plan;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_NOP) {
+		auto [frame_ref, frame] =
+			val_ref_single(
+				node.operands[dispatch_case.frame_operand]);
+		frame.reset();
+		jump_to_source(dispatch_case.source + 1);
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_JUMP_OP1) {
+		auto [frame_ref, frame] =
+			val_ref_single(
+				node.operands[dispatch_case.frame_operand]);
+		frame.reset();
+		jump_to_source(
+			plan->user_opcode_source_op1_targets[
+				dispatch_case.source]);
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_CALL) {
+		const uint32_t target =
+			plan->user_opcode_source_op1_targets[
+				dispatch_case.source];
+		if (operation.result_storage_id == ZEND_MIR_ID_INVALID
+				|| target == UINT32_MAX
+				|| operation.result_storage_id
+					> (UINT32_MAX / sizeof(zval))
+						- ZEND_CALL_FRAME_SLOT) {
+			auto [frame_ref, frame] = val_ref_single(
+				node.operands[dispatch_case.frame_operand]);
+			frame.reset();
+			generate_raw_jump(Jump::jmp, exception);
+			return;
+		}
+		const uint32_t result_offset =
+			static_cast<uint32_t>(
+				(uint64_t{ZEND_CALL_FRAME_SLOT}
+					+ operation.result_storage_id)
+				* sizeof(zval));
+		auto [frame_ref, frame] = val_ref_single(
+			node.operands[dispatch_case.frame_operand]);
+		auto frame_scratch = std::move(frame).into_scratch();
+		ScratchReg value{this};
+		auto value_reg = value.alloc_gp();
+		materialize_constant(
+			UINT64_C(0), DarwinConfig::GP_BANK, 8, value_reg);
+		store_off(frame_scratch.cur_reg(), result_offset,
+			value_reg, 8);
+		materialize_constant(dispatch_case.source,
+			DarwinConfig::GP_BANK, 4, value_reg);
+		store_off(frame_scratch.cur_reg(),
+			result_offset
+				+ static_cast<uint32_t>(
+					offsetof(zval, u2.opline_num)),
+			value_reg, 4);
+		value.reset();
+		frame_scratch.reset();
+		jump_to_source(target);
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_FINALLY_RETURN) {
+		emit_user_opcode_finally_return(dispatch_case);
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_CATCH) {
+		emit_user_opcode_catch(dispatch_case);
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_RECEIVE) {
+		emit_user_opcode_receive(dispatch_case);
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_CALL_FRAGMENT) {
+		emit_user_opcode_call_fragment(dispatch_case);
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_RETURN) {
+		zend::native::tpde::CCAssignerAppleA64 return_assigner;
+		CallBuilder return_call{*this, return_assigner};
+		return_call.add_arg(
+			CallArg{node.operands[dispatch_case.frame_operand]});
+		return_call.add_arg(ValuePart{
+			dispatch_case.source, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		return_call.add_arg(ValuePart{
+			encode_source_operand(operation.op1), 8,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		return_call.add_arg(ValuePart{
+			dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		return_call.add_arg(ValuePart{
+			operation.extended_value, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		return_call.call(runtime_symbol(dispatch_case.helper));
+		ValuePart status{DarwinConfig::GP_BANK, 4};
+		return_call.add_ret(status, ::tpde::CCAssignment{});
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(
+			std::move(status), ::tpde::CCAssignment{});
+		return_builder.ret();
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_THROW) {
+		zend::native::tpde::CCAssignerAppleA64 throw_assigner;
+		CallBuilder throw_call{*this, throw_assigner};
+		throw_call.add_arg(
+			CallArg{node.operands[dispatch_case.frame_operand]});
+		throw_call.add_arg(ValuePart{
+			encode_source_operand(operation.op1), 8,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+		throw_call.add_arg(ValuePart{
+			dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		throw_call.add_arg(ValuePart{
+			dispatch_case.source, 4, DarwinConfig::GP_BANK},
+			::tpde::CCAssignment{});
+		throw_call.call(runtime_symbol(dispatch_case.helper));
+		ValuePart status{DarwinConfig::GP_BANK, 4};
+		throw_call.add_ret(status, ::tpde::CCAssignment{});
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(
+			std::move(status), ::tpde::CCAssignment{});
+		return_builder.ret();
+		return;
+	}
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_MULTI_BRANCH) {
+		emit_user_opcode_multi_branch(dispatch_case);
+		return;
+	}
+	if (dispatch_case.kind
+				== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2
+			|| dispatch_case.kind
+				== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_OP2
+			|| dispatch_case.kind
+				== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED) {
+		emit_user_opcode_branch(dispatch_case);
+		return;
+	}
+	emit_user_opcode_operation(dispatch_case);
+}
+
+/* Compares the user opcode position in position_reg with source. */
+void ZendCompilerA64::compare_position(AsmReg position_reg,
+		uint32_t source) {
+	if (source <= UINT32_C(0xfff)) {
+		compare_unsigned_immediate(position_reg, source);
+	} else {
+		ScratchReg constant{this};
+		auto constant_reg = constant.alloc_gp();
+		materialize_constant(
+			source, DarwinConfig::GP_BANK, 4, constant_reg);
+		ASM(CMPx, position_reg, constant_reg);
+	}
+}
+
+/* Jumps to the landing of the user opcode at source, or to the
+ * exception exit when it has none. */
+void ZendCompilerA64::jump_to_source(uint32_t source) {
+	const std::span<const uint32_t> &next_landings =
+		user_opcode_gateway_context_->next_landings;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const uint32_t landing =
+		source < next_landings.size()
+			? next_landings[source] : UINT32_MAX;
+	if (landing == UINT32_MAX
+			|| landing >= user_opcode_labels_.size()) {
+		generate_raw_jump(Jump::jmp, exception);
+	} else {
+		generate_raw_jump(
+			Jump::jmp, user_opcode_labels_[landing]);
+	}
+}
+
+/* FINALLY_RETURN: to the recorded continuation, or through the helper
+ * to the handler of a pending exception. */
+void ZendCompilerA64::emit_user_opcode_finally_return(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_plan *plan = user_opcode_gateway_context_->plan;
+	const std::span<const uint32_t> &next_landings =
+		user_opcode_gateway_context_->next_landings;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	if (operation.op1_storage_id == ZEND_MIR_ID_INVALID
+			|| operation.op1.slot_kind
+				!= ZEND_MIR_SOURCE_SLOT_TMP
+			|| operation.op1_storage_id
+				> (UINT32_MAX / sizeof(zval))
+					- ZEND_CALL_FRAME_SLOT) {
+		auto [fast_ref, fast_frame] = val_ref_single(
+			node.operands[dispatch_case.frame_operand]);
+		auto [slow_ref, slow_frame] = val_ref_single(
+			node.operands[
+				dispatch_case.slow_frame_operand]);
+		fast_frame.reset();
+		slow_frame.reset();
+		generate_raw_jump(Jump::jmp, exception);
+		return;
+	}
+	const uint32_t operand_offset =
+		static_cast<uint32_t>(
+			(uint64_t{ZEND_CALL_FRAME_SLOT}
+				+ operation.op1_storage_id)
+			* sizeof(zval));
+	auto slow_exception = text_writer.label_create();
+	auto [frame_ref, frame] = val_ref_single(
+		node.operands[dispatch_case.frame_operand]);
+	auto frame_scratch = std::move(frame).into_scratch();
+	ScratchReg continuation{this};
+	auto continuation_reg = continuation.alloc_gp();
+	load_off(continuation_reg, frame_scratch.cur_reg(),
+		operand_offset
+			+ static_cast<uint32_t>(
+				offsetof(zval, u2.opline_num)),
+		4);
+	frame_scratch.reset();
+	ASM(CMNwi, continuation_reg, 1);
+	generate_raw_jump(Jump::Jeq, slow_exception);
+	for (uint32_t source = 0;
+			source + 1 < next_landings.size(); ++source) {
+		const uint32_t landing = next_landings[source + 1];
+		if (landing == UINT32_MAX
+				|| landing >= user_opcode_labels_.size()) {
+			continue;
+		}
+		if (source <= UINT32_C(0xfff)) {
+			compare_unsigned_immediate(continuation_reg, source);
+		} else {
+			ScratchReg expected{this};
+			auto expected_reg = expected.alloc_gp();
+			materialize_constant(source,
+				DarwinConfig::GP_BANK, 4, expected_reg);
+			ASM(CMPx, continuation_reg, expected_reg);
+		}
+		auto continued = text_writer.label_create();
+		generate_raw_jump(Jump::Jne, continued);
+		generate_raw_jump(
+			Jump::jmp, user_opcode_labels_[landing]);
+		label_place(continued);
+	}
+	continuation.reset();
+	generate_raw_jump(Jump::jmp, exception);
+	label_place(slow_exception);
+	zend::native::tpde::CCAssignerAppleA64 finally_assigner;
+	CallBuilder finally_call{*this, finally_assigner};
+	finally_call.add_arg(CallArg{
+		node.operands[dispatch_case.slow_frame_operand]});
+	finally_call.add_arg(ValuePart{
+		encode_source_operand(operation.op1), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	finally_call.add_arg(ValuePart{
+		operation.op2_unused_payload, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	finally_call.add_arg(ValuePart{
+		dispatch_case.source, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	finally_call.call(runtime_symbol(dispatch_case.helper));
+	ValuePart selected{DarwinConfig::GP_BANK, 4};
+	finally_call.add_ret(selected, ::tpde::CCAssignment{});
+	auto selected_reg = selected.cur_reg_or_load(this);
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		const zend_mir_instruction_record handler =
+			zend_tpde_instruction_record_at(
+				plan, &plan->instructions[i]);
+		if ((handler.opcode != ZEND_MIR_OPCODE_CATCH_ENTER
+				&& handler.opcode
+					!= ZEND_MIR_OPCODE_FINALLY_ENTER)
+				|| !zend_mir_id_is_valid(
+					handler.source_position_id)) {
+			continue;
+		}
+		ScratchReg expected{this};
+		auto expected_reg = expected.alloc_gp();
+		materialize_constant(
+			ZEND_NATIVE_FINALLY_EXCEPTION_FLAG
+				| handler.source_position_id,
+			DarwinConfig::GP_BANK, 4, expected_reg);
+		ASM(CMPw, selected_reg, expected_reg);
+		auto continued = text_writer.label_create();
+		generate_raw_jump(Jump::Jne, continued);
+		jump_to_source(handler.source_position_id);
+		label_place(continued);
+	}
+	selected.reset(this);
+	generate_raw_jump(Jump::jmp, exception);
+}
+
+/* CATCH through the helper, to the catch or the next handler. */
+void ZendCompilerA64::emit_user_opcode_catch(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_plan *plan = user_opcode_gateway_context_->plan;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	zend::native::tpde::CCAssignerAppleA64 catch_assigner;
+	CallBuilder catch_call{*this, catch_assigner};
+	catch_call.add_arg(
+		CallArg{node.operands[dispatch_case.frame_operand]});
+	catch_call.add_arg(ValuePart{
+		encode_source_operand(operation.op1), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	catch_call.add_arg(ValuePart{
+		encode_source_operand(operation.result), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	catch_call.add_arg(ValuePart{
+		operation.extended_value, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	catch_call.add_arg(ValuePart{
+		dispatch_case.source, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	catch_call.call(runtime_symbol(dispatch_case.helper));
+	ValuePart result{DarwinConfig::GP_BANK, 4};
+	catch_call.add_ret(result, ::tpde::CCAssignment{});
+	auto result_reg = result.cur_reg_or_load(this);
+	auto catch_branch = text_writer.label_create();
+	auto catch_matched = text_writer.label_create();
+	ASM(CMPwi, result_reg, ZEND_NATIVE_CATCH_EXCEPTION);
+	generate_raw_jump(Jump::Jeq, exception);
+	ASM(CMPwi, result_reg, ZEND_NATIVE_CATCH_BRANCH);
+	generate_raw_jump(Jump::Jeq, catch_branch);
+	ASM(CMPwi, result_reg, ZEND_NATIVE_CATCH_MATCHED);
+	generate_raw_jump(Jump::Jeq, catch_matched);
+	result.reset(this);
+	generate_raw_jump(Jump::jmp, exception);
+	label_place(catch_branch);
+	jump_to_source(
+		plan->user_opcode_source_op2_targets[
+			dispatch_case.source]);
+	label_place(catch_matched);
+	jump_to_source(dispatch_case.source + 1);
+}
+
+/* An argument receive through the helper. */
+void ZendCompilerA64::emit_user_opcode_receive(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	zend::native::tpde::CCAssignerAppleA64 receive_assigner;
+	CallBuilder receive_call{*this, receive_assigner};
+	receive_call.add_arg(
+		CallArg{node.operands[dispatch_case.frame_operand]});
+	receive_call.add_arg(ValuePart{
+		dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	receive_call.add_arg(ValuePart{
+		operation.op1_unused_payload, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	receive_call.add_arg(ValuePart{
+		encode_source_operand(
+			operation.op2, operation.op2_unused_payload),
+		8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	receive_call.add_arg(ValuePart{
+		operation.op2_unused_payload, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	receive_call.add_arg(ValuePart{
+		encode_source_operand(operation.result), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	receive_call.add_arg(ValuePart{
+		dispatch_case.source, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	receive_call.call(runtime_symbol(dispatch_case.helper));
+	ValuePart status{DarwinConfig::GP_BANK, 4};
+	receive_call.add_ret(status, ::tpde::CCAssignment{});
+	auto status_reg = status.cur_reg_or_load(this);
+	ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
+	auto received = text_writer.label_create();
+	generate_raw_jump(Jump::Jeq, received);
+	status.reset(this);
+	generate_raw_jump(Jump::jmp, exception);
+	label_place(received);
+	jump_to_source(dispatch_case.source + 1);
+}
+
+/* A call fragment through the helper. */
+void ZendCompilerA64::emit_user_opcode_call_fragment(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	zend::native::tpde::CCAssignerAppleA64 fragment_assigner;
+	CallBuilder fragment_call{*this, fragment_assigner};
+	fragment_call.add_arg(
+		CallArg{node.operands[dispatch_case.frame_operand]});
+	fragment_call.add_arg(ValuePart{
+		dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		encode_source_operand(
+			operation.op1, operation.op1_unused_payload),
+		8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		operation.op1_unused_payload, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		encode_source_operand(
+			operation.op2, operation.op2_unused_payload),
+		8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		operation.op2_unused_payload, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		encode_source_operand(
+			operation.result,
+			operation.result_unused_payload),
+		8, DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		operation.result_unused_payload, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		operation.extended_value, 4,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	fragment_call.add_arg(ValuePart{
+		dispatch_case.source, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	fragment_call.call(runtime_symbol(dispatch_case.helper));
+	ValuePart status{DarwinConfig::GP_BANK, 4};
+	fragment_call.add_ret(status, ::tpde::CCAssignment{});
+	auto status_reg = status.cur_reg_or_load(this);
+	ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
+	auto completed = text_writer.label_create();
+	generate_raw_jump(Jump::Jeq, completed);
+	if (dispatch_case.instruction != nullptr
+			&& zend_mir_id_is_valid(
+				dispatch_case.instruction->exception_block_id)) {
+		auto propagate = text_writer.label_create();
+		ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
+		generate_raw_jump(Jump::Jne, propagate);
+		generate_exception_branch(adaptor->block_ref(
+			dispatch_case.instruction->exception_block_id));
+		label_place(propagate);
+	}
+	{
+		RetBuilder return_builder{
+			*this, *cur_cc_assigner()};
+		return_builder.add(
+			std::move(status), ::tpde::CCAssignment{});
+		return_builder.ret();
+	}
+	label_place(completed);
+	jump_to_source(dispatch_case.source + 1);
+}
+
+/* SWITCH_LONG, SWITCH_STRING or MATCH over the operand in the frame. */
+void ZendCompilerA64::emit_user_opcode_multi_branch(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_plan *plan = user_opcode_gateway_context_->plan;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	zend_tpde_user_multi_branch layout;
+	if (!zend_tpde_user_multi_branch_at(
+			plan, operation, dispatch_case.target_opcode,
+			&layout)) {
+		auto [frame_ref, frame] = val_ref_single(
+			node.operands[dispatch_case.frame_operand]);
+		frame.reset();
+		generate_raw_jump(Jump::jmp, exception);
+		return;
+	}
+	std::vector<::tpde::Label> case_labels;
+	case_labels.reserve(layout.case_count);
+	for (uint32_t index = 0;
+			index < layout.case_count;
+			++index) {
+		case_labels.push_back(text_writer.label_create());
+	}
+	auto default_label = text_writer.label_create();
+	auto fallback_label =
+		layout.target_opcode == ZEND_MATCH
+			? default_label : text_writer.label_create();
+	auto long_label = text_writer.label_create();
+	auto string_label = text_writer.label_create();
+	auto [frame_ref, frame] = val_ref_single(
+		node.operands[dispatch_case.frame_operand]);
+	auto frame_scratch = std::move(frame).into_scratch();
+	ScratchReg slot{this};
+	ScratchReg type{this};
+	ScratchReg value{this};
+	ScratchReg probe{this};
+	ScratchReg constant{this};
+	auto slot_reg = slot.alloc_gp();
+	auto type_reg = type.alloc_gp();
+	auto value_reg = value.alloc_gp();
+	auto probe_reg = probe.alloc_gp();
+	auto constant_reg = constant.alloc_gp();
+	add_unsigned_offset(
+		slot_reg, frame_scratch.cur_reg(), layout.operand_offset);
+	load_off(type_reg, slot_reg,
+		static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+	ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+	auto spilled = spill_before_branch();
+	begin_branch_region();
+	auto dereferenced = text_writer.label_create();
+	ASM(CMPwi, type_reg, IS_REFERENCE);
+	generate_raw_jump(Jump::Jne, dereferenced);
+	load_off(slot_reg, slot_reg, 0, 8);
+	ASM(ADDxi, slot_reg, slot_reg,
+		static_cast<uint32_t>(offsetof(zend_reference, val)));
+	load_off(type_reg, slot_reg,
+		static_cast<uint32_t>(offsetof(zval, u1.type_info)), 4);
+	ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+	label_place(dereferenced);
+	if (layout.target_opcode != ZEND_SWITCH_STRING) {
+		ASM(CMPwi, type_reg, IS_LONG);
+		generate_raw_jump(Jump::Jeq, long_label);
+	}
+	if (layout.target_opcode != ZEND_SWITCH_LONG) {
+		ASM(CMPwi, type_reg, IS_STRING);
+		generate_raw_jump(Jump::Jeq, string_label);
+	}
+	generate_raw_jump(Jump::jmp, fallback_label);
+
+	label_place(long_label);
+	load_off(value_reg, slot_reg, 0, 8);
+	emit_integer_dispatch(
+		layout.cases, layout.case_count, case_labels,
+		value_reg, constant_reg, default_label);
+
+	label_place(string_label);
+	load_off(value_reg, slot_reg, 0, 8);
+	for (uint32_t case_index = 0;
+			case_index < layout.case_count; ++case_index) {
+		const zend_tpde_multi_branch_case &branch_case =
+			layout.cases[case_index];
+		if (branch_case.string_key != nullptr) {
+			auto next_case = text_writer.label_create();
+			const uint64_t length = branch_case.string_length;
+			load_off(probe_reg, value_reg,
+				static_cast<uint32_t>(
+					offsetof(zend_string, len)), 8);
+			materialize_constant(
+				&length, DarwinConfig::GP_BANK, 8,
+				constant_reg);
+			ASM(CMPx, probe_reg, constant_reg);
+			generate_raw_jump(Jump::Jne, next_case);
+			size_t offset = 0;
+			while (offset < branch_case.string_length) {
+				const uint32_t width =
+					branch_case.string_length - offset >= 8 ? 8
+					: branch_case.string_length - offset >= 4 ? 4
+					: branch_case.string_length - offset >= 2 ? 2 : 1;
+				uint64_t expected = 0;
+				memcpy(&expected,
+					branch_case.string_key + offset, width);
+				load_off(probe_reg, value_reg,
+					static_cast<uint32_t>(
+						offsetof(zend_string, val) + offset),
+					width);
+				materialize_constant(
+					&expected, DarwinConfig::GP_BANK,
+					width, constant_reg);
+				ASM(CMPx, probe_reg, constant_reg);
+				generate_raw_jump(Jump::Jne, next_case);
+				offset += width;
+			}
+			generate_raw_jump(
+				Jump::jmp, case_labels[case_index]);
+			label_place(next_case);
+		}
+	}
+	generate_raw_jump(Jump::jmp, default_label);
+
+	for (uint32_t case_index = 0;
+			case_index < layout.case_count; ++case_index) {
+		label_place(case_labels[case_index]);
+		jump_to_source(layout.cases[case_index].target);
+	}
+	label_place(default_label);
+	jump_to_source(layout.default_target);
+	if (layout.target_opcode != ZEND_MATCH) {
+		label_place(fallback_label);
+		jump_to_source(layout.fallback_target);
+	}
+	end_branch_region();
+	release_spilled_regs(spilled);
+}
+
+/* A branch whose helper picks the branch target or the next opcode. */
+void ZendCompilerA64::emit_user_opcode_branch(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const zend_tpde_plan *plan = user_opcode_gateway_context_->plan;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	zend::native::tpde::CCAssignerAppleA64 branch_assigner;
+	CallBuilder branch_call{*this, branch_assigner};
+	branch_call.add_arg(
+		CallArg{node.operands[dispatch_case.frame_operand]});
+	branch_call.add_arg(ValuePart{
+		encode_source_operand(operation.op1), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	branch_call.add_arg(ValuePart{
+		encode_source_operand(operation.op2), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	branch_call.add_arg(ValuePart{
+		encode_source_operand(operation.result), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	branch_call.add_arg(ValuePart{
+		operation.extended_value, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	branch_call.add_arg(ValuePart{
+		dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	branch_call.add_arg(ValuePart{
+		dispatch_case.source, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	branch_call.call(runtime_symbol(dispatch_case.helper));
+	ValuePart result{DarwinConfig::GP_BANK, 4};
+	branch_call.add_ret(result, ::tpde::CCAssignment{});
+	auto result_reg = result.cur_reg_or_load(this);
+	auto branch_target = text_writer.label_create();
+	auto branch_following = text_writer.label_create();
+	ASM(CMPwi, result_reg, ZEND_NATIVE_ITERATOR_EXCEPTION);
+	generate_raw_jump(Jump::Jeq, exception);
+	if (dispatch_case.kind
+			== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2) {
+		ASM(CMPwi, result_reg, ZEND_NATIVE_ITERATOR_NEXT);
+	} else {
+		ASM(CMPwi, result_reg, ZEND_NATIVE_ITERATOR_END);
+	}
+	generate_raw_jump(Jump::Jeq, branch_target);
+	ASM(CMPwi, result_reg,
+		dispatch_case.kind
+				== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_NEXT_OP2
+			? ZEND_NATIVE_ITERATOR_END
+			: ZEND_NATIVE_ITERATOR_NEXT);
+	generate_raw_jump(Jump::Jeq, branch_following);
+	result.reset(this);
+	generate_raw_jump(Jump::jmp, exception);
+	label_place(branch_target);
+	jump_to_source(dispatch_case.kind
+				== ZEND_TPDE_USER_OPCODE_TARGET_BRANCH_END_EXTENDED
+			? plan->user_opcode_source_extended_targets[
+				dispatch_case.source]
+			: plan->user_opcode_source_op2_targets[
+				dispatch_case.source]);
+	label_place(branch_following);
+	jump_to_source(dispatch_case.source + 1);
+}
+
+/* Any other opcode through its value-operation helper. */
+void ZendCompilerA64::emit_user_opcode_operation(
+		const UserOpcodeDispatchCase &dispatch_case) {
+	const Adaptor::InstNode &node = inst_context_->node;
+	const std::span<const uint32_t> &next_landings =
+		user_opcode_gateway_context_->next_landings;
+	const ::tpde::Label exception = user_opcode_gateway_context_->exception;
+	const zend_mir_executable_value_ref &operation =
+		*dispatch_case.operation;
+	const bool explicit_object_operands =
+		zend_tpde_helper_has_unused_operand_payloads(
+			dispatch_case.helper);
+	const bool explicit_auxiliary =
+		zend_tpde_helper_has_explicit_auxiliary(
+			dispatch_case.helper);
+	zend::native::tpde::CCAssignerAppleA64 assigner;
+	CallBuilder operation_call{*this, assigner};
+	operation_call.add_arg(
+		CallArg{node.operands[dispatch_case.frame_operand]});
+	operation_call.add_arg(ValuePart{
+		encode_helper_operand(explicit_object_operands,
+			operation.op1, operation.op1_unused_payload), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	operation_call.add_arg(ValuePart{
+		encode_helper_operand(explicit_object_operands,
+			operation.op2, operation.op2_unused_payload), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	operation_call.add_arg(ValuePart{
+		encode_helper_operand(explicit_object_operands,
+			operation.result, operation.result_unused_payload), 8,
+		DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	if (explicit_auxiliary) {
+		operation_call.add_arg(ValuePart{
+			encode_helper_operand(explicit_object_operands,
+				operation.auxiliary,
+				operation.auxiliary_unused_payload)
+				| zend_tpde_auxiliary_cache_bits(
+					dispatch_case.helper, operation), 8,
+			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
+	}
+	operation_call.add_arg(ValuePart{
+		operation.extended_value, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	operation_call.add_arg(ValuePart{
+		dispatch_case.target_opcode, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	operation_call.add_arg(ValuePart{
+		dispatch_case.source, 4, DarwinConfig::GP_BANK},
+		::tpde::CCAssignment{});
+	operation_call.call(runtime_symbol(dispatch_case.helper));
+	ValuePart status{DarwinConfig::GP_BANK, 4};
+	operation_call.add_ret(status, ::tpde::CCAssignment{});
+	auto status_reg = status.cur_reg_or_load(this);
+	auto completed = text_writer.label_create();
+	ASM(CMPwi, status_reg, ZEND_NATIVE_RETURNED);
+	generate_raw_jump(Jump::Jeq, completed);
+	if (dispatch_case.instruction != nullptr
+			&& zend_mir_id_is_valid(
+				dispatch_case.instruction->exception_block_id)) {
+		auto propagate = text_writer.label_create();
+		ASM(CMPwi, status_reg, ZEND_NATIVE_EXCEPTION);
+		generate_raw_jump(Jump::Jne, propagate);
+		generate_exception_branch(adaptor->block_ref(
+			dispatch_case.instruction->exception_block_id));
+		label_place(propagate);
+	}
+	{
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(
+			std::move(status), ::tpde::CCAssignment{});
+		return_builder.ret();
+	}
+	label_place(completed);
+	if (ir().user_opcode_result_reload_source(
+				dispatch_case.source)
+			&& dispatch_case.source
+				< user_opcode_result_reload_labels_.size()) {
+		generate_raw_jump(Jump::jmp,
+			user_opcode_result_reload_labels_[
+				dispatch_case.source]);
+		return;
+	}
+	const uint32_t following =
+		dispatch_case.source + 1 < next_landings.size()
+		? next_landings[dispatch_case.source + 1] : UINT32_MAX;
+	if (following == UINT32_MAX
+			|| following >= user_opcode_labels_.size()) {
+		generate_raw_jump(Jump::jmp, exception);
+	} else {
+		generate_raw_jump(
+			Jump::jmp, user_opcode_labels_[following]);
+	}
 }
 
 bool ZendCompilerA64::compile_user_call() {
