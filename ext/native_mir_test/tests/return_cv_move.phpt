@@ -15,7 +15,7 @@ opcache.file_update_protection=0
 class D {
     public $self;
     function __construct(public $n) {}
-    function __destruct() { echo "~{$this->n} "; }
+    function __destruct() { echo " ~{$this->n}"; }
 }
 function str($n) { $s = str_repeat('x', $n); return $s; }
 function arr($n) { $a = [$n, $n + 1]; return $a; }
@@ -31,7 +31,7 @@ for ($i = 0; $i < 40; $i++) {
     $k = keep([$i]);
     if ($i % 10 === 0) {
         $o = obj($i);
-        echo "| ";
+        echo " |";
         $o = null;
         echo "\n";
         $c = cyc($i);
@@ -45,11 +45,11 @@ gc_collect_cycles();
 echo "\ndone\n";
 ?>
 --EXPECT--
-~t0 | ~o0 
-~t10 | ~o10 
-~t20 | ~o20 
-~t30 | ~o30 
+ ~t0 | ~o0
+ ~t10 | ~o10
+ ~t20 | ~o20
+ ~t30 | ~o30
 3 2 39 39
 4,15,26,37
-~c30 ~c20 ~c10 ~c0 
+ ~c30 ~c20 ~c10 ~c0
 done

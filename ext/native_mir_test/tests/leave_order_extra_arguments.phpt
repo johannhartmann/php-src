@@ -13,7 +13,7 @@ opcache.file_update_protection=0
 <?php
 class D {
     function __construct(public $n) {}
-    function __destruct() { echo $this->n, " "; }
+    function __destruct() { echo " ", $this->n; }
 }
 function f($a) { $x = new D('cv'); return 1; }
 function g($a) { $x = new D('cv'); }
@@ -21,64 +21,64 @@ function h($a) { $x = new D('cv'); $n = 'x'; return isset($$n); }
 function k($a) { $x = new D('cv'); throw new Exception('e'); }
 for ($i = 0; $i < 50; $i++) {
     f(1, new D('extra'));
-    echo "| ";
+    echo " |";
     g(1, new D('extra2'));
-    echo "| ";
+    echo " |";
     h(1, new D('extra3'));
-    echo "| ";
+    echo " |";
     try { k(1, new D('extra4')); } catch (Exception $e) {}
     echo "\n";
 }
 ?>
 --EXPECT--
-cv extra | cv extra2 | cv extra3 | cv 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-cv extra | cv extra2 | cv extra3 | cv extra4 
-extra4 
+ cv extra | cv extra2 | cv extra3 | cv
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ cv extra | cv extra2 | cv extra3 | cv extra4
+ extra4
