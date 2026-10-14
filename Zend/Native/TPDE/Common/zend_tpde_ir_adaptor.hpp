@@ -1755,11 +1755,13 @@ public:
 	/* Whether a GuardedFast node's control block has the successors
 	 * guarded_successors_of() asserts. */
 	bool guarded_successors_match(const InstNode &node) const {
+		if (node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return false;
+		}
 		const auto guarded_successors =
 			block_succs(IRBlockRef{node.control_block});
-		return !(node.control_block == UINT32_MAX
-			|| node.continuation_block == UINT32_MAX
-			|| guarded_successors.size() < 2
+		return !(guarded_successors.size() < 2
 			|| static_cast<uint32_t>(guarded_successors[0])
 				!= node.continuation_block
 			|| static_cast<uint32_t>(guarded_successors[1])

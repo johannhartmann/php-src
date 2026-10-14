@@ -2427,11 +2427,11 @@ bool ZendCompilerA64::read_array() {
 		return branch_to_guarded_cold();
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
-		const auto guarded_successors =
-			adaptor->block_succs(IRBlockRef{node.control_block});
 		if (!adaptor->guarded_successors_match(node)) {
 			return false;
 		}
+		const auto guarded_successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
 		if (!node.operands.empty()
 				&& ((ir().exact_type(node.operands[0])
 							== ZEND_MIR_SCALAR_TYPE_I64
@@ -6688,8 +6688,6 @@ bool ZendCompilerA64::compile_user_call() {
 	if (phase == nullptr) {
 		return false;
 	}
-	const bool send_phase =
-		node.kind == Adaptor::InstKind::UserCallSend;
 	auto frame_liveness = val_ref(node.operands[0]);
 	auto context_liveness = val_ref(node.operands[1]);
 	/*

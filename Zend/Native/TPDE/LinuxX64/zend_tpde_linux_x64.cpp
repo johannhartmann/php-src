@@ -6699,7 +6699,6 @@ bool ZendCompilerX64::compile_user_opcode_landing(InstContext &ctx) {
 }
 
 bool ZendCompilerX64::compile_user_opcode_gateway(InstContext &ctx) {
-	const IRInstRef instruction = ctx.instruction;
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_plan *plan = ir().plan();
 	const auto dispatch_sources =
@@ -12967,7 +12966,7 @@ int ZendCompilerX64::array_element_decide(
 		label_place(ae.reuse_joined);
 	}
 	/* Held from here on; the lookup needed the registers before. */
-	auto decision_reg = er.decision.alloc_gp();
+	er.decision.alloc_gp();
 	ae.answer_reg = er.answer.alloc_gp();
 	ae.unknown = text_writer.label_create();
 	/* A read of a CV that is not an array may be a string offset: the
@@ -15231,19 +15230,20 @@ int ZendCompilerX64::numeric_framed_binary(LongBinaryContext &lb) {
 				&& nb.result_kind == ZEND_TPDE_MACHINE_VALUE_BOOL)) {
 		return -1;
 	}
-	nb.guarded_successors = nb.guarded
-		? adaptor->block_succs(IRBlockRef{node.control_block})
-		: decltype(adaptor->block_succs(
-			IRBlockRef{node.control_block})){};
-	if (nb.guarded
-			&& (node.control_block == UINT32_MAX
-				|| node.continuation_block == UINT32_MAX
-				|| nb.guarded_successors.size() < 2
+	if (nb.guarded) {
+		if (node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX) {
+			return 0;
+		}
+		nb.guarded_successors =
+			adaptor->block_succs(IRBlockRef{node.control_block});
+		if (nb.guarded_successors.size() < 2
 				|| static_cast<uint32_t>(nb.guarded_successors[0])
 					!= node.continuation_block
 				|| static_cast<uint32_t>(nb.guarded_successors[1])
-					!= node.argument_index)) {
-		return 0;
+					!= node.argument_index) {
+			return 0;
+		}
 	}
 
 	/* Zend's type inference fixes most operand types in numeric

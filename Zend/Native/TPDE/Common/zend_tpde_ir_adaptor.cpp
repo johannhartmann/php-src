@@ -1997,7 +1997,6 @@ private:
 		IRValueRef static_slot_isset_operand = INVALID_VALUE_REF;
 		bool explicit_long_operands = false;
 		uint32_t machine_reference_operand_index = UINT32_MAX;
-		uint32_t direct_call_context_operand = UINT32_MAX;
 		bool direct_internal_argument_transport = false;
 		uint32_t direct_internal_boxed_argument_count = 0;
 		bool lazy_store = false;
@@ -7138,7 +7137,6 @@ bool ZendIRAdaptor::Builder::transport_canonical_long(
 
 void ZendIRAdaptor::Builder::add_literal_reference_operand(InstContext &ctx) {
 	ctx.machine_reference_operand_index = UINT32_MAX;
-	ctx.direct_call_context_operand = UINT32_MAX;
 	ctx.direct_internal_argument_transport = false;
 	ctx.direct_internal_boxed_argument_count = 0;
 	const bool literal_assign_operand =
@@ -8458,9 +8456,6 @@ void ZendIRAdaptor::Builder::add_typed_call_operands(InstContext &ctx) {
 			IRValueRef{FRAME_VALUE});
 		operands_.push_back(
 			IRValueRef{FRAME_VALUE});
-		ctx.direct_call_context_operand =
-			static_cast<uint32_t>(operands_.size())
-				- ctx.operand_offset;
 		for (uint32_t use = 0; use < 3; ++use) {
 			operands_.push_back(
 				IRValueRef{
@@ -8816,9 +8811,6 @@ void ZendIRAdaptor::Builder::add_zend_frame_call_operands(InstContext &ctx) {
 				if (value == INVALID_VALUE_REF) {
 					value = IRValueRef{FRAME_VALUE};
 				}
-				if (value == INVALID_VALUE_REF) {
-					valid_ = false;
-				}
 				operands_.push_back(value);
 			}
 			const bool leaf_scalar_frame =
@@ -8847,9 +8839,6 @@ void ZendIRAdaptor::Builder::add_zend_frame_call_operands(InstContext &ctx) {
 		operands_.push_back(IRValueRef{FRAME_VALUE});
 	}
 	if (ctx.instruction.direct_call != nullptr) {
-		ctx.direct_call_context_operand =
-			static_cast<uint32_t>(operands_.size())
-				- ctx.operand_offset;
 		const uint32_t context_use_count =
 			zend_tpde_direct_user_call_context_uses(
 				(ctx.instruction.direct_call->flags
