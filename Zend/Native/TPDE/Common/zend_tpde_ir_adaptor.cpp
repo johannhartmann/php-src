@@ -8546,6 +8546,23 @@ void ZendIRAdaptor::Builder::add_typed_call_argument(InstContext &ctx,
 		&& machine_value_is_register_authoritative(
 			value)
 		&& machine_value_has_register_definition(value);
+	/*
+	 * The boxed read is either the owned register copy or, when the
+	 * read stayed slot-authoritative (a call or a join between it and
+	 * this call), a borrowed reload of the temporary the call consumes.
+	 * Either way the hot edge must guard its type and drop the
+	 * temporary's reference.
+	 */
+	const bool consumed_slot_reload =
+		value != INVALID_VALUE_REF
+		&& ownership(value) == ZEND_MIR_OWNERSHIP_STATE_BORROWED
+		&& (argument.source_operand.slot_kind
+				== ZEND_MIR_SOURCE_SLOT_TMP
+			|| argument.source_operand.slot_kind
+				== ZEND_MIR_SOURCE_SLOT_VAR)
+		&& zend_mir_id_is_valid(canonical_storage(value))
+		&& canonical_storage(value)
+			== source_operand_storage_id(argument.source_operand);
 	const bool guarded_boxed_pointer =
 		function_mode_ == FunctionMode::ZendEntry
 		&& !binding_stayed_canonical
@@ -8555,8 +8572,9 @@ void ZendIRAdaptor::Builder::add_typed_call_argument(InstContext &ctx,
 			== ZEND_MIR_REPRESENTATION_ZVAL
 		&& machine_kind(value)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-		&& ownership(value)
-			== ZEND_MIR_OWNERSHIP_STATE_OWNED
+		&& (ownership(value)
+				== ZEND_MIR_OWNERSHIP_STATE_OWNED
+			|| consumed_slot_reload)
 		&& machine_value_is_register_authoritative(value)
 		&& machine_value_has_register_definition(value)
 		&& n < ctx.instruction.direct_call->argument_count

@@ -5464,6 +5464,22 @@ bool ZendCompilerA64::compile_typed_call_guard() {
 	auto masked_type_reg = masked_type.alloc_gp();
 	auto cold_transfer = text_writer.label_create();
 	auto hot_branch = text_writer.label_create();
+	/*
+	 * A borrowed reload is the temporary the call consumes, read
+	 * before code that may have dropped the container's reference.
+	 * The typed call needs another owner, so that the hot edge's
+	 * release cannot free: a counted value with a single reference
+	 * takes the canonical call. Only an uncounted value (an interned
+	 * string) leaves a count of 1 for the hot call. A guarded integer
+	 * carries no reference.
+	 */
+	auto consumed_reload = [&](uint32_t index) {
+		return guarded_expected_types[index] >= IS_STRING
+			&& ir().ownership(
+					node.operands[guarded_operand_offset + 2 * index])
+				== ZEND_MIR_OWNERSHIP_STATE_BORROWED;
+	};
+	std::vector<std::pair<::tpde::Label, ::tpde::Label>> single_owner_checks;
 	const auto spilled = spill_before_branch();
 	begin_branch_region();
 	emit_observer_exit(cold_transfer);
@@ -5472,9 +5488,31 @@ bool ZendCompilerA64::compile_typed_call_guard() {
 			guarded_type_regs[index], Z_TYPE_MASK);
 		ASM(CMPwi, masked_type_reg, guarded_expected_types[index]);
 		generate_raw_jump(Jump::Jne, cold_transfer);
+		if (!consumed_reload(index)) {
+			continue;
+		}
+		const auto single = text_writer.label_create();
+		const auto shared = text_writer.label_create();
+		load_off(masked_type_reg, guarded_payload_regs[index],
+			static_cast<uint32_t>(offsetof(zend_refcounted_h, refcount)), 4);
+		ASM(CMPwi, masked_type_reg, 1);
+		generate_raw_jump(Jump::Jle, single);
+		label_place(shared);
+		single_owner_checks.emplace_back(single, shared);
 	}
 	generate_raw_jump(Jump::jmp, hot_branch);
 
+	for (uint32_t index = 0, check = 0; index < guarded_count; ++index) {
+		if (!consumed_reload(index)) {
+			continue;
+		}
+		label_place(single_owner_checks[check].first);
+		ASM(TSTwi, guarded_type_regs[index],
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::Jne, cold_transfer);
+		generate_raw_jump(Jump::jmp, single_owner_checks[check].second);
+		++check;
+	}
 	label_place(cold_transfer);
 	for (uint32_t index = 0; index < guarded_count; ++index) {
 		store_off(frame_reg, guarded_offsets[index],
@@ -10635,12 +10673,21 @@ bool ZendCompilerA64::compile_direct_user_typed_body() {
 			false)) {
 		return false;
 	}
+	/*
+	 * Operands after the arguments are the temporaries of the caller's
+	 * fast reads, each holding one reference: an owned register copy or
+	 * a borrowed reload of the slot. The typed body, which cannot fail
+	 * on this target, only borrowed them; drop that reference. Another
+	 * owner keeps the count above zero (compile_typed_call_guard()).
+	 */
 	for (uint32_t operand = argument_count;
 			operand < node.operands.size(); ++operand) {
+		const zend_mir_ownership_state ownership =
+			ir().ownership(node.operands[operand]);
 		if (ir().machine_kind(node.operands[operand])
 				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				|| ir().ownership(node.operands[operand])
-					!= ZEND_MIR_OWNERSHIP_STATE_OWNED) {
+				|| (ownership != ZEND_MIR_OWNERSHIP_STATE_OWNED
+					&& ownership != ZEND_MIR_OWNERSHIP_STATE_BORROWED)) {
 			return false;
 		}
 		auto boxed = val_ref(node.operands[operand]);
