@@ -2041,6 +2041,10 @@ private:
 	void add_return_source_operands(
 			uint32_t i, const zend_tpde_instruction &instruction);
 	void add_user_call_operands(InstContext &ctx);
+	void add_typed_call_operands(InstContext &ctx);
+	void add_typed_call_argument(InstContext &ctx, uint32_t n,
+			std::vector<IRValueRef> &typed_call_values);
+	void add_zend_frame_call_operands(InstContext &ctx);
 	void add_internal_call_operands(InstContext &ctx);
 	void add_materialization_operands(InstContext &ctx);
 	uint32_t append_boundary_operand(
@@ -8352,319 +8356,333 @@ void ZendIRAdaptor::Builder::add_user_call_operands(InstContext &ctx) {
 	const bool typed_local_call =
 		frozen_typed_component_call(ctx.i);
 	if (typed_local_call) {
-		std::vector<IRValueRef> typed_call_values;
-		typed_call_values.reserve(
-			ctx.instruction.call_argument_count);
-		for (uint32_t n = 0;
-				n < ctx.instruction.call_argument_count; ++n) {
-			zend_mir_call_argument_ref argument{};
-			if (!zend_tpde_call_argument_at(plan_,
-					ctx.instruction.call_argument_offset + n,
-					&argument)) {
-				valid_ = false;
-				typed_call_values.push_back(
-					INVALID_VALUE_REF);
-				continue;
-			}
-			const uint32_t call_argument_index =
-				ctx.instruction.call_argument_offset + n;
-			const zend_tpde_source_value_binding &argument_binding =
-				plan_->call_argument_bindings[call_argument_index];
-			const int32_t binding_definition =
-				argument_binding.definition_instruction_index;
-			const bool binding_stayed_canonical =
-				binding_definition >= 0
-				&& static_cast<uint32_t>(binding_definition)
-					< active_instruction_results().size()
-				&& active_instruction_results()[
-					static_cast<uint32_t>(binding_definition)]
-					== INVALID_VALUE_REF;
-			IRValueRef value = source_binding_value_ref(
-				argument_binding);
-			if (value == INVALID_VALUE_REF) {
-				value = source_operand_value_ref(
-					argument.source_operand);
-			}
-			const zend_tpde_plan *callee =
-				ctx.instruction.component_target_index
-						< component_plans_.size()
-					? component_plans_[
-						ctx.instruction.component_target_index]
-					: nullptr;
-			const int32_t callee_value =
-				callee != nullptr
-						&& callee->argument_value_indices != nullptr
-						&& n < callee->argument_count
-					? callee->argument_value_indices[n] : -1;
-			const TypedBodyAbiType transport_abi =
-				callee_value >= 0
-						&& static_cast<uint32_t>(callee_value)
-							< callee->value_count
-					? typed_body_value_abi(
-						callee,
-						static_cast<uint32_t>(callee_value))
-					: TypedBodyAbiType{};
-			/*
-			 * A Zend-entry value may stay slot-authoritative until
-			 * a local-ABI call needs its machine representation:
-			 * scalars, pointers and boxed values are materialized
-			 * only in the observer-free hot block, and the cold
-			 * call reads the frame.
-			 */
-			const bool transport_scalar =
-				transport_abi.valid
-				&& zend_mir_scalar_type_is_exact(
-					transport_abi.exact_type)
-				&& transport_abi.exact_type
-					!= ZEND_MIR_SCALAR_TYPE_NULL;
-			const bool transport_pointer =
-				transport_abi.valid
-				&& zend_tpde_machine_kind_is_pointer(
-					transport_abi.machine_kind);
-			const bool transport_boxed =
-				transport_abi.valid
-				&& transport_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-			const bool matching_register_value =
-				!binding_stayed_canonical
-				&& value != INVALID_VALUE_REF
-				&& representation(value)
-					== transport_abi.representation
-				&& exact_type(value)
-					== transport_abi.exact_type
-				&& machine_kind(value)
-					== transport_abi.machine_kind
-				&& machine_value_is_register_authoritative(
-					value)
-				&& machine_value_has_register_definition(value);
-			const bool guarded_boxed_pointer =
-				function_mode_ == FunctionMode::ZendEntry
-				&& !binding_stayed_canonical
-				&& transport_pointer
-				&& value != INVALID_VALUE_REF
-				&& representation(value)
-					== ZEND_MIR_REPRESENTATION_ZVAL
-				&& machine_kind(value)
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& ownership(value)
-					== ZEND_MIR_OWNERSHIP_STATE_OWNED
-				&& machine_value_is_register_authoritative(value)
-				&& machine_value_has_register_definition(value)
-				&& n < ctx.instruction.direct_call->argument_count
-				&& ctx.instruction.direct_call->arguments[n].exact_type
-					== transport_abi.exact_type
-				&& guarded_hot_blocks[ctx.i] != UINT32_MAX
-				&& guarded_cold_blocks[ctx.i] != UINT32_MAX;
-			const bool guarded_boxed_integer =
-				function_mode_ == FunctionMode::ZendEntry
-				&& !binding_stayed_canonical
-				&& transport_scalar
-				&& transport_abi.representation
-					== ZEND_MIR_REPRESENTATION_I64
-				&& transport_abi.exact_type
-					== ZEND_MIR_SCALAR_TYPE_I64
-				&& transport_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_I64
-				&& value != INVALID_VALUE_REF
-				&& representation(value)
-					== ZEND_MIR_REPRESENTATION_ZVAL
-				&& machine_kind(value)
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& zend_mir_id_is_valid(canonical_storage(value))
-				&& machine_value_is_register_authoritative(value)
-				&& machine_value_has_register_definition(value)
-				&& n < ctx.instruction.direct_call->argument_count
-				&& ctx.instruction.direct_call->arguments[n].mode
-					== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-				&& ctx.instruction.direct_call->arguments[n].exact_type
-					== ZEND_MIR_SCALAR_TYPE_I64
-					&& ctx.instruction.direct_call_argument_guard_types != nullptr
-					&& ctx.instruction.direct_call_argument_guard_types[n]
-						== ZEND_MIR_SCALAR_TYPE_I64
-					&& guarded_hot_blocks[ctx.i] != UINT32_MAX
-					&& guarded_cold_blocks[ctx.i] != UINT32_MAX;
-			if (guarded_boxed_pointer) {
-				const IRValueRef boxed = value;
-				const IRValueRef transported = add_derived_value(
-					transport_abi.representation,
-					transport_abi.exact_type,
-					canonical_storage(boxed), false, 0,
-					transport_abi.machine_kind,
-					ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-					ZEND_MIR_REFCOUNT_UNKNOWN);
-				const uint32_t unbox_operand_offset =
-					static_cast<uint32_t>(operands_.size());
-				operands_.push_back(boxed);
-				add_node(block_instructions,
-					guarded_hot_blocks[ctx.i], InstNode{
-						.kind = InstKind::UnboxPointer,
-						.mir_instruction_index = ctx.i,
-						.argument_index = UINT32_MAX,
-						.result = transported,
-						.operand_offset = unbox_operand_offset,
-						.operand_count = 1,
-						.has_result = true,
-						.storage_id = canonical_storage(boxed),
-						.exact_type = transport_abi.exact_type});
-				const uint32_t expected_zval_type =
-					zend_tpde_machine_value_zval_type(
-						transport_abi.machine_kind);
-				if (expected_zval_type == IS_UNDEF) {
-					valid_ = false;
-				} else {
-					ctx.typed_call_value_guards.emplace_back(
-						boxed, expected_zval_type);
-					ctx.typed_call_owned_boxed_arguments.push_back(
-						boxed);
-					value = transported;
-				}
-			}
-			if (guarded_boxed_integer) {
-				const IRValueRef boxed = value;
-				const IRValueRef transported = add_derived_value(
-					transport_abi.representation,
-					transport_abi.exact_type,
-					canonical_storage(boxed), false, 0,
-					transport_abi.machine_kind,
-					ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-					ZEND_MIR_REFCOUNT_IMMORTAL);
-				const uint32_t unbox_operand_offset =
-					static_cast<uint32_t>(operands_.size());
-				operands_.push_back(boxed);
-				add_node(block_instructions,
-					guarded_hot_blocks[ctx.i], InstNode{
-						.kind = InstKind::UnboxScalar,
-						.mir_instruction_index = ctx.i,
-						.argument_index = UINT32_MAX,
-						.result = transported,
-						.operand_offset = unbox_operand_offset,
-						.operand_count = 1,
-						.has_result = true,
-						.storage_id = canonical_storage(boxed),
-						.exact_type = transport_abi.exact_type});
-				ctx.typed_call_value_guards.emplace_back(
-					boxed, IS_LONG);
-				value = transported;
-			}
-			/* A register or constant scalar is boxed for a zval
-			 * parameter. */
-			uint64_t box_constant_bits;
-			const bool box_scalar =
-				!binding_stayed_canonical
-				&& transport_boxed
-				&& value != INVALID_VALUE_REF
-				&& !guarded_boxed_pointer
-				&& !guarded_boxed_integer
-				&& zend_tpde_abi_boxes_into(
-					TypedBodyAbiType{representation(value),
-						exact_type(value), machine_kind(value),
-						ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE, true},
-					transport_abi)
-				&& (constant(value, &box_constant_bits)
-					|| (machine_value_is_register_authoritative(
-							value)
-						&& machine_value_has_register_definition(
-							value)));
-			if (box_scalar) {
-				const IRValueRef boxed = add_derived_value(
-					ZEND_MIR_REPRESENTATION_ZVAL,
-					transport_abi.exact_type, ZEND_MIR_ID_INVALID,
-					false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
-					ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-					ZEND_MIR_REFCOUNT_IMMORTAL);
-				const uint32_t box_operand_offset =
-					static_cast<uint32_t>(operands_.size());
-				operands_.push_back(value);
-				add_node(block_instructions,
-					guarded_hot_blocks[ctx.i] != UINT32_MAX
-						? guarded_hot_blocks[ctx.i]
-						: static_cast<uint32_t>(ctx.block),
-					InstNode{
-						.kind = InstKind::BoxScalar,
-						.mir_instruction_index = ctx.i,
-						.argument_index = UINT32_MAX,
-						.result = boxed,
-						.operand_offset = box_operand_offset,
-						.operand_count = 1,
-						.has_result = true,
-						.storage_id = ZEND_MIR_ID_INVALID,
-						.exact_type = exact_type(value)});
-				value = boxed;
-			}
-			if (function_mode_ == FunctionMode::ZendEntry
-					&& (transport_scalar
-						|| transport_pointer
-						|| transport_boxed)
-					&& !matching_register_value
-					&& !guarded_boxed_pointer
-					&& !guarded_boxed_integer
-					&& !box_scalar) {
-				zend_mir_storage_id storage_id =
-					canonical_storage(value);
-				if (!zend_mir_id_is_valid(storage_id)) {
-					storage_id = source_operand_storage_id(
-						argument.source_operand);
-				}
-				const IRValueRef address =
-					frame_slot_address(storage_id);
-				const IRValueRef transported =
-					address != INVALID_VALUE_REF
-						? add_derived_value(
-							transport_abi.representation,
-							transport_abi.exact_type,
-							storage_id, false, 0,
-							transport_abi.machine_kind,
-							ZEND_MIR_OWNERSHIP_STATE_BORROWED,
-							ZEND_MIR_REFCOUNT_UNKNOWN)
-						: INVALID_VALUE_REF;
-				if (transported != INVALID_VALUE_REF) {
-					const uint32_t load_operand_offset =
-						static_cast<uint32_t>(operands_.size());
-					operands_.push_back(address);
-					const uint32_t transport_block =
-						guarded_hot_blocks[ctx.i] != UINT32_MAX
-							? guarded_hot_blocks[ctx.i]
-							: static_cast<uint32_t>(ctx.block);
-					add_node(block_instructions,
-						transport_block, InstNode{
-							.kind = InstKind::ZvalPayloadLoad,
-							.mir_instruction_index = ctx.i,
-							.argument_index = UINT32_MAX,
-							.result = transported,
-							.operand_offset = load_operand_offset,
-							.operand_count = 1,
-							.has_result = true,
-							.storage_id = storage_id,
-							.exact_type = transport_abi.exact_type});
-					value = transported;
-				}
-			}
-			if (!machine_value_has_result_representation(value)
-					|| !machine_value_has_register_definition(value)) {
-				valid_ = false;
-			}
-			typed_call_values.push_back(value);
-		}
-		ctx.operand_offset =
-			static_cast<uint32_t>(operands_.size());
-		operands_.insert(operands_.end(),
-			typed_call_values.begin(),
-			typed_call_values.end());
-		if (function_mode_ == FunctionMode::ZendEntry) {
-			operands_.push_back(
-				IRValueRef{FRAME_VALUE});
-			operands_.push_back(
-				IRValueRef{FRAME_VALUE});
-			ctx.direct_call_context_operand =
-				static_cast<uint32_t>(operands_.size())
-					- ctx.operand_offset;
-			for (uint32_t use = 0; use < 3; ++use) {
-				operands_.push_back(
-					IRValueRef{
-						EXECUTION_CONTEXT_ARGUMENT});
-			}
-		}
+		add_typed_call_operands(ctx);
 	} else {
+		add_zend_frame_call_operands(ctx);
+	}
+}
+
+void ZendIRAdaptor::Builder::add_typed_call_operands(InstContext &ctx) {
+	std::vector<IRValueRef> typed_call_values;
+	typed_call_values.reserve(
+		ctx.instruction.call_argument_count);
+	for (uint32_t n = 0;
+			n < ctx.instruction.call_argument_count; ++n) {
+		add_typed_call_argument(ctx, n, typed_call_values);
+	}
+	ctx.operand_offset =
+		static_cast<uint32_t>(operands_.size());
+	operands_.insert(operands_.end(),
+		typed_call_values.begin(),
+		typed_call_values.end());
+	if (function_mode_ == FunctionMode::ZendEntry) {
+		operands_.push_back(
+			IRValueRef{FRAME_VALUE});
+		operands_.push_back(
+			IRValueRef{FRAME_VALUE});
+		ctx.direct_call_context_operand =
+			static_cast<uint32_t>(operands_.size())
+				- ctx.operand_offset;
+		for (uint32_t use = 0; use < 3; ++use) {
+			operands_.push_back(
+				IRValueRef{
+					EXECUTION_CONTEXT_ARGUMENT});
+		}
+	}
+}
+
+void ZendIRAdaptor::Builder::add_typed_call_argument(InstContext &ctx,
+		uint32_t n, std::vector<IRValueRef> &typed_call_values) {
+	zend_mir_call_argument_ref argument{};
+	if (!zend_tpde_call_argument_at(plan_,
+			ctx.instruction.call_argument_offset + n,
+			&argument)) {
+		valid_ = false;
+		typed_call_values.push_back(
+			INVALID_VALUE_REF);
+		return;
+	}
+	const uint32_t call_argument_index =
+		ctx.instruction.call_argument_offset + n;
+	const zend_tpde_source_value_binding &argument_binding =
+		plan_->call_argument_bindings[call_argument_index];
+	const int32_t binding_definition =
+		argument_binding.definition_instruction_index;
+	const bool binding_stayed_canonical =
+		binding_definition >= 0
+		&& static_cast<uint32_t>(binding_definition)
+			< active_instruction_results().size()
+		&& active_instruction_results()[
+			static_cast<uint32_t>(binding_definition)]
+			== INVALID_VALUE_REF;
+	IRValueRef value = source_binding_value_ref(
+		argument_binding);
+	if (value == INVALID_VALUE_REF) {
+		value = source_operand_value_ref(
+			argument.source_operand);
+	}
+	const zend_tpde_plan *callee =
+		ctx.instruction.component_target_index
+				< component_plans_.size()
+			? component_plans_[
+				ctx.instruction.component_target_index]
+			: nullptr;
+	const int32_t callee_value =
+		callee != nullptr
+				&& callee->argument_value_indices != nullptr
+				&& n < callee->argument_count
+			? callee->argument_value_indices[n] : -1;
+	const TypedBodyAbiType transport_abi =
+		callee_value >= 0
+				&& static_cast<uint32_t>(callee_value)
+					< callee->value_count
+			? typed_body_value_abi(
+				callee,
+				static_cast<uint32_t>(callee_value))
+			: TypedBodyAbiType{};
+	/*
+	 * A Zend-entry value may stay slot-authoritative until
+	 * a local-ABI call needs its machine representation:
+	 * scalars, pointers and boxed values are materialized
+	 * only in the observer-free hot block, and the cold
+	 * call reads the frame.
+	 */
+	const bool transport_scalar =
+		transport_abi.valid
+		&& zend_mir_scalar_type_is_exact(
+			transport_abi.exact_type)
+		&& transport_abi.exact_type
+			!= ZEND_MIR_SCALAR_TYPE_NULL;
+	const bool transport_pointer =
+		transport_abi.valid
+		&& zend_tpde_machine_kind_is_pointer(
+			transport_abi.machine_kind);
+	const bool transport_boxed =
+		transport_abi.valid
+		&& transport_abi.machine_kind
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+	const bool matching_register_value =
+		!binding_stayed_canonical
+		&& value != INVALID_VALUE_REF
+		&& representation(value)
+			== transport_abi.representation
+		&& exact_type(value)
+			== transport_abi.exact_type
+		&& machine_kind(value)
+			== transport_abi.machine_kind
+		&& machine_value_is_register_authoritative(
+			value)
+		&& machine_value_has_register_definition(value);
+	const bool guarded_boxed_pointer =
+		function_mode_ == FunctionMode::ZendEntry
+		&& !binding_stayed_canonical
+		&& transport_pointer
+		&& value != INVALID_VALUE_REF
+		&& representation(value)
+			== ZEND_MIR_REPRESENTATION_ZVAL
+		&& machine_kind(value)
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& ownership(value)
+			== ZEND_MIR_OWNERSHIP_STATE_OWNED
+		&& machine_value_is_register_authoritative(value)
+		&& machine_value_has_register_definition(value)
+		&& n < ctx.instruction.direct_call->argument_count
+		&& ctx.instruction.direct_call->arguments[n].exact_type
+			== transport_abi.exact_type
+		&& guarded_hot_blocks[ctx.i] != UINT32_MAX
+		&& guarded_cold_blocks[ctx.i] != UINT32_MAX;
+	const bool guarded_boxed_integer =
+		function_mode_ == FunctionMode::ZendEntry
+		&& !binding_stayed_canonical
+		&& transport_scalar
+		&& transport_abi.representation
+			== ZEND_MIR_REPRESENTATION_I64
+		&& transport_abi.exact_type
+			== ZEND_MIR_SCALAR_TYPE_I64
+		&& transport_abi.machine_kind
+			== ZEND_TPDE_MACHINE_VALUE_I64
+		&& value != INVALID_VALUE_REF
+		&& representation(value)
+			== ZEND_MIR_REPRESENTATION_ZVAL
+		&& machine_kind(value)
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& zend_mir_id_is_valid(canonical_storage(value))
+		&& machine_value_is_register_authoritative(value)
+		&& machine_value_has_register_definition(value)
+		&& n < ctx.instruction.direct_call->argument_count
+		&& ctx.instruction.direct_call->arguments[n].mode
+			== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+		&& ctx.instruction.direct_call->arguments[n].exact_type
+			== ZEND_MIR_SCALAR_TYPE_I64
+			&& ctx.instruction.direct_call_argument_guard_types != nullptr
+			&& ctx.instruction.direct_call_argument_guard_types[n]
+				== ZEND_MIR_SCALAR_TYPE_I64
+			&& guarded_hot_blocks[ctx.i] != UINT32_MAX
+			&& guarded_cold_blocks[ctx.i] != UINT32_MAX;
+	if (guarded_boxed_pointer) {
+		const IRValueRef boxed = value;
+		const IRValueRef transported = add_derived_value(
+			transport_abi.representation,
+			transport_abi.exact_type,
+			canonical_storage(boxed), false, 0,
+			transport_abi.machine_kind,
+			ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+			ZEND_MIR_REFCOUNT_UNKNOWN);
+		const uint32_t unbox_operand_offset =
+			static_cast<uint32_t>(operands_.size());
+		operands_.push_back(boxed);
+		add_node(block_instructions,
+			guarded_hot_blocks[ctx.i], InstNode{
+				.kind = InstKind::UnboxPointer,
+				.mir_instruction_index = ctx.i,
+				.argument_index = UINT32_MAX,
+				.result = transported,
+				.operand_offset = unbox_operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = canonical_storage(boxed),
+				.exact_type = transport_abi.exact_type});
+		const uint32_t expected_zval_type =
+			zend_tpde_machine_value_zval_type(
+				transport_abi.machine_kind);
+		if (expected_zval_type == IS_UNDEF) {
+			valid_ = false;
+		} else {
+			ctx.typed_call_value_guards.emplace_back(
+				boxed, expected_zval_type);
+			ctx.typed_call_owned_boxed_arguments.push_back(
+				boxed);
+			value = transported;
+		}
+	}
+	if (guarded_boxed_integer) {
+		const IRValueRef boxed = value;
+		const IRValueRef transported = add_derived_value(
+			transport_abi.representation,
+			transport_abi.exact_type,
+			canonical_storage(boxed), false, 0,
+			transport_abi.machine_kind,
+			ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+			ZEND_MIR_REFCOUNT_IMMORTAL);
+		const uint32_t unbox_operand_offset =
+			static_cast<uint32_t>(operands_.size());
+		operands_.push_back(boxed);
+		add_node(block_instructions,
+			guarded_hot_blocks[ctx.i], InstNode{
+				.kind = InstKind::UnboxScalar,
+				.mir_instruction_index = ctx.i,
+				.argument_index = UINT32_MAX,
+				.result = transported,
+				.operand_offset = unbox_operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = canonical_storage(boxed),
+				.exact_type = transport_abi.exact_type});
+		ctx.typed_call_value_guards.emplace_back(
+			boxed, IS_LONG);
+		value = transported;
+	}
+	/* A register or constant scalar is boxed for a zval
+	 * parameter. */
+	uint64_t box_constant_bits;
+	const bool box_scalar =
+		!binding_stayed_canonical
+		&& transport_boxed
+		&& value != INVALID_VALUE_REF
+		&& !guarded_boxed_pointer
+		&& !guarded_boxed_integer
+		&& zend_tpde_abi_boxes_into(
+			TypedBodyAbiType{representation(value),
+				exact_type(value), machine_kind(value),
+				ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE, true},
+			transport_abi)
+		&& (constant(value, &box_constant_bits)
+			|| (machine_value_is_register_authoritative(
+					value)
+				&& machine_value_has_register_definition(
+					value)));
+	if (box_scalar) {
+		const IRValueRef boxed = add_derived_value(
+			ZEND_MIR_REPRESENTATION_ZVAL,
+			transport_abi.exact_type, ZEND_MIR_ID_INVALID,
+			false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+			ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+			ZEND_MIR_REFCOUNT_IMMORTAL);
+		const uint32_t box_operand_offset =
+			static_cast<uint32_t>(operands_.size());
+		operands_.push_back(value);
+		add_node(block_instructions,
+			guarded_hot_blocks[ctx.i] != UINT32_MAX
+				? guarded_hot_blocks[ctx.i]
+				: static_cast<uint32_t>(ctx.block),
+			InstNode{
+				.kind = InstKind::BoxScalar,
+				.mir_instruction_index = ctx.i,
+				.argument_index = UINT32_MAX,
+				.result = boxed,
+				.operand_offset = box_operand_offset,
+				.operand_count = 1,
+				.has_result = true,
+				.storage_id = ZEND_MIR_ID_INVALID,
+				.exact_type = exact_type(value)});
+		value = boxed;
+	}
+	if (function_mode_ == FunctionMode::ZendEntry
+			&& (transport_scalar
+				|| transport_pointer
+				|| transport_boxed)
+			&& !matching_register_value
+			&& !guarded_boxed_pointer
+			&& !guarded_boxed_integer
+			&& !box_scalar) {
+		zend_mir_storage_id storage_id =
+			canonical_storage(value);
+		if (!zend_mir_id_is_valid(storage_id)) {
+			storage_id = source_operand_storage_id(
+				argument.source_operand);
+		}
+		const IRValueRef address =
+			frame_slot_address(storage_id);
+		const IRValueRef transported =
+			address != INVALID_VALUE_REF
+				? add_derived_value(
+					transport_abi.representation,
+					transport_abi.exact_type,
+					storage_id, false, 0,
+					transport_abi.machine_kind,
+					ZEND_MIR_OWNERSHIP_STATE_BORROWED,
+					ZEND_MIR_REFCOUNT_UNKNOWN)
+				: INVALID_VALUE_REF;
+		if (transported != INVALID_VALUE_REF) {
+			const uint32_t load_operand_offset =
+				static_cast<uint32_t>(operands_.size());
+			operands_.push_back(address);
+			const uint32_t transport_block =
+				guarded_hot_blocks[ctx.i] != UINT32_MAX
+					? guarded_hot_blocks[ctx.i]
+					: static_cast<uint32_t>(ctx.block);
+			add_node(block_instructions,
+				transport_block, InstNode{
+					.kind = InstKind::ZvalPayloadLoad,
+					.mir_instruction_index = ctx.i,
+					.argument_index = UINT32_MAX,
+					.result = transported,
+					.operand_offset = load_operand_offset,
+					.operand_count = 1,
+					.has_result = true,
+					.storage_id = storage_id,
+					.exact_type = transport_abi.exact_type});
+			value = transported;
+		}
+	}
+	if (!machine_value_has_result_representation(value)
+			|| !machine_value_has_register_definition(value)) {
+		valid_ = false;
+	}
+	typed_call_values.push_back(value);
+}
+
+void ZendIRAdaptor::Builder::add_zend_frame_call_operands(InstContext &ctx) {
 	/*
 	 * A proven inline descriptor materializes exact scalar payloads
 	 * and boxed zvals in the generated Zend frame. Repeated frame
@@ -8780,7 +8798,6 @@ void ZendIRAdaptor::Builder::add_user_call_operands(InstContext &ctx) {
 			operands_.push_back(
 				IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 		}
-	}
 	}
 }
 
