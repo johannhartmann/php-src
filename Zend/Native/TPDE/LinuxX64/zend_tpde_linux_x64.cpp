@@ -157,7 +157,11 @@ class ZendCompilerX64 final
 			cold_begin();
 			label_place(resume);
 			ASM(MOV8mi, FE_MEM(context_reg, 0, FE_NOREG, resume_offset), 0);
-			ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 1);
+			/* Only stress transfers read the disarmed flag. */
+			if (plan->deopt_stress) {
+				ASM(MOV32mi,
+					FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 1);
+			}
 			/* A landing enters an operation's cold block, past the fast
 			 * path that sets the isset lookup a later read reuses. */
 			ASM(MOV64mi, FE_MEM(FE_BP, 0, FE_NOREG, lookup_reuse_slot()), 0);
@@ -201,7 +205,9 @@ class ZendCompilerX64 final
 		emit_status_return(ZEND_NATIVE_EXCEPTION);
 		cold_end();
 		label_place(normal);
-		ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 0);
+		if (plan->deopt_stress) {
+			ASM(MOV32mi, FE_MEM(FE_BP, 0, FE_NOREG, deopt_disarmed_slot_), 0);
+		}
 		return true;
 	}
 
@@ -19098,12 +19104,19 @@ bool ZendCompilerX64::compile_iterator_fetch_branch(
 	auto key_type_reg = key_type.alloc_gp();
 	auto element_ready = text_writer.label_create();
 
-	ASM(MOVZXr32m8, type_reg,
-		FE_MEM(frame_reg, 0, FE_NOREG,
-			static_cast<int32_t>(layout.holder_offset
-				+ offsetof(zval, u1.type_info))));
-	ASM(CMP32ri, type_reg, IS_ARRAY);
-	generate_raw_jump(Jump::jne, slow);
+	/* The holder FE_RESET_R left: tested unless Zend's type inference
+	 * proves it an array. */
+	const zend_tpde_source_opcode *fetch_source = fused_source_opcode(&mir);
+	if (fetch_source == nullptr
+			|| (fetch_source->op1_may_be & (MAY_BE_ANY | MAY_BE_UNDEF
+				| MAY_BE_REF | MAY_BE_INDIRECT)) != MAY_BE_ARRAY) {
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(layout.holder_offset
+					+ offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_ARRAY);
+		generate_raw_jump(Jump::jne, slow);
+	}
 	ASM(MOV64rm, array_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(layout.holder_offset)));
@@ -19202,12 +19215,16 @@ bool ZendCompilerX64::compile_iterator_fetch_branch(
 		FE_MEM(array_reg, 0, FE_NOREG,
 			static_cast<int32_t>(
 				offsetof(HashTable, nNumUsed))));
-	ASM(MOV32rm, type_reg,
-		FE_MEM(array_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				offsetof(HashTable, nNumOfElements))));
-	ASM(CMP32rr, limit_reg, type_reg);
-	generate_raw_jump(Jump::jne, slow);
+	/* A packed array with holes takes the helper, which skips them;
+	 * a scalar destination's long test sends a hole there anyway. */
+	if (!layout.destination_scalar_only) {
+		ASM(MOV32rm, type_reg,
+			FE_MEM(array_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					offsetof(HashTable, nNumOfElements))));
+		ASM(CMP32rr, limit_reg, type_reg);
+		generate_raw_jump(Jump::jne, slow);
+	}
 	ASM(MOV32rm, position_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(layout.holder_offset
