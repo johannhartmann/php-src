@@ -6421,19 +6421,24 @@ bool ZendCompilerX64::compile_typed_call_guard(InstContext &ctx) {
 	auto masked_type_reg = masked_type.alloc_gp();
 	auto cold_transfer = text_writer.label_create();
 	/*
-	 * A borrowed reload is the temporary the call consumes, read
-	 * before code that may have dropped the container's reference.
-	 * The typed call needs another owner, so that the hot edge's
-	 * release cannot free: a counted value with a single reference
-	 * takes the canonical call. Only an uncounted value (an interned
-	 * string) leaves a count of 1 for the hot call, through the cold
+	 * A guarded temporary the call consumes needs another owner, so
+	 * that the hot edge's release cannot free. A borrowed reload was
+	 * read before code that may have dropped the container's
+	 * reference, and an owned register read may come from its cold
+	 * helper, such as a __get() result, with the temporary as the only
+	 * owner: a counted value with a single reference takes the
+	 * canonical call. Only an uncounted value (an interned string)
+	 * leaves a count of 1 for the hot call, through the cold
 	 * area. A guarded integer carries no reference.
 	 */
-	auto consumed_reload = [&](uint32_t index) {
-		return guarded_expected_types[index] >= IS_STRING
-			&& ir().ownership(
-					guard_operands[guarded_operand_offset + 2 * index])
-				== ZEND_MIR_OWNERSHIP_STATE_BORROWED;
+	auto consumed_temporary = [&](uint32_t index) {
+		if (guarded_expected_types[index] < IS_STRING) {
+			return false;
+		}
+		const zend_mir_ownership_state ownership = ir().ownership(
+			guard_operands[guarded_operand_offset + 2 * index]);
+		return ownership == ZEND_MIR_OWNERSHIP_STATE_BORROWED
+			|| ownership == ZEND_MIR_OWNERSHIP_STATE_OWNED;
 	};
 	std::vector<std::pair<tpde::Label, tpde::Label>> single_owner_checks;
 	const auto spilled = spill_before_branch();
@@ -6442,7 +6447,7 @@ bool ZendCompilerX64::compile_typed_call_guard(InstContext &ctx) {
 	for (uint32_t index = 0; index < guarded_count; ++index) {
 		ASM(CMP8ri, guarded_type_regs[index], static_cast<int32_t>(guarded_expected_types[index]));
 		generate_raw_jump(Jump::jne, cold_transfer);
-		if (!consumed_reload(index)) {
+		if (!consumed_temporary(index)) {
 			continue;
 		}
 		const auto single = text_writer.label_create();
@@ -6461,7 +6466,7 @@ bool ZendCompilerX64::compile_typed_call_guard(InstContext &ctx) {
 	 * falls into its branch. */
 	cold_begin();
 	for (uint32_t index = 0, check = 0; index < guarded_count; ++index) {
-		if (!consumed_reload(index)) {
+		if (!consumed_temporary(index)) {
 			continue;
 		}
 		label_place(single_owner_checks[check].first);
