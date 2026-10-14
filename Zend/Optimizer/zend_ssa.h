@@ -114,6 +114,10 @@ typedef struct _zend_ssa_var {
 	bool                   scc_entry : 1;
 	unsigned int           alias : 2;  /* value may be changed indirectly */
 	unsigned int           escape_state : 2;
+	/* A CV version an SSA over protected regions reads after an exception
+	 * reached a catch block, where it may hold any value: see
+	 * zend_ssa_unknown_cv(). */
+	bool                   after_exception : 1;
 } zend_ssa_var;
 
 typedef struct _zend_ssa_var_info {

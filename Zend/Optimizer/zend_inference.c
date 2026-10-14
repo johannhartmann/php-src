@@ -1066,11 +1066,158 @@ static bool zend_inference_calc_binary_op_range(
 	return false;
 }
 
+/* An SSA over protected regions (ZEND_SSA_PROTECTED_REGIONS, only the
+ * native engine builds one) of an op array with try/catch has no
+ * exception edges: a catch block starts from the CVs' entry versions, and
+ * a join after it may keep a definition from the try block. Such a CV
+ * version, read after an exception, may hold whatever the protected
+ * region left in it, so its type, class and range cover any value
+ * (zend_ssa_mark_after_exception()). */
+static zend_always_inline bool zend_ssa_unknown_cv(const zend_ssa *ssa, int var)
+{
+#ifdef HAVE_NATIVE_ENGINE
+	return ssa->vars[var].after_exception;
+#else
+	(void) ssa;
+	(void) var;
+	return false;
+#endif
+}
+
+#ifdef HAVE_NATIVE_ENGINE
+static bool zend_ssa_defined_in(
+	const zend_ssa *ssa, const bool *blocks, int var)
+{
+	const zend_ssa_var *ssa_var = &ssa->vars[var];
+
+	if (ssa_var->definition_phi != NULL) {
+		return blocks[ssa_var->definition_phi->block];
+	}
+	return ssa_var->definition >= 0
+		&& blocks[ssa->cfg.map[ssa_var->definition]];
+}
+
+static void zend_ssa_mark_cv_read(const zend_op_array *op_array,
+	zend_ssa *ssa, const bool *blocks, int var)
+{
+	if (var >= 0 && ssa->vars[var].var < op_array->last_var
+			&& !zend_ssa_defined_in(ssa, blocks, var)) {
+		ssa->vars[var].after_exception = 1;
+	}
+}
+
+/* Marks the CV versions that code reachable from a protected root (a
+ * catch or finally block without a CFG predecessor) reads, as an operand
+ * or as a Phi or Pi source, without defining them on its way from that
+ * root. */
+static void zend_ssa_mark_after_exception(zend_arena **arena,
+	const zend_op_array *op_array, zend_ssa *ssa)
+{
+	const zend_cfg *cfg = &ssa->cfg;
+	bool *reached;
+	int *worklist;
+
+	if (op_array->last_try_catch == 0
+			|| (cfg->flags & ZEND_SSA_PROTECTED_REGIONS) == 0) {
+		return;
+	}
+	reached = zend_arena_alloc(arena, cfg->blocks_count * sizeof(bool));
+	worklist = zend_arena_alloc(arena, cfg->blocks_count * sizeof(int));
+	for (int root = 1; root < cfg->blocks_count; root++) {
+		int count = 0;
+
+		if ((cfg->blocks[root].flags & ZEND_BB_REACHABLE) == 0
+				|| cfg->blocks[root].idom >= 0) {
+			continue;
+		}
+		memset(reached, 0, cfg->blocks_count * sizeof(bool));
+		reached[root] = 1;
+		worklist[count++] = root;
+		while (count != 0) {
+			const zend_basic_block *block = &cfg->blocks[worklist[--count]];
+
+			for (int k = 0; k < block->successors_count; k++) {
+				const int successor = block->successors[k];
+
+				if (!reached[successor]) {
+					reached[successor] = 1;
+					worklist[count++] = successor;
+				}
+			}
+		}
+		for (int j = 0; j < cfg->blocks_count; j++) {
+			const zend_basic_block *block = &cfg->blocks[j];
+
+			if (!reached[j]) {
+				continue;
+			}
+			for (uint32_t op = block->start; op < block->start + block->len; op++) {
+				const zend_ssa_op *ssa_op = &ssa->ops[op];
+
+				zend_ssa_mark_cv_read(op_array, ssa, reached, ssa_op->op1_use);
+				zend_ssa_mark_cv_read(op_array, ssa, reached, ssa_op->op2_use);
+				zend_ssa_mark_cv_read(op_array, ssa, reached, ssa_op->result_use);
+			}
+			for (const zend_ssa_phi *phi = ssa->blocks[j].phis; phi; phi = phi->next) {
+				if (phi->pi >= 0) {
+					zend_ssa_mark_cv_read(op_array, ssa, reached, phi->sources[0]);
+					continue;
+				}
+				for (int k = 0; k < block->predecessors_count; k++) {
+					if (reached[cfg->predecessors[block->predecessor_offset + k]]) {
+						zend_ssa_mark_cv_read(op_array, ssa, reached, phi->sources[k]);
+					}
+				}
+			}
+		}
+	}
+}
+
+/* A CV some version of which may be a reference may be one after an
+ * exception too: its versions read there become references as well.
+ * Returns whether any changed, which zend_mark_cv_references() then
+ * propagates. */
+static bool zend_ssa_after_exception_references(zend_arena **arena,
+	const zend_op_array *op_array, const zend_ssa *ssa)
+{
+	bool *may_be_ref;
+	bool changed = false;
+
+	if (op_array->last_try_catch == 0 || op_array->last_var == 0) {
+		return false;
+	}
+	may_be_ref = zend_arena_calloc(arena, op_array->last_var, sizeof(bool));
+	for (int var = 0; var < ssa->vars_count; var++) {
+		if (ssa->vars[var].var < op_array->last_var
+				&& (ssa->var_info[var].type & MAY_BE_REF)) {
+			may_be_ref[ssa->vars[var].var] = 1;
+		}
+	}
+	for (int var = 0; var < ssa->vars_count; var++) {
+		if (ssa->vars[var].after_exception
+				&& may_be_ref[ssa->vars[var].var]
+				&& !(ssa->var_info[var].type & MAY_BE_REF)) {
+			ssa->var_info[var].type |= MAY_BE_REF;
+			changed = true;
+		}
+	}
+	return changed;
+}
+#endif
+
+#define ZEND_SSA_ANY_CV_TYPE (MAY_BE_UNDEF | MAY_BE_RC1 | MAY_BE_RCN \
+	| MAY_BE_REF | MAY_BE_ANY | MAY_BE_ARRAY_KEY_ANY | MAY_BE_ARRAY_OF_ANY \
+	| MAY_BE_ARRAY_OF_REF)
+
 static bool zend_inference_calc_range(const zend_op_array *op_array, const zend_ssa *ssa, int var, int widening, bool narrowing, zend_ssa_range *tmp)
 {
 	uint32_t line;
 	const zend_op *opline;
 	const zend_ssa_op *ssa_op;
+
+	if (zend_ssa_unknown_cv(ssa, var)) {
+		return 0;
+	}
 
 	if (ssa->vars[var].definition_phi) {
 		const zend_ssa_phi *p = ssa->vars[var].definition_phi;
@@ -1969,6 +2116,10 @@ static uint32_t get_ssa_alias_types(zend_ssa_alias_kind alias) {
 				}                                                       \
 			}                                                           \
 			if (__ssa_var->var < op_array->last_var) {					\
+				if (zend_ssa_unknown_cv(ssa, __var)) {		\
+					__type |= (ZEND_SSA_ANY_CV_TYPE & ~MAY_BE_REF)		\
+						| (ssa_var_info[__var].type & MAY_BE_REF);		\
+				}														\
 				if (__type & (MAY_BE_REF|MAY_BE_RCN)) {					\
 					__type |= MAY_BE_RC1 | MAY_BE_RCN;					\
 				}														\
@@ -2005,7 +2156,8 @@ static uint32_t get_ssa_alias_types(zend_ssa_alias_kind alias) {
 #define UPDATE_SSA_OBJ_TYPE(_ce, _is_instanceof, var)				    \
 	do {                                                                \
 		if (var >= 0) {													\
-			zend_class_entry *__ce = (_ce);								\
+			zend_class_entry *__ce = zend_ssa_unknown_cv(ssa, var) \
+				? NULL : (_ce);											\
 			bool __is_instanceof = (_is_instanceof);					\
 			if (__ce && (__ce->ce_flags & ZEND_ACC_FINAL)) {			\
 				__is_instanceof = false;								\
@@ -4769,6 +4921,13 @@ static void zend_mark_cv_references(const zend_op_array *op_array, const zend_sc
 
 	/* Collect SSA variables which definitions creates PHP reference */
 	for (var = 0; var < ssa->vars_count; var++) {
+#ifdef HAVE_NATIVE_ENGINE
+		if (ssa->vars[var].after_exception
+				&& (ssa->var_info[var].type & MAY_BE_REF)) {
+			zend_bitset_incl(worklist, var);
+			continue;
+		}
+#endif
 		def = ssa->vars[var].definition;
 		if (def >= 0 && ssa->vars[var].var < op_array->last_var) {
 			opline = op_array->opcodes + def;
@@ -4902,6 +5061,9 @@ ZEND_API zend_result zend_ssa_inference(zend_arena **arena, const zend_op_array 
 		ssa->var_info = zend_arena_calloc(arena, ssa->vars_count, sizeof(zend_ssa_var_info));
 	}
 	ssa_var_info = ssa->var_info;
+#ifdef HAVE_NATIVE_ENGINE
+	zend_ssa_mark_after_exception(arena, op_array, ssa);
+#endif
 
 	if (!op_array->function_name) {
 		for (i = 0; i < op_array->last_var; i++) {
@@ -4910,7 +5072,8 @@ ZEND_API zend_result zend_ssa_inference(zend_arena **arena, const zend_op_array 
 		}
 	} else {
 		for (i = 0; i < op_array->last_var; i++) {
-			ssa_var_info[i].type = MAY_BE_UNDEF;
+			ssa_var_info[i].type = zend_ssa_unknown_cv(ssa, i)
+				? ZEND_SSA_ANY_CV_TYPE & ~MAY_BE_REF : MAY_BE_UNDEF;
 			ssa_var_info[i].has_range = 0;
 			if (ssa->vars[i].alias) {
 				ssa_var_info[i].type |= get_ssa_alias_types(ssa->vars[i].alias);
@@ -4918,11 +5081,17 @@ ZEND_API zend_result zend_ssa_inference(zend_arena **arena, const zend_op_array 
 		}
 	}
 	for (i = op_array->last_var; i < ssa->vars_count; i++) {
-		ssa_var_info[i].type = 0;
+		ssa_var_info[i].type = zend_ssa_unknown_cv(ssa, i)
+			? ZEND_SSA_ANY_CV_TYPE & ~MAY_BE_REF : 0;
 		ssa_var_info[i].has_range = 0;
 	}
 
 	zend_mark_cv_references(op_array, script, ssa);
+#ifdef HAVE_NATIVE_ENGINE
+	if (zend_ssa_after_exception_references(arena, op_array, ssa)) {
+		zend_mark_cv_references(op_array, script, ssa);
+	}
+#endif
 
 	zend_infer_ranges(op_array, ssa);
 
