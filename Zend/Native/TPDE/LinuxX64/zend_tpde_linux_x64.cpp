@@ -20467,9 +20467,18 @@ bool ZendCompilerX64::compile_direct_user_typed_body(
 	}
 	/*
 	 * Operands after the arguments are owned boxed copies made by
-	 * the caller's fast reads; the typed body only borrowed them.
-	 * Drop the caller's reference now that the call returned.
+	 * the caller's fast reads; the typed body only borrowed them. A
+	 * successful call drops the caller's reference; the container
+	 * still holds the value. A failed call leaves it to the canonical
+	 * cold call, which consumes the temporaries.
 	 */
+	std::vector<ValueRef> owned_values;
+	/* Locked until the branch is emitted. */
+	std::vector<ValuePartRef> owned_parts;
+	std::vector<std::pair<AsmReg, AsmReg>> owned_regs;
+	owned_values.reserve(node.operands.size() - du.argument_count);
+	owned_parts.reserve(2 * (node.operands.size() - du.argument_count));
+	owned_regs.reserve(node.operands.size() - du.argument_count);
 	for (uint32_t operand = du.argument_count;
 			operand < node.operands.size(); ++operand) {
 		if (ir().machine_kind(node.operands[operand])
@@ -20485,39 +20494,54 @@ bool ZendCompilerX64::compile_direct_user_typed_body(
 		if (parts.count() != 2) {
 			return false;
 		}
-		constexpr int32_t payload_part = 0;
-		constexpr int32_t type_part = 1;
-		auto payload = boxed.part(
-			static_cast<uint32_t>(payload_part));
-		auto type_info = boxed.part(
-			static_cast<uint32_t>(type_part));
-		auto payload_reg = payload.load_to_reg();
-		auto type_info_reg = type_info.load_to_reg();
-		auto released = text_writer.label_create();
-		ASM(TEST32ri, type_info_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		generate_raw_jump(Jump::je, released);
-		ASM(SUB32mi,
-			FE_MEM(payload_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(
-					zend_refcounted_h, refcount))),
-			1);
-		label_place(released);
+		owned_parts.emplace_back(boxed.part(0));
+		const AsmReg payload_reg = owned_parts.back().load_to_reg();
+		owned_parts.emplace_back(boxed.part(1));
+		const AsmReg type_info_reg = owned_parts.back().load_to_reg();
+		owned_regs.emplace_back(payload_reg, type_info_reg);
+		owned_values.push_back(std::move(boxed));
 	}
+	auto release_owned = [&]() {
+		for (const auto &[payload_reg, type_info_reg] : owned_regs) {
+			auto released = text_writer.label_create();
+			ASM(TEST32ri, type_info_reg,
+				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+			generate_raw_jump(Jump::je, released);
+			ASM(SUB32mi,
+				FE_MEM(payload_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(
+						zend_refcounted_h, refcount))),
+				1);
+			label_place(released);
+		}
+	};
 	adaptor->mark_typed_body_call(
 		call.direct_call->frame_size);
-	if (failure_decision.has_reg()) {
-		if (node.argument_index == UINT32_MAX) {
-			return false;
-		}
-		generate_guarded_decision_branch(
-			std::move(failure_decision),
-			IRBlockRef{node.continuation_block},
-			IRBlockRef{node.argument_index});
+	if (!failure_decision.has_reg()) {
+		release_owned();
+		owned_parts.clear();
+		owned_values.clear();
+		generate_uncond_branch(
+			IRBlockRef{node.continuation_block});
 		return true;
 	}
-	generate_uncond_branch(
-		IRBlockRef{node.continuation_block});
+	if (node.argument_index == UINT32_MAX) {
+		return false;
+	}
+	/* The status test leads; the releases sit on the success edge. */
+	const IRBlockRef success{node.continuation_block};
+	const IRBlockRef failure{node.argument_index};
+	const bool failure_needs_split = branch_needs_split(failure);
+	const auto spilled = spill_before_branch();
+	begin_branch_region();
+	emit_decision_test(failure_decision.cur_reg());
+	generate_branch_to_block(
+		Jump::je, failure, failure_needs_split, false);
+	release_owned();
+	generate_branch_to_block(Jump::jmp, success, false, true);
+	end_branch_region();
+	owned_parts.clear();
+	release_spilled_regs(spilled);
 	return true;
 }
 
