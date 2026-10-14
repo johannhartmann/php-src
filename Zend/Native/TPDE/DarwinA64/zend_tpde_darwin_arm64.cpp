@@ -572,15 +572,24 @@ public:
 				part.load_to_reg(), size);
 		}
 	}
+	/*
+	 * One rule holds for a bool in a frame slot: its type_info, IS_FALSE or
+	 * IS_TRUE, is authoritative, and no reader may depend on its payload.
+	 * Readers compare the type_info through compare_bool_slot().
+	 */
+	/* Compares the type_info of the bool in the zval at base + offset with
+	 * IS_TRUE, through scratch: equal for true. */
+	void compare_bool_slot(AsmReg scratch, AsmReg base, uint64_t offset) {
+		load_off(scratch, base,
+			static_cast<uint32_t>(offset + offsetof(zval, u1.type_info)), 4);
+		ASM(CMPwi, scratch, IS_TRUE);
+	}
 	/* A helper wrote a scalar result to its frame slot. Zend writes a bool
 	 * as type_info only, so its value comes from IS_TRUE, not the payload. */
 	void load_slot_scalar(AsmReg dst, zend_tpde_machine_value_kind kind,
 			uint64_t frame_offset) {
 		if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-			load_off(dst, canonical_frame_register(),
-				static_cast<uint32_t>(
-					frame_offset + offsetof(zval, u1.type_info)), 4);
-			ASM(CMPwi, dst, IS_TRUE);
+			compare_bool_slot(dst, canonical_frame_register(), frame_offset);
 			generate_raw_set(Jump::Jeq, dst);
 			return;
 		}
@@ -594,10 +603,7 @@ public:
 			zend_tpde_machine_part_role role) {
 		if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL
 				&& role == ZEND_TPDE_MACHINE_PART_VALUE) {
-			load_off(reg, base,
-				static_cast<uint32_t>(
-					offset + offsetof(zval, u1.type_info)), 4);
-			ASM(CMPwi, reg, IS_TRUE);
+			compare_bool_slot(reg, base, offset);
 			generate_raw_set(Jump::Jeq, reg);
 		} else if (role == ZEND_TPDE_MACHINE_PART_VALUE
 				|| role == ZEND_TPDE_MACHINE_PART_PAYLOAD) {
@@ -3384,8 +3390,9 @@ bool ZendCompilerA64::string_length() {
 			ScratchReg type{this};
 			auto result_reg = result.alloc_gp();
 			auto type_reg = type.alloc_gp();
-			load_off(result_reg, frame_scratch.cur_reg(),
-				boolean.operand_offset, 4);
+			compare_bool_slot(result_reg, frame_scratch.cur_reg(),
+				boolean.operand_offset);
+			generate_raw_set(Jump::Jeq, result_reg);
 			if (boolean.negate) {
 				ASM(EORwi, result_reg, result_reg, 1);
 			}
@@ -4433,14 +4440,12 @@ bool ZendCompilerA64::slot_isset_empty() {
 		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 			materialize_constant(
 				uint64_t{1}, DarwinConfig::GP_BANK, 4, result_reg);
+		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			compare_bool_slot(type_reg, frame_reg, layout.operand_offset);
+			generate_raw_set(Jump::Jne, result_reg);
 		} else {
-			load_off(type_reg, frame_reg, layout.operand_offset,
-				node.exact_type == ZEND_MIR_SCALAR_TYPE_I1 ? 4 : 8);
-			if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				ASM(CMPwi, type_reg, 0);
-			} else {
-				ASM(CMPxi, type_reg, 0);
-			}
+			load_off(type_reg, frame_reg, layout.operand_offset, 8);
+			ASM(CMPxi, type_reg, 0);
 			generate_raw_set(Jump::Jeq, result_reg);
 		}
 		store_off(frame_reg, layout.result_offset, result_reg, 8);
@@ -4493,16 +4498,19 @@ bool ZendCompilerA64::slot_isset_empty() {
 				auto frame_scratch = std::move(frame).into_scratch();
 				ScratchReg value{this};
 				auto value_reg = value.alloc_gp();
-				load_off(value_reg, frame_scratch.cur_reg(),
-					layout.operand_offset,
-					type == ZEND_MIR_SCALAR_TYPE_I1 ? 4 : 8);
 				if (type == ZEND_MIR_SCALAR_TYPE_I1) {
-					ASM(CMPwi, value_reg, 0);
+					/* Equal here is true, not zero. */
+					compare_bool_slot(value_reg, frame_scratch.cur_reg(),
+						layout.operand_offset);
+					generate_raw_set(
+						invert_result ? Jump::Jeq : Jump::Jne, result_reg);
 				} else {
+					load_off(value_reg, frame_scratch.cur_reg(),
+						layout.operand_offset, 8);
 					ASM(CMPxi, value_reg, 0);
+					generate_raw_set(
+						invert_result ? Jump::Jne : Jump::Jeq, result_reg);
 				}
-				generate_raw_set(
-					invert_result ? Jump::Jne : Jump::Jeq, result_reg);
 			}
 			result.set_modified();
 			if (node.kind == Adaptor::InstKind::GuardedFast) {
@@ -4550,9 +4558,12 @@ bool ZendCompilerA64::slot_isset_empty() {
 			|| node.exact_type == ZEND_MIR_SCALAR_TYPE_I64) {
 		if (!layout.is_empty) {
 			generate_raw_jump(Jump::jmp, truthy);
+		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			compare_bool_slot(value_reg, frame_reg, layout.operand_offset);
+			generate_raw_jump(Jump::Jeq, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
 		} else {
-			load_off(value_reg, frame_reg, layout.operand_offset,
-				node.exact_type == ZEND_MIR_SCALAR_TYPE_I1 ? 4 : 8);
+			load_off(value_reg, frame_reg, layout.operand_offset, 8);
 			generate_raw_jump(
 				Jump{Jump::Cbnz, value_reg, false}, truthy);
 			generate_raw_jump(Jump::jmp, falsey);
