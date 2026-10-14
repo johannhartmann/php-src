@@ -4954,11 +4954,6 @@ bool ZendCompilerA64::object_property_write() {
 	ASM(CMPwi, type_reg, IS_OBJECT);
 	generate_raw_jump(Jump::Jne, slow);
 	load_off(object_reg, frame_reg, layout.receiver_offset, 8);
-	load_off(offset_reg, object_reg,
-		static_cast<uint32_t>(offsetof(zend_object, extra_flags)), 4);
-	ASM(TSTwi, offset_reg,
-		IS_OBJ_LAZY_UNINITIALIZED | IS_OBJ_LAZY_PROXY);
-	generate_raw_jump(Jump::Jne, slow);
 	load_off(cache_reg, frame_reg,
 		static_cast<uint32_t>(
 			offsetof(zend_execute_data, run_time_cache)), 8);
@@ -4966,11 +4961,6 @@ bool ZendCompilerA64::object_property_write() {
 		Jump{Jump::Cbz, cache_reg, false}, slow);
 	load_off(type_reg, object_reg,
 		static_cast<uint32_t>(offsetof(zend_object, ce)), 8);
-	load_off(offset_reg, type_reg,
-		static_cast<uint32_t>(
-			offsetof(zend_class_entry, create_object)), 8);
-	generate_raw_jump(
-		Jump{Jump::Cbnz, offset_reg, false}, slow);
 	load_off(property_reg, cache_reg, layout.cache_offset, 8);
 	ASM(CMPx, type_reg, property_reg);
 	generate_raw_jump(Jump::Jne, slow);

@@ -17047,13 +17047,6 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 	ASM(MOV64rm, object_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(layout.receiver_offset)));
-	ASM(MOV32rm, offset_reg,
-		FE_MEM(object_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				offsetof(zend_object, extra_flags))));
-	ASM(TEST32ri, offset_reg,
-		IS_OBJ_LAZY_UNINITIALIZED | IS_OBJ_LAZY_PROXY);
-	generate_raw_jump(Jump::jne, slow);
 	ASM(MOV64rm, cache_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(
@@ -17063,12 +17056,6 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 	ASM(MOV64rm, type_reg,
 		FE_MEM(object_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(zend_object, ce))));
-	ASM(MOV64rm, offset_reg,
-		FE_MEM(type_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				offsetof(zend_class_entry, create_object))));
-	ASM(TEST64rr, offset_reg, offset_reg);
-	generate_raw_jump(Jump::jne, slow);
 	ASM(MOV64rm, property_reg,
 		FE_MEM(cache_reg, 0, FE_NOREG,
 			static_cast<int32_t>(layout.cache_offset)));
