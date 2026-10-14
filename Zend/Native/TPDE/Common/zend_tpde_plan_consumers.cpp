@@ -662,32 +662,25 @@ void freeze_fused_compare_branches(zend_tpde_plan *plan)
 	}
 }
 
-void freeze_register_boolean_results(zend_tpde_plan *plan)
-{
-	if (plan->value_consumer_offsets == nullptr) {
-		return;
+/* The MIR definition, else the first instruction whose source result
+ * is the value. */
+static int32_t register_boolean_value_definition(
+		const zend_tpde_plan *plan, int32_t value_index) {
+	if (value_index < 0
+			|| static_cast<uint32_t>(value_index) >= plan->value_count) {
+		return int32_t{-1};
 	}
-	/* The MIR definition, else the first instruction whose source result
-	 * is the value. */
-	auto value_definition = [&](int32_t value_index) {
-		if (value_index < 0
-				|| static_cast<uint32_t>(value_index) >= plan->value_count) {
-			return int32_t{-1};
-		}
-		const int32_t definition = plan->value_definition_instructions != nullptr
-			? plan->value_definition_instructions[value_index] : -1;
-		return definition >= 0 || plan->source_value_definition_instructions
-				== nullptr
-			? definition
-			: plan->source_value_definition_instructions[value_index];
-	};
-	std::vector<uint8_t> register_boolean_results(
-		plan->instruction_count);
-	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
-		register_boolean_results[index] =
-			(plan->instructions[index].machine_control_flow_flags
-				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT) != 0;
-	}
+	const int32_t definition = plan->value_definition_instructions != nullptr
+		? plan->value_definition_instructions[value_index] : -1;
+	return definition >= 0 || plan->source_value_definition_instructions
+			== nullptr
+		? definition
+		: plan->source_value_definition_instructions[value_index];
+}
+
+/* A JMPZ_EX or JMPNZ_EX whose result reaches only register-only PHIs
+ * branches on a register. */
+static void freeze_register_short_circuit_branches(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &instruction = plan->instructions[index];
 		const zend_mir_instruction_record record =
@@ -701,6 +694,43 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 				ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH;
 		}
 	}
+}
+
+/* The instruction's boolean result becomes a register result when every
+ * consumer of it reads a register boolean. */
+static void freeze_register_boolean_result(
+		zend_tpde_plan *plan,
+		std::vector<uint8_t> &register_boolean_results,
+		uint32_t index, int32_t result_index) {
+	zend_tpde_instruction &instruction = plan->instructions[index];
+	const uint32_t value = static_cast<uint32_t>(result_index);
+	const uint32_t begin = plan->value_consumer_offsets[value];
+	const uint32_t end = plan->value_consumer_offsets[value + 1];
+	if (begin == end) {
+		return;
+	}
+	bool all_register_consumers = true;
+	for (uint32_t use = begin; use < end; ++use) {
+		if (!machine_register_boolean_consumer(
+				plan, plan->value_consumers[use], result_index, index)) {
+			all_register_consumers = false;
+			break;
+		}
+	}
+	if (all_register_consumers) {
+		instruction.machine_control_flow_flags &=
+			~ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+		instruction.machine_control_flow_flags |=
+			ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT;
+		register_boolean_results[index] = 1;
+		freeze_register_boolean_terminal_consumers(plan, result_index);
+	}
+}
+
+/* isset/empty of a CV that holds null, a boolean or a long. */
+static void freeze_register_isset_empty_results(
+		zend_tpde_plan *plan,
+		std::vector<uint8_t> &register_boolean_results) {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &instruction = plan->instructions[index];
 		const zend_mir_instruction_record record =
@@ -735,35 +765,19 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 		if (!zend_tpde_slot_isset_empty_at(instruction, &isset_layout)) {
 			continue;
 		}
-		const uint32_t value = static_cast<uint32_t>(result_index);
-		const uint32_t begin = plan->value_consumer_offsets[value];
-		const uint32_t end = plan->value_consumer_offsets[value + 1];
-		if (begin == end) {
-			continue;
-		}
-		bool all_register_consumers = true;
-		for (uint32_t use = begin; use < end; ++use) {
-			if (!machine_register_boolean_consumer(
-					plan, plan->value_consumers[use], result_index, index)) {
-				all_register_consumers = false;
-				break;
-			}
-		}
-		if (all_register_consumers) {
-			instruction.machine_control_flow_flags &=
-				~ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
-			instruction.machine_control_flow_flags |=
-				ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT;
-			register_boolean_results[index] = 1;
-			freeze_register_boolean_terminal_consumers(plan, result_index);
-		}
+		freeze_register_boolean_result(
+			plan, register_boolean_results, index, result_index);
 	}
+}
 
-	/*
-	 * BOOL and BOOL_NOT of a machine boolean are exact. Propagate the
-	 * register result through such chains so that no negation between
-	 * isset/empty and its branch gets a guarded helper diamond.
-	 */
+/*
+ * BOOL and BOOL_NOT of a machine boolean are exact. Propagate the
+ * register result through such chains so that no negation between
+ * isset/empty and its branch gets a guarded helper diamond.
+ */
+static void freeze_register_bool_chains(
+		zend_tpde_plan *plan,
+		std::vector<uint8_t> &register_boolean_results) {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &instruction = plan->instructions[index];
 		const zend_mir_instruction_record record =
@@ -778,8 +792,9 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 		int32_t producer =
 			instruction.source_op1_binding.definition_instruction_index;
 		if (producer < 0) {
-			producer = value_definition(machine_source_binding_value_index(
-				plan, instruction.source_op1_binding));
+			producer = register_boolean_value_definition(plan,
+				machine_source_binding_value_index(
+					plan, instruction.source_op1_binding));
 		}
 		if (producer < 0
 				|| static_cast<uint32_t>(producer) >= index
@@ -792,37 +807,18 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 		if (result_index < 0) {
 			continue;
 		}
-		const uint32_t value = static_cast<uint32_t>(result_index);
-		const uint32_t begin = plan->value_consumer_offsets[value];
-		const uint32_t end = plan->value_consumer_offsets[value + 1];
-		if (begin == end) {
-			continue;
-		}
-		bool all_register_consumers = true;
-		for (uint32_t use = begin; use < end; ++use) {
-			if (!machine_register_boolean_consumer(
-					plan, plan->value_consumers[use],
-					result_index, index)) {
-				all_register_consumers = false;
-				break;
-			}
-		}
-		if (all_register_consumers) {
-			instruction.machine_control_flow_flags &=
-				~ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
-			instruction.machine_control_flow_flags |=
-				ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT;
-			register_boolean_results[index] = 1;
-			freeze_register_boolean_terminal_consumers(plan, result_index);
-		}
+		freeze_register_boolean_result(
+			plan, register_boolean_results, index, result_index);
 	}
+}
 
-	/*
-	 * Fold empty(CV) -> BOOL_NOT into the empty result. With the result
-	 * alias every later consumer uses a value the producer defines, not a
-	 * synthetic one TPDE might schedule after a short-circuit PHI. The
-	 * producer's single consumer keeps its original polarity unobservable.
-	 */
+/*
+ * Fold empty(CV) -> BOOL_NOT into the empty result. With the result
+ * alias every later consumer uses a value the producer defines, not a
+ * synthetic one TPDE might schedule after a short-circuit PHI. The
+ * producer's single consumer keeps its original polarity unobservable.
+ */
+static void freeze_inverted_empty_results(zend_tpde_plan *plan) {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &producer = plan->instructions[index];
 		const zend_mir_instruction_record producer_record =
@@ -895,13 +891,17 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 		branch.machine_control_flow_flags |=
 			ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH;
 	}
+}
 
-	/*
-	 * The adaptor recognizes a two-edge short-circuit PHI over machine
-	 * booleans. Only its terminal branch is frozen here; intervening BOOL
-	 * operations stay definitions so edge values keep their polarity and
-	 * liveness.
-	 */
+/*
+ * The adaptor recognizes a two-edge short-circuit PHI over machine
+ * booleans. Only its terminal branch is frozen here; intervening BOOL
+ * operations stay definitions so edge values keep their polarity and
+ * liveness.
+ */
+static void freeze_register_boolean_phis(
+		zend_tpde_plan *plan,
+		const std::vector<uint8_t> &register_boolean_results) {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &phi = plan->instructions[index];
 		const zend_mir_instruction_record phi_record =
@@ -916,7 +916,7 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 			const int32_t value_index = zend_tpde_value_index(
 				plan, zend_tpde_operand_at(plan, &phi, operand));
 			const int32_t producer_index =
-				value_definition(value_index);
+				register_boolean_value_definition(plan, value_index);
 			if (producer_index < 0
 					|| static_cast<uint32_t>(producer_index)
 						>= plan->instruction_count) {
@@ -971,56 +971,72 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 		branch.machine_control_flow_flags |=
 			ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH;
 	}
+}
 
-	/*
-	 * A Zend short-circuit temporary is a source value, not a MIR value.
-	 * When both definitions reaching the branch are machine booleans, the
-	 * branch becomes an implicit two-edge register merge: the adaptor builds
-	 * the TPDE PHI and the machine CFG omits the boxed branch diamond. The
-	 * definition from a predecessor is that block's last writer of the
-	 * temporary.
-	 */
-	std::vector<uint32_t> block_instruction_offsets;
-	std::vector<uint32_t> block_instructions;
-	auto last_block_writer = [&](uint32_t block, zend_mir_storage_id storage) {
-		if (block_instruction_offsets.empty()) {
-			std::vector<int32_t> instruction_blocks(plan->instruction_count);
-			block_instruction_offsets.assign(plan->block_count + 1, 0);
-			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-				instruction_blocks[i] = zend_tpde_block_index(plan,
-					zend_tpde_instruction_record_at(
-						plan, &plan->instructions[i]).block_id);
-				if (instruction_blocks[i] >= 0) {
-					++block_instruction_offsets[
-						static_cast<uint32_t>(instruction_blocks[i]) + 1];
-				}
-			}
-			for (uint32_t b = 0; b < plan->block_count; ++b) {
-				block_instruction_offsets[b + 1] +=
-					block_instruction_offsets[b];
-			}
-			block_instructions.resize(
-				block_instruction_offsets[plan->block_count]);
-			std::vector<uint32_t> fill(block_instruction_offsets.begin(),
-				block_instruction_offsets.end() - 1);
-			for (uint32_t i = 0; i < plan->instruction_count; ++i) {
-				if (instruction_blocks[i] >= 0) {
-					block_instructions[fill[static_cast<uint32_t>(
-						instruction_blocks[i])]++] = i;
-				}
+/* The instructions of each block in order, built on first use. */
+struct block_instruction_index {
+	std::vector<uint32_t> offsets;
+	std::vector<uint32_t> instructions;
+};
+
+/* The block's last instruction that writes the storage, or -1. */
+static int32_t last_block_writer(
+		const zend_tpde_plan *plan,
+		block_instruction_index &blocks,
+		uint32_t block, zend_mir_storage_id storage) {
+	std::vector<uint32_t> &block_instruction_offsets = blocks.offsets;
+	std::vector<uint32_t> &block_instructions = blocks.instructions;
+	if (block_instruction_offsets.empty()) {
+		std::vector<int32_t> instruction_blocks(plan->instruction_count);
+		block_instruction_offsets.assign(plan->block_count + 1, 0);
+		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+			instruction_blocks[i] = zend_tpde_block_index(plan,
+				zend_tpde_instruction_record_at(
+					plan, &plan->instructions[i]).block_id);
+			if (instruction_blocks[i] >= 0) {
+				++block_instruction_offsets[
+					static_cast<uint32_t>(instruction_blocks[i]) + 1];
 			}
 		}
-		for (uint32_t offset = block_instruction_offsets[block + 1];
-				offset-- > block_instruction_offsets[block];) {
-			const zend_tpde_instruction &writer =
-				plan->instructions[block_instructions[offset]];
-			if (writer.has_value_operation
-					&& writer.value_operation.result_storage_id == storage) {
-				return static_cast<int32_t>(block_instructions[offset]);
+		for (uint32_t b = 0; b < plan->block_count; ++b) {
+			block_instruction_offsets[b + 1] +=
+				block_instruction_offsets[b];
+		}
+		block_instructions.resize(
+			block_instruction_offsets[plan->block_count]);
+		std::vector<uint32_t> fill(block_instruction_offsets.begin(),
+			block_instruction_offsets.end() - 1);
+		for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+			if (instruction_blocks[i] >= 0) {
+				block_instructions[fill[static_cast<uint32_t>(
+					instruction_blocks[i])]++] = i;
 			}
 		}
-		return int32_t{-1};
-	};
+	}
+	for (uint32_t offset = block_instruction_offsets[block + 1];
+			offset-- > block_instruction_offsets[block];) {
+		const zend_tpde_instruction &writer =
+			plan->instructions[block_instructions[offset]];
+		if (writer.has_value_operation
+				&& writer.value_operation.result_storage_id == storage) {
+			return static_cast<int32_t>(block_instructions[offset]);
+		}
+	}
+	return int32_t{-1};
+}
+
+/*
+ * A Zend short-circuit temporary is a source value, not a MIR value.
+ * When both definitions reaching the branch are machine booleans, the
+ * branch becomes an implicit two-edge register merge: the adaptor builds
+ * the TPDE PHI and the machine CFG omits the boxed branch diamond. The
+ * definition from a predecessor is that block's last writer of the
+ * temporary.
+ */
+static void freeze_register_boolean_merges(
+		zend_tpde_plan *plan,
+		const std::vector<uint8_t> &register_boolean_results) {
+	block_instruction_index blocks;
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		zend_tpde_instruction &branch = plan->instructions[index];
 		const zend_mir_instruction_record branch_record =
@@ -1035,7 +1051,8 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 				|| (branch.machine_control_flow_flags
 					& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_BRANCH) == 0
 				|| condition_index < 0
-				|| value_definition(condition_index) >= 0
+				|| register_boolean_value_definition(
+					plan, condition_index) >= 0
 				|| !zend_mir_id_is_valid(
 					branch.value_operation.op1_storage_id)
 				|| plan->block_predecessor_offsets == nullptr
@@ -1062,7 +1079,7 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 		for (uint32_t predecessor_offset = predecessor_begin;
 				predecessor_offset < predecessor_end;
 				++predecessor_offset) {
-			const int32_t candidate = last_block_writer(
+			const int32_t candidate = last_block_writer(plan, blocks,
 				plan->block_predecessors[predecessor_offset],
 				branch.value_operation.op1_storage_id);
 			if (candidate < 0) {
@@ -1104,6 +1121,26 @@ void freeze_register_boolean_results(zend_tpde_plan *plan)
 			branch.register_merge_producer_plus_one[1] = producers[1];
 		}
 	}
+}
+
+void freeze_register_boolean_results(zend_tpde_plan *plan)
+{
+	if (plan->value_consumer_offsets == nullptr) {
+		return;
+	}
+	std::vector<uint8_t> register_boolean_results(
+		plan->instruction_count);
+	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
+		register_boolean_results[index] =
+			(plan->instructions[index].machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT) != 0;
+	}
+	freeze_register_short_circuit_branches(plan);
+	freeze_register_isset_empty_results(plan, register_boolean_results);
+	freeze_register_bool_chains(plan, register_boolean_results);
+	freeze_inverted_empty_results(plan);
+	freeze_register_boolean_phis(plan, register_boolean_results);
+	freeze_register_boolean_merges(plan, register_boolean_results);
 }
 
 /* A keyed assignment whose key may be an integer and is never a string
