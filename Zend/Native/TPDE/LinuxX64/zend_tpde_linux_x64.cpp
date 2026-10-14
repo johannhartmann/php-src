@@ -1211,11 +1211,8 @@ public:
 				|| result_offset > INT32_MAX - sizeof(zval)) {
 			return false;
 		}
-		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
-					+ offsetof(zval, u1.type_info))),
-			IS_FALSE);
+		store_bool_slot(frame_reg, static_cast<int32_t>(result_offset), false,
+			BoolSlotSource::False);
 		return true;
 	}
 
@@ -2187,13 +2184,8 @@ public:
 	 */
 	void store_bool_result(const Adaptor::InstNode &node, AsmReg frame_reg,
 			uint64_t result_offset, AsmReg value_reg, AsmReg type_reg) {
-		ASM(LEA32rm, type_reg,
-			FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-		ASM(MOV32mr,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(result_offset
-					+ offsetof(zval, u1.type_info))),
-			type_reg);
+		store_bool_slot(frame_reg, static_cast<int32_t>(result_offset), false,
+			BoolSlotSource::Value, value_reg, type_reg);
 		if (node.has_result && val_parts(node.result).count() == 1) {
 			auto [result_ref, result] = result_ref_single(node.result);
 			mov(result.alloc_reg(), value_reg, 8);
@@ -3311,10 +3303,8 @@ public:
 			ASM(MOV64mr, FE_MEM(base, 0, FE_NOREG, offset), value_reg);
 			ASM(MOV32mi, type_info, IS_LONG);
 		} else if (type == ZEND_MIR_SCALAR_TYPE_I1) {
-			ScratchReg type_scratch{this};
-			auto type_reg = type_scratch.alloc_gp();
-			ASM(LEA32rm, type_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr, type_info, type_reg);
+			store_bool_slot(base, offset, false, BoolSlotSource::Value,
+				value_reg);
 		} else if (type == ZEND_MIR_SCALAR_TYPE_NULL) {
 			ASM(MOV32mi, type_info, IS_NULL);
 		} else {
@@ -3323,40 +3313,80 @@ public:
 		return true;
 	}
 
+	/* The boolean store_bool_slot() stores. */
+	enum class BoolSlotSource : uint8_t {
+		/* 0 or 1 in value_reg; its type, IS_FALSE + value, is made in
+		 * type_reg, or a scratch register when that is invalid. */
+		Value,
+		/* 0 or 1 in value_reg, which then becomes its type. */
+		InPlace,
+		/* 0 or 1 in value_reg and its type in type_reg. */
+		Type,
+		/* A constant: immediates, the payload from value_reg if valid. */
+		False,
+		True,
+	};
 	/*
-	 * Stores a boolean (0 or 1 in a register) into the zval at base +
-	 * offset, payload included: boolean readers of the slot load the
-	 * payload.
+	 * A boolean in a frame slot: type_info, IS_FALSE or IS_TRUE, is
+	 * authoritative, as in the Zend VM, and no reader depends on the
+	 * payload. Every boolean frame-slot store goes through here: into the
+	 * zval at base + offset, with_payload also storing 0 or 1 as the
+	 * payload, before the type. type_word stores the type as the zval's
+	 * whole second word, u2 zero.
 	 */
-	void store_boolean_zval(AsmReg base, int32_t offset, AsmReg value_reg,
-			AsmReg type_reg) {
-		ASM(MOV64mr, FE_MEM(base, 0, FE_NOREG, offset), value_reg);
-		ASM(LEA32rm, type_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-		ASM(MOV32mr,
-			FE_MEM(base, 0, FE_NOREG,
-				offset + static_cast<int32_t>(offsetof(zval, u1.type_info))),
-			type_reg);
+	void store_bool_slot(AsmReg base, int32_t offset, bool with_payload,
+			BoolSlotSource source, AsmReg value_reg = AsmReg::make_invalid(),
+			AsmReg type_reg = AsmReg::make_invalid(), bool type_word = false) {
+		const bool constant = source == BoolSlotSource::False
+			|| source == BoolSlotSource::True;
+		const int32_t truth = source == BoolSlotSource::True ? 1 : 0;
+		if (with_payload && constant && !value_reg.valid()) {
+			ASM(MOV64mi, FE_MEM(base, 0, FE_NOREG, offset), truth);
+		} else if (with_payload) {
+			ASM(MOV64mr, FE_MEM(base, 0, FE_NOREG, offset), value_reg);
+		}
+		static_assert(offsetof(zval, u1.type_info) + 4 == offsetof(zval, u2));
+		const auto type_info = FE_MEM(base, 0, FE_NOREG,
+			offset + static_cast<int32_t>(offsetof(zval, u1.type_info)));
+		if (constant && type_word) {
+			ASM(MOV64mi, type_info, IS_FALSE + truth);
+			return;
+		}
+		if (constant) {
+			ASM(MOV32mi, type_info, IS_FALSE + truth);
+			return;
+		}
+		ScratchReg type_scratch{this};
+		if (source == BoolSlotSource::Value) {
+			if (!type_reg.valid()) {
+				type_reg = type_scratch.alloc_gp();
+			}
+			/* The 32-bit LEA clears the upper half: u2 is zero. */
+			ASM(LEA32rm, type_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
+		} else if (source == BoolSlotSource::InPlace) {
+			type_reg = value_reg;
+			if (type_word) {
+				ASM(ADD64ri, type_reg, IS_FALSE);
+			} else {
+				ASM(ADD32ri, type_reg, IS_FALSE);
+			}
+		}
+		if (type_word) {
+			ASM(MOV64mr, type_info, type_reg);
+		} else {
+			ASM(MOV32mr, type_info, type_reg);
+		}
 	}
 
 	/*
-	 * Stores the second word of a zval at base + offset: type_info `type`
-	 * and a zero u2. IS_FALSE stands for a boolean whose 0 or 1 is in
-	 * value_reg.
+	 * Stores the second word of a zval at base + offset: type_info `type`,
+	 * not a boolean's (store_bool_slot()), and a zero u2.
 	 */
-	void store_type_word(AsmReg base, int32_t offset, uint32_t type,
-			AsmReg value_reg) {
+	void store_type_word(AsmReg base, int32_t offset, uint32_t type) {
 		static_assert(offsetof(zval, u1.type_info) + 4 == offsetof(zval, u2));
-		if (type == IS_FALSE) {
-			ScratchReg kind{this};
-			auto kind_reg = kind.alloc_gp();
-			/* The 32-bit LEA clears the upper half: u2 is zero. */
-			ASM(LEA32rm, kind_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV64mr, FE_MEM(base, 0, FE_NOREG, offset), kind_reg);
-		} else {
-			ZEND_ASSERT(type <= INT32_MAX);
-			ASM(MOV64mi, FE_MEM(base, 0, FE_NOREG, offset),
-				static_cast<int32_t>(type));
-		}
+		ZEND_ASSERT(type != IS_FALSE && type <= INT32_MAX);
+		ASM(MOV64mi, FE_MEM(base, 0, FE_NOREG, offset),
+			static_cast<int32_t>(type));
 	}
 	/*
 	 * Consumes a temporary another owner keeps alive, as
@@ -3389,8 +3419,8 @@ public:
 		label_place(released);
 	}
 	void store_exact_type_word(AsmReg base, int32_t offset,
-			zend_mir_scalar_type_mask type, AsmReg value_reg) {
-		store_type_word(base, offset, zend_tpde_zval_type(type), value_reg);
+			zend_mir_scalar_type_mask type) {
+		store_type_word(base, offset, zend_tpde_zval_type(type));
 	}
 
 	template <typename BranchJump>
@@ -5643,15 +5673,15 @@ bool ZendCompilerX64::emit_materializations(
 					static_cast<int32_t>(offset)),
 				payload_reg);
 		} else if (machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_BOOL
-				|| machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
+			/* Stored with its type below. */
+			payload_reg = payload.load_to_reg();
+			boolean_payload_reg = payload_reg;
+		} else if (machine_kind
 					== ZEND_TPDE_MACHINE_VALUE_STRING_PTR
 				|| machine_kind
 					== ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR) {
 			payload_reg = payload.load_to_reg();
-			if (machine_kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-				boolean_payload_reg = payload_reg;
-			}
 			ASM(MOV64mr,
 				FE_MEM(frame_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offset)),
@@ -5675,12 +5705,8 @@ bool ZendCompilerX64::emit_materializations(
 				type_info_reg);
 		} else if (machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOOL) {
-			ScratchReg type_info{this};
-			auto type_info_reg = type_info.alloc_gp();
-			ASM(LEA32rm, type_info_reg, FE_MEM(boolean_payload_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
-				type_info_reg);
+			store_bool_slot(frame_reg, static_cast<int32_t>(offset), true,
+				BoolSlotSource::Value, boolean_payload_reg);
 		} else {
 			ScratchReg type_info{this};
 			auto type_info_reg = type_info.alloc_gp();
@@ -5976,21 +6002,17 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 		begin_branch_region();
 		label_place(truthy);
 		if (layout.has_result) {
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_TRUE);
+			store_bool_slot(frame_reg,
+				static_cast<int32_t>(layout.result_offset), false,
+				BoolSlotSource::True);
 		}
 		generate_branch_to_block(
 			Jump::jmp, successors[0], false, false);
 		label_place(falsey);
 		if (layout.has_result) {
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.result_offset
-						+ offsetof(zval, u1.type_info))),
-				IS_FALSE);
+			store_bool_slot(frame_reg,
+				static_cast<int32_t>(layout.result_offset), false,
+				BoolSlotSource::False);
 		}
 		generate_branch_to_block(
 			Jump::jmp, successors[1], false, false);
@@ -6010,27 +6032,15 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 
 	label_place(truthy);
 	if (layout.has_result) {
-		ASM(MOV64mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.result_offset)), 1);
-		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.result_offset + offsetof(zval, u1.type_info))),
-			IS_TRUE);
+		store_bool_slot(frame_reg, static_cast<int32_t>(layout.result_offset),
+			true, BoolSlotSource::True);
 	}
 	ASM(MOV32ri, decision_reg, 1);
 	generate_raw_jump(Jump::jmp, ready);
 	label_place(falsey);
 	if (layout.has_result) {
-		ASM(MOV64mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.result_offset)), 0);
-		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.result_offset + offsetof(zval, u1.type_info))),
-			IS_FALSE);
+		store_bool_slot(frame_reg, static_cast<int32_t>(layout.result_offset),
+			true, BoolSlotSource::False);
 	}
 	ASM(MOV32ri, decision_reg, 0);
 	generate_raw_jump(Jump::jmp, ready);
@@ -6115,11 +6125,8 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 		if (scalar_layout.has_result) {
 			const int32_t result =
 				static_cast<int32_t>(scalar_layout.result_offset);
-			ASM(LEA32rm, type_reg,
-				FE_MEM(truth_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr, FE_MEM(frame_reg, 0, FE_NOREG,
-				result + static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				type_reg);
+			store_bool_slot(frame_reg, result, false, BoolSlotSource::Value,
+				truth_reg, type_reg);
 		}
 		if (!scalar_in_return_reg) {
 			ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, scalar_slot), truth_reg);
@@ -10101,6 +10108,11 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 		}
 		auto [value_ref, value] = val_ref_single(input);
 		auto value_reg = value.load_to_reg();
+		if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			store_bool_slot(canonical_frame_register(), payload_offset, true,
+				BoolSlotSource::Value, value_reg);
+			return true;
+		}
 		if (val_parts(input).bank == tpde::x64::PlatformConfig::FP_BANK) {
 			ASM(SSE_MOVSDmr, FE_MEM(canonical_frame_register(), 0,
 				FE_NOREG, payload_offset), value_reg);
@@ -10108,17 +10120,9 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 			ASM(MOV64mr, FE_MEM(canonical_frame_register(), 0,
 				FE_NOREG, payload_offset), value_reg);
 		}
-		if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-			ScratchReg kind{this};
-			auto kind_reg = kind.alloc_gp();
-			ASM(LEA32rm, kind_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr, FE_MEM(canonical_frame_register(), 0,
-				FE_NOREG, type_offset), kind_reg);
-		} else {
-			ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0,
-				FE_NOREG, type_offset),
-				static_cast<int32_t>(zval_type(exact_type)));
-		}
+		ASM(MOV32mi, FE_MEM(canonical_frame_register(), 0,
+			FE_NOREG, type_offset),
+			static_cast<int32_t>(zval_type(exact_type)));
 		return true;
 	}
 	if (node.operands.size() != 2
@@ -10179,24 +10183,20 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 		} else {
 			auto input = input_value.part(0);
 			auto input_reg = input.load_to_reg();
-			if (val_parts(node.operands[0]).bank
-					== tpde::x64::PlatformConfig::FP_BANK) {
-				ASM(SSE_MOVSDmr,
-					FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
-					input_reg);
-			} else {
-				ASM(MOV64mr,
-					FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
-					input_reg);
-			}
 			if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-				ASM(LEA32rm, store_type_reg, FE_MEM(input_reg, 0, FE_NOREG, IS_FALSE));
-				ASM(MOV32mr,
-					FE_MEM(store_slot_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zval, u1.type_info))),
-					store_type_reg);
+				store_bool_slot(store_slot_reg, 0, true,
+					BoolSlotSource::Value, input_reg, store_type_reg);
 			} else {
+				if (val_parts(node.operands[0]).bank
+						== tpde::x64::PlatformConfig::FP_BANK) {
+					ASM(SSE_MOVSDmr,
+						FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
+						input_reg);
+				} else {
+					ASM(MOV64mr,
+						FE_MEM(store_slot_reg, 0, FE_NOREG, 0),
+						input_reg);
+				}
 				ASM(MOV32mi,
 					FE_MEM(store_slot_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
@@ -10272,20 +10272,17 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 	} else {
 		auto [value_ref, value] = val_ref_single(input);
 		auto value_reg = value.load_to_reg();
-		if (val_parts(input).bank
-				== tpde::x64::PlatformConfig::FP_BANK) {
-			ASM(SSE_MOVSDmr, FE_MEM(slot_reg, 0, FE_NOREG, 0),
-				value_reg);
-		} else {
-			ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), value_reg);
-		}
 		if (exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
-			ASM(LEA32rm, old_type_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr,
-				FE_MEM(slot_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zval, u1.type_info))),
-				old_type_reg);
+			store_bool_slot(slot_reg, 0, true, BoolSlotSource::Value,
+				value_reg, old_type_reg);
 		} else {
+			if (val_parts(input).bank
+					== tpde::x64::PlatformConfig::FP_BANK) {
+				ASM(SSE_MOVSDmr, FE_MEM(slot_reg, 0, FE_NOREG, 0),
+					value_reg);
+			} else {
+				ASM(MOV64mr, FE_MEM(slot_reg, 0, FE_NOREG, 0), value_reg);
+			}
 			ASM(MOV32mi,
 				FE_MEM(slot_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zval, u1.type_info))),
@@ -11367,14 +11364,11 @@ bool ZendCompilerX64::materialize_cold_operand(
 	}
 	if (kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-			ScratchReg type_info{this};
-			auto type_info_reg = type_info.alloc_gp();
-			ASM(LEA32rm, type_info_reg, FE_MEM(payload_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr,
-				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-					static_cast<int32_t>(
-						offset + offsetof(zval, u1.type_info))),
-				type_info_reg);
+			/* The loop above stored the payload, with a stack copy's
+			 * register still held. */
+			store_bool_slot(canonical_frame_register(),
+				static_cast<int32_t>(offset), false, BoolSlotSource::Value,
+				payload_reg);
 		} else {
 			ScratchReg type_info{this};
 			auto type_info_reg = type_info.alloc_gp();
@@ -12648,12 +12642,8 @@ int ZendCompilerX64::array_element_isset(
 		result.set_modified();
 	} else {
 		/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
-		ASM(ADD32ri, answer_reg, IS_FALSE);
-		ASM(MOV32mr,
-			FE_MEM(er.frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(ae.result_offset
-					+ offsetof(zval, u1.type_info))),
-			answer_reg);
+		store_bool_slot(er.frame_reg, static_cast<int32_t>(ae.result_offset),
+			false, BoolSlotSource::InPlace, answer_reg);
 	}
 	er.answer.reset();
 	finish_guarded(ae.slow, ae.done, std::move(er.decision), er.frame_scratch,
@@ -13362,12 +13352,8 @@ int ZendCompilerX64::array_element_result(
 		result.set_modified();
 	} else if (ae.tests) {
 		/* IS_FALSE + answer is IS_FALSE or IS_TRUE. */
-		ASM(ADD32ri, ae.answer_reg, IS_FALSE);
-		ASM(MOV32mr,
-			FE_MEM(er.frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(ae.result_offset
-					+ offsetof(zval, u1.type_info))),
-			ae.answer_reg);
+		store_bool_slot(er.frame_reg, static_cast<int32_t>(ae.result_offset),
+			false, BoolSlotSource::InPlace, ae.answer_reg);
 	}
 	er.answer.reset();
 	finish_guarded(ae.slow, ae.done, std::move(er.decision), er.frame_scratch,
@@ -14686,16 +14672,19 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 			auto frame_reg = frame_scratch.cur_reg();
 			ScratchReg result{this};
 			auto result_reg = result.alloc_gp();
+			/* The boolean is its type (store_bool_slot()). */
 			ASM(MOV32rm, result_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(boolean.operand_offset)));
+					static_cast<int32_t>(boolean.operand_offset
+						+ offsetof(zval, u1.type_info))));
+			ASM(SUB32ri, result_reg, IS_FALSE);
 			if (boolean.negate) {
 				ASM(XOR32ri, result_reg, 1);
 			}
 			ScratchReg type{this};
-			store_boolean_zval(frame_reg,
-				static_cast<int32_t>(boolean.result_offset), result_reg,
-				type.alloc_gp());
+			store_bool_slot(frame_reg,
+				static_cast<int32_t>(boolean.result_offset), true,
+				BoolSlotSource::Value, result_reg, type.alloc_gp());
 			return true;
 		}
 		/*
@@ -15413,12 +15402,8 @@ int ZendCompilerX64::known_double_binary(
 		emit_double_compare_set(nb.opcode, left_fp, right_fp,
 			value_reg, parity_reg);
 		if (nb.result_slot) {
-			ASM(LEA32rm, parity_reg, FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG, nb.result_offset
-					+ static_cast<int32_t>(
-						offsetof(zval, u1.type_info))),
-				parity_reg);
+			store_bool_slot(frame_reg, nb.result_offset, false,
+				BoolSlotSource::Value, value_reg, parity_reg);
 		}
 		if (node.has_result) {
 			if (nb.result_kind
@@ -15735,7 +15720,10 @@ int ZendCompilerX64::general_numeric_binary(
 	literals.reset();
 	left_double.reset();
 	right_double.reset();
-	if (nb.result_slot) {
+	if (nb.result_slot && nb.comparison) {
+		store_bool_slot(frame_reg, nb.result_offset, true,
+			BoolSlotSource::Type, left_reg, result_type_reg);
+	} else if (nb.result_slot) {
 		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, nb.result_offset),
 			left_reg);
 		ASM(MOV32mr,
@@ -15873,29 +15861,21 @@ bool ZendCompilerX64::register_long_binary(LongBinaryContext &lb) {
 				return false;
 		}
 	}
-	if (lb.framed_layout || lb.register_result_layout) {
+	if ((lb.framed_layout || lb.register_result_layout) && boolean_result) {
+		store_bool_slot(frame_reg,
+			static_cast<int32_t>(lb.layout.result_offset), true,
+			BoolSlotSource::Value, result_reg);
+	} else if (lb.framed_layout || lb.register_result_layout) {
 		ASM(MOV64mr,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(lb.layout.result_offset)),
 			result_reg);
-		if (boolean_result) {
-			ScratchReg result_type{this};
-			auto result_type_reg = result_type.alloc_gp();
-			ASM(LEA32rm, result_type_reg, FE_MEM(result_reg, 0, FE_NOREG, IS_FALSE));
-			ASM(MOV32mr,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						lb.layout.result_offset
-							+ offsetof(zval, u1.type_info))),
-				result_type_reg);
-		} else {
-			ASM(MOV32mi,
-				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						lb.layout.result_offset
-							+ offsetof(zval, u1.type_info))),
-				IS_LONG);
-		}
+		ASM(MOV32mi,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					lb.layout.result_offset
+						+ offsetof(zval, u1.type_info))),
+			IS_LONG);
 	}
 	if (ir().machine_kind(node.result)
 			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
@@ -16465,10 +16445,12 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 			ASM(MOV32ri, result_reg, 1);
 		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			/* The boolean is its type (store_bool_slot()). */
 			ASM(MOV32rm, type_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(TEST32rr, type_reg, type_reg);
+					static_cast<int32_t>(layout.operand_offset
+						+ offsetof(zval, u1.type_info))));
+			ASM(CMP32ri, type_reg, IS_FALSE);
 			generate_raw_set(Jump::je, result_reg);
 		} else {
 			ASM(MOV64rm, type_reg,
@@ -16477,9 +16459,9 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 			ASM(TEST64rr, type_reg, type_reg);
 			generate_raw_set(Jump::je, result_reg);
 		}
-		store_boolean_zval(frame_reg,
-			static_cast<int32_t>(layout.result_offset), result_reg,
-			type_reg);
+		store_bool_slot(frame_reg,
+			static_cast<int32_t>(layout.result_offset), true,
+			BoolSlotSource::Value, result_reg, type_reg);
 		const auto successors =
 			adaptor->block_succs(IRBlockRef{node.control_block});
 		generate_branch_to_block(
@@ -16523,10 +16505,12 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 				ScratchReg value{this};
 				auto value_reg = value.alloc_gp();
 				if (type == ZEND_MIR_SCALAR_TYPE_I1) {
+					/* The boolean is its type (store_bool_slot()). */
 					ASM(MOV32rm, value_reg,
 						FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
-							static_cast<int32_t>(layout.operand_offset)));
-					ASM(TEST32rr, value_reg, value_reg);
+							static_cast<int32_t>(layout.operand_offset
+								+ offsetof(zval, u1.type_info))));
+					ASM(CMP32ri, value_reg, IS_FALSE);
 				} else {
 					ASM(MOV64rm, value_reg,
 						FE_MEM(frame_scratch.cur_reg(), 0, FE_NOREG,
@@ -16542,9 +16526,9 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 					val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 				auto frame_scratch = frame_register(std::move(frame));
 				ScratchReg result_type{this};
-				store_boolean_zval(frame_scratch.cur_reg(),
-					static_cast<int32_t>(layout.result_offset), result_reg,
-					result_type.alloc_gp());
+				store_bool_slot(frame_scratch.cur_reg(),
+					static_cast<int32_t>(layout.result_offset), true,
+					BoolSlotSource::Value, result_reg, result_type.alloc_gp());
 				const auto successors = adaptor->block_succs(
 					IRBlockRef{node.control_block});
 				generate_branch_to_block(
@@ -16581,10 +16565,12 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 		if (!layout.is_empty) {
 			generate_raw_jump(Jump::jmp, truthy);
 		} else if (node.exact_type == ZEND_MIR_SCALAR_TYPE_I1) {
+			/* The boolean is its type (store_bool_slot()). */
 			ASM(MOV32rm, value_reg,
 				FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(layout.operand_offset)));
-			ASM(TEST32rr, value_reg, value_reg);
+					static_cast<int32_t>(layout.operand_offset
+						+ offsetof(zval, u1.type_info))));
+			ASM(CMP32ri, value_reg, IS_FALSE);
 			generate_raw_jump(Jump::jne, truthy);
 			generate_raw_jump(Jump::jmp, falsey);
 		} else {
@@ -16692,9 +16678,9 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 		ASM(MOV32rr, result_reg, type_reg);
 		result.set_modified();
 	} else {
-		store_boolean_zval(frame_reg,
-			static_cast<int32_t>(layout.result_offset), type_reg,
-			value_reg);
+		store_bool_slot(frame_reg,
+			static_cast<int32_t>(layout.result_offset), true,
+			BoolSlotSource::Value, type_reg, value_reg);
 	}
 	type.reset();
 	value.reset();
@@ -17524,8 +17510,6 @@ bool ZendCompilerX64::instanceof_inline(InstContext &ctx) {
 	}
 	const int32_t value_offset = static_cast<int32_t>(value_offset64);
 	const int32_t result_offset = static_cast<int32_t>(result_offset64);
-	const int32_t result_type = result_offset
-		+ static_cast<int32_t>(offsetof(zval, u1.type_info));
 	const auto spilled = spill_before_branch(true);
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
@@ -17564,8 +17548,8 @@ bool ZendCompilerX64::instanceof_inline(InstContext &ctx) {
 		/* An undefined CV warns in the helper. */
 		ASM(CMP32ri, type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::je, slow);
-		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
-			IS_FALSE);
+		store_bool_slot(frame_reg, result_offset, false,
+			BoolSlotSource::False);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(object);
 		ASM(MOV64rm, class_reg, FE_MEM(frame_reg, 0, FE_NOREG,
@@ -17619,12 +17603,12 @@ bool ZendCompilerX64::instanceof_inline(InstContext &ctx) {
 			generate_raw_jump(Jump::jne, parent_loop);
 		}
 		label_place(not_instance);
-		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
-			IS_FALSE);
+		store_bool_slot(frame_reg, result_offset, false,
+			BoolSlotSource::False);
 		generate_raw_jump(Jump::jmp, done);
 		label_place(instance);
-		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_type),
-			IS_TRUE);
+		store_bool_slot(frame_reg, result_offset, false,
+			BoolSlotSource::True);
 		generate_raw_jump(Jump::jmp, done);
 	}
 	label_place(slow);
@@ -19443,14 +19427,6 @@ void ZendCompilerX64::emit_condition_result(
 		static_cast<int32_t>(tb.layout.operand_offset);
 	const int32_t result_offset =
 		static_cast<int32_t>(tb.layout.result_offset);
-	auto store_result_type = [&](uint32_t type_info) {
-		ASM(MOV32mi,
-			FE_MEM(tb.frame_reg, 0, FE_NOREG,
-				result_offset
-					+ static_cast<int32_t>(offsetof(
-						zval, u1.type_info))),
-			type_info);
-	};
 	if (vc.register_condition) {
 		mov(tb.type_reg, tb.boxed_type_info_reg, 4);
 	} else {
@@ -19534,10 +19510,12 @@ void ZendCompilerX64::emit_condition_result(
 		ASM(TEST64rr, tb.value_reg, tb.value_reg);
 		generate_raw_jump(Jump::je, result_false);
 		label_place(result_true);
-		store_result_type(IS_TRUE);
+		store_bool_slot(tb.frame_reg, result_offset, false,
+			BoolSlotSource::True);
 		generate_raw_jump(Jump::jmp, tb.truthy);
 		label_place(result_false);
-		store_result_type(IS_FALSE);
+		store_bool_slot(tb.frame_reg, result_offset, false,
+			BoolSlotSource::False);
 		generate_raw_jump(Jump::jmp, tb.falsey);
 	}
 }
@@ -20681,13 +20659,19 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 							descriptor_argument
 								.source_frame_offset)));
 			}
-			ASM(MOV64mr,
-				FE_MEM(callee_reg, 0, FE_NOREG, offset),
-				payload_reg);
-			store_exact_type_word(callee_reg,
-				offset + zval_high_word,
-				descriptor_argument.exact_type,
-				payload_reg);
+			if (descriptor_argument.exact_type
+					== ZEND_MIR_SCALAR_TYPE_I1) {
+				store_bool_slot(callee_reg, offset, true,
+					BoolSlotSource::Value, payload_reg,
+					AsmReg::make_invalid(), true);
+			} else {
+				ASM(MOV64mr,
+					FE_MEM(callee_reg, 0, FE_NOREG, offset),
+					payload_reg);
+				store_exact_type_word(callee_reg,
+					offset + zval_high_word,
+					descriptor_argument.exact_type);
+			}
 		} else {
 			if (source_argument.source_operand.kind
 						== ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -20700,23 +20684,23 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 				ASM(MOV64ri, literal_reg,
 					call.direct_call->arguments[index]
 						.scalar_bits);
-				ASM(MOV64mr,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						offset),
-					literal_reg);
-				ASM(MOV64mi,
-					FE_MEM(callee_reg, 0, FE_NOREG,
-						offset + zval_high_word),
-					zval_type(call.direct_call
-						->arguments[index].exact_type)
-						+ (call.direct_call
-								->arguments[index].exact_type
-							== ZEND_MIR_SCALAR_TYPE_I1
-							? static_cast<uint32_t>(
-								call.direct_call
-									->arguments[index]
-									.scalar_bits)
-							: 0));
+				if (call.direct_call->arguments[index].exact_type
+						== ZEND_MIR_SCALAR_TYPE_I1) {
+					store_bool_slot(callee_reg, offset, true,
+						call.direct_call->arguments[index].scalar_bits != 0
+							? BoolSlotSource::True : BoolSlotSource::False,
+						literal_reg, AsmReg::make_invalid(), true);
+				} else {
+					ASM(MOV64mr,
+						FE_MEM(callee_reg, 0, FE_NOREG,
+							offset),
+						literal_reg);
+					ASM(MOV64mi,
+						FE_MEM(callee_reg, 0, FE_NOREG,
+							offset + zval_high_word),
+						zval_type(call.direct_call
+							->arguments[index].exact_type));
+				}
 			} else {
 				auto source_frame_reg =
 					argument.load_to_reg();
@@ -20776,23 +20760,29 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 		} else {
 			auto argument_reg =
 				argument.load_to_reg();
-			if (val_parts(node.operands[index]).bank
-					== tpde::x64::PlatformConfig::
-						FP_BANK) {
-				ASM(SSE_MOVSDmr,
-					FE_MEM(callee_reg, 0,
-						FE_NOREG, offset),
-					argument_reg);
+			const uint32_t argument_type = zval_type(*adaptor,
+				node.operands[index]);
+			if (argument_type == IS_FALSE) {
+				store_bool_slot(callee_reg, offset, true,
+					BoolSlotSource::Value, argument_reg,
+					AsmReg::make_invalid(), true);
 			} else {
-				ASM(MOV64mr,
-					FE_MEM(callee_reg, 0,
-						FE_NOREG, offset),
-					argument_reg);
+				if (val_parts(node.operands[index]).bank
+						== tpde::x64::PlatformConfig::
+							FP_BANK) {
+					ASM(SSE_MOVSDmr,
+						FE_MEM(callee_reg, 0,
+							FE_NOREG, offset),
+						argument_reg);
+				} else {
+					ASM(MOV64mr,
+						FE_MEM(callee_reg, 0,
+							FE_NOREG, offset),
+						argument_reg);
+				}
+				store_type_word(callee_reg, offset + zval_high_word,
+					argument_type);
 			}
-			store_type_word(callee_reg, offset + zval_high_word,
-				zval_type(*adaptor,
-					node.operands[index]),
-				argument_reg);
 		}
 			}
 		}
@@ -21617,21 +21607,23 @@ bool ZendCompilerX64::copy_direct_user_arguments(DirectUserCallContext &du,
 					auto literal_reg = literal.alloc_gp();
 					ASM(MOV64ri, literal_reg,
 						descriptor_argument.scalar_bits);
-					ASM(MOV64mr,
-						FE_MEM(act.callee_reg, 0, FE_NOREG,
-							offset),
-						literal_reg);
-					ASM(MOV64mi,
-						FE_MEM(act.callee_reg, 0, FE_NOREG,
-							offset + zval_high_word),
-						zval_type(
-							descriptor_argument.exact_type)
-							+ (descriptor_argument.exact_type
-								== ZEND_MIR_SCALAR_TYPE_I1
-								? static_cast<uint32_t>(
-									descriptor_argument
-										.scalar_bits)
-								: 0));
+					if (descriptor_argument.exact_type
+							== ZEND_MIR_SCALAR_TYPE_I1) {
+						store_bool_slot(act.callee_reg, offset, true,
+							descriptor_argument.scalar_bits != 0
+								? BoolSlotSource::True : BoolSlotSource::False,
+							literal_reg, AsmReg::make_invalid(), true);
+					} else {
+						ASM(MOV64mr,
+							FE_MEM(act.callee_reg, 0, FE_NOREG,
+								offset),
+							literal_reg);
+						ASM(MOV64mi,
+							FE_MEM(act.callee_reg, 0, FE_NOREG,
+								offset + zval_high_word),
+							zval_type(
+								descriptor_argument.exact_type));
+					}
 				} else if (node.operands[index]
 						!= IRValueRef{Adaptor::FRAME_VALUE}) {
 					auto argument_reg = argument.load_to_reg();
@@ -21645,20 +21637,26 @@ bool ZendCompilerX64::copy_direct_user_arguments(DirectUserCallContext &du,
 						ASM(CMP32ri, type_info.cur_reg(), IS_TRUE);
 						generate_raw_set(Jump::je, argument_reg);
 					}
-					if (val_parts(node.operands[index]).bank
-							== tpde::x64::PlatformConfig::FP_BANK) {
-						ASM(SSE_MOVSDmr,
-							FE_MEM(act.callee_reg, 0, FE_NOREG, offset),
-							argument_reg);
+					if (descriptor_argument.exact_type
+							== ZEND_MIR_SCALAR_TYPE_I1) {
+						store_bool_slot(act.callee_reg, offset, true,
+							BoolSlotSource::Value, argument_reg,
+							AsmReg::make_invalid(), true);
 					} else {
-						ASM(MOV64mr,
-							FE_MEM(act.callee_reg, 0, FE_NOREG, offset),
-							argument_reg);
+						if (val_parts(node.operands[index]).bank
+								== tpde::x64::PlatformConfig::FP_BANK) {
+							ASM(SSE_MOVSDmr,
+								FE_MEM(act.callee_reg, 0, FE_NOREG, offset),
+								argument_reg);
+						} else {
+							ASM(MOV64mr,
+								FE_MEM(act.callee_reg, 0, FE_NOREG, offset),
+								argument_reg);
+						}
+						store_exact_type_word(act.callee_reg,
+							offset + zval_high_word,
+							descriptor_argument.exact_type);
 					}
-					store_exact_type_word(act.callee_reg,
-						offset + zval_high_word,
-						descriptor_argument.exact_type,
-						argument_reg);
 				} else {
 					if (descriptor_argument.source_frame_offset
 							> INT32_MAX) {
@@ -21683,14 +21681,20 @@ bool ZendCompilerX64::copy_direct_user_arguments(DirectUserCallContext &du,
 									descriptor_argument
 										.source_frame_offset)));
 					}
-					ASM(MOV64mr,
-						FE_MEM(act.callee_reg, 0, FE_NOREG,
-							offset),
-						payload_reg);
-					store_exact_type_word(act.callee_reg,
-						offset + zval_high_word,
-						descriptor_argument.exact_type,
-						payload_reg);
+					if (descriptor_argument.exact_type
+							== ZEND_MIR_SCALAR_TYPE_I1) {
+						store_bool_slot(act.callee_reg, offset, true,
+							BoolSlotSource::Value, payload_reg,
+							AsmReg::make_invalid(), true);
+					} else {
+						ASM(MOV64mr,
+							FE_MEM(act.callee_reg, 0, FE_NOREG,
+								offset),
+							payload_reg);
+						store_exact_type_word(act.callee_reg,
+							offset + zval_high_word,
+							descriptor_argument.exact_type);
+					}
 				}
 			} else if (descriptor_argument.source_operand.kind
 					== ZEND_MIR_SOURCE_OPERAND_LITERAL
@@ -21823,17 +21827,15 @@ bool ZendCompilerX64::copy_direct_user_arguments(DirectUserCallContext &du,
 				} else {
 					ASM(MOV64rr, bits_reg, payload_reg);
 				}
-				ASM(MOV64mr,
-					FE_MEM(act.callee_reg, 0, FE_NOREG, offset),
-					bits_reg);
 				if (argument_kind
 						== ZEND_TPDE_MACHINE_VALUE_BOOL) {
-					ASM(ADD64ri, bits_reg, IS_FALSE);
-					ASM(MOV64mr,
-						FE_MEM(act.callee_reg, 0, FE_NOREG,
-							offset + zval_high_word),
-						bits_reg);
+					store_bool_slot(act.callee_reg, offset, true,
+						BoolSlotSource::InPlace, bits_reg,
+						AsmReg::make_invalid(), true);
 				} else {
+					ASM(MOV64mr,
+						FE_MEM(act.callee_reg, 0, FE_NOREG, offset),
+						bits_reg);
 					ASM(MOV64mi,
 						FE_MEM(act.callee_reg, 0, FE_NOREG,
 							offset + zval_high_word),
@@ -23852,20 +23854,17 @@ bool ZendCompilerX64::compile_return(InstContext &ctx) {
 	ASM(TEST64rr, pointer_reg, pointer_reg);
 	generate_raw_jump(Jump::je, no_result);
 	auto value_reg = value.load_to_reg();
-	if (val_parts(node.operands[0]).bank == tpde::x64::PlatformConfig::FP_BANK) {
-		ASM(SSE_MOVSDmr, FE_MEM(pointer_reg, 0, FE_NOREG, 0), value_reg);
-	} else {
-		ASM(MOV64mr, FE_MEM(pointer_reg, 0, FE_NOREG, 0), value_reg);
-	}
 	uint32_t type = zval_type(*adaptor, node.operands[0]);
 	if (type == IS_FALSE) {
-		ScratchReg kind{this};
-		auto kind_reg = kind.alloc_gp();
-		ASM(LEA32rm, kind_reg,
-			FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-		ASM(MOV32mr, FE_MEM(pointer_reg, 0, FE_NOREG, zval_high_word),
-			kind_reg);
+		store_bool_slot(pointer_reg, 0, true, BoolSlotSource::Value,
+			value_reg);
 	} else {
+		if (val_parts(node.operands[0]).bank
+				== tpde::x64::PlatformConfig::FP_BANK) {
+			ASM(SSE_MOVSDmr, FE_MEM(pointer_reg, 0, FE_NOREG, 0), value_reg);
+		} else {
+			ASM(MOV64mr, FE_MEM(pointer_reg, 0, FE_NOREG, 0), value_reg);
+		}
 		ASM(MOV32mi, FE_MEM(pointer_reg, 0, FE_NOREG, zval_high_word),
 			static_cast<int32_t>(type));
 	}
@@ -24263,41 +24262,43 @@ bool ZendCompilerX64::compile_register_return(InstContext &ctx) {
 				return false;
 			}
 		}
-		if (val_parts(returned_ref).bank
-				== tpde::x64::PlatformConfig::FP_BANK) {
-			ASM(SSE_MOVSDmr,
-				FE_MEM(pointer_reg, 0, FE_NOREG, 0),
-				value_reg);
-		} else {
-			ASM(MOV64mr,
-				FE_MEM(pointer_reg, 0, FE_NOREG, 0),
-				value_reg);
-		}
-		ScratchReg type_info{this};
-		auto type_info_reg = type_info.alloc_gp();
 		if (kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
-			ASM(LEA32rm, type_info_reg,
-				FE_MEM(value_reg, 0, FE_NOREG, IS_FALSE));
-		} else if (zend_tpde_machine_value_zval_type(kind)
-				!= IS_UNDEF) {
-			if (!emit_machine_zval_type_info(
-					kind, value_reg, type_info_reg)) {
-				return false;
-			}
+			store_bool_slot(pointer_reg, 0, true, BoolSlotSource::Value,
+				value_reg);
 		} else {
-			const uint32_t type_info_value =
-				zval_type(*adaptor, returned_ref);
-			if (type_info_value == IS_UNDEF) {
-				return false;
+			if (val_parts(returned_ref).bank
+					== tpde::x64::PlatformConfig::FP_BANK) {
+				ASM(SSE_MOVSDmr,
+					FE_MEM(pointer_reg, 0, FE_NOREG, 0),
+					value_reg);
+			} else {
+				ASM(MOV64mr,
+					FE_MEM(pointer_reg, 0, FE_NOREG, 0),
+					value_reg);
 			}
-			ASM(MOV32ri, type_info_reg,
-				type_info_value);
+			ScratchReg type_info{this};
+			auto type_info_reg = type_info.alloc_gp();
+			if (zend_tpde_machine_value_zval_type(kind)
+					!= IS_UNDEF) {
+				if (!emit_machine_zval_type_info(
+						kind, value_reg, type_info_reg)) {
+					return false;
+				}
+			} else {
+				const uint32_t type_info_value =
+					zval_type(*adaptor, returned_ref);
+				if (type_info_value == IS_UNDEF) {
+					return false;
+				}
+				ASM(MOV32ri, type_info_reg,
+					type_info_value);
+			}
+			ASM(MOV32mr,
+				FE_MEM(pointer_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zval, u1.type_info))),
+				type_info_reg);
 		}
-		ASM(MOV32mr,
-			FE_MEM(pointer_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					offsetof(zval, u1.type_info))),
-			type_info_reg);
 		}
 		if (!copy_source) {
 			ASM(MOV32mi,
