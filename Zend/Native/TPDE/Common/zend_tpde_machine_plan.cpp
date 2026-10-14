@@ -3669,11 +3669,14 @@ static bool drop_partly_typed_bodies(component_machine_planner &planner) {
 				}
 			}
 			/* The dry run counts an allocation failure as a call that is
-			 * not typed. */
-			freeze.all_typed = freeze_typed_component_calls(
-					&plan, planner.component_plans, component_count)
-				== typed_component_calls::all_typed;
-			freeze.frozen = true;
+			 * not typed and keeps no freeze: the final freeze runs
+			 * again and reports the failure. */
+			const typed_component_calls calls =
+				freeze_typed_component_calls(
+					&plan, planner.component_plans, component_count);
+			freeze.all_typed = calls == typed_component_calls::all_typed;
+			freeze.frozen =
+				calls != typed_component_calls::allocation_failed;
 			freeze.callees = std::move(callees);
 		}
 		if (!freeze.all_typed) {
