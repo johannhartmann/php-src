@@ -13899,11 +13899,21 @@ int ZendCompilerX64::type_check_inline(InstContext &ctx) {
 	ScratchReg mask{this};
 	ASM(MOV32ri, mask.alloc_gp(),
 		static_cast<int32_t>(operation.extended_value));
+	/* A temporary, or a CV Zend's type inference proves defined and
+	 * no reference, is tested by its type alone. */
+	const zend_tpde_source_opcode *source = fused_source_opcode(ctx.mir);
+	const bool plain = temporary
+		|| (source != nullptr
+			&& (source->op1_may_be & (MAY_BE_UNDEF | MAY_BE_REF)) == 0);
 	ValuePart matched{tpde::x64::PlatformConfig::GP_BANK, 8};
-	if (!EncodeBase::encode_zend_native_zval_type_check(
-			GenericValuePart{GenericValuePart::Expr{frame_reg,
-				static_cast<int64_t>(value_offset)}},
-			GenericValuePart{std::move(mask)}, matched)) {
+	GenericValuePart value{GenericValuePart::Expr{frame_reg,
+		static_cast<int64_t>(value_offset)}};
+	if (!(plain
+			? EncodeBase::encode_zend_native_zval_type_check_plain(
+				std::move(value), GenericValuePart{std::move(mask)}, matched)
+			: EncodeBase::encode_zend_native_zval_type_check(
+				std::move(value), GenericValuePart{std::move(mask)},
+				matched))) {
 		return -1;
 	}
 	const AsmReg matched_reg = matched.cur_reg_or_load(this);
@@ -13911,8 +13921,10 @@ int ZendCompilerX64::type_check_inline(InstContext &ctx) {
 	ScratchReg type{this};
 	auto decision_reg = decision.alloc_gp();
 	auto type_reg = type.alloc_gp();
-	ASM(CMP64ri, matched_reg, ZEND_NATIVE_TYPE_CHECK_UNDEFINED);
-	generate_raw_jump(Jump::je, slow);
+	if (!plain) {
+		ASM(CMP64ri, matched_reg, ZEND_NATIVE_TYPE_CHECK_UNDEFINED);
+		generate_raw_jump(Jump::je, slow);
+	}
 	/* A CV result is overwritten: its old value must need no
 	 * release (a counted one takes the helper). */
 	if (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
@@ -16958,15 +16970,18 @@ bool ZendCompilerX64::object_property_read(InstContext &ctx) {
 					offsetof(zend_execute_data, run_time_cache))));
 		ASM(TEST64rr, cache_reg, cache_reg);
 		generate_raw_jump(Jump::je, slow);
-		/* A reference property reads as its value (ZVAL_COPY_DEREF). */
+		/* A reference property reads as its value (ZVAL_COPY_DEREF);
+		 * a receiver known to be an object is not tested. */
 		ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (!EncodeBase::encode_zend_native_property_read_slot(
-				GenericValuePart{GenericValuePart::Expr{frame_reg,
-					static_cast<int64_t>(layout.receiver_offset)}},
-				GenericValuePart{GenericValuePart::Expr{
-					std::move(cache),
-					static_cast<int64_t>(layout.cache_offset)}},
-				slot)) {
+		GenericValuePart receiver{GenericValuePart::Expr{frame_reg,
+			static_cast<int64_t>(layout.receiver_offset)}};
+		GenericValuePart cache_entry{GenericValuePart::Expr{
+			std::move(cache), static_cast<int64_t>(layout.cache_offset)}};
+		if (!(receiver_is_object(mir.value_operation)
+				? EncodeBase::encode_zend_native_object_property_read_slot(
+					std::move(receiver), std::move(cache_entry), slot)
+				: EncodeBase::encode_zend_native_property_read_slot(
+					std::move(receiver), std::move(cache_entry), slot))) {
 			return false;
 		}
 		const AsmReg slot_reg = slot.cur_reg_or_load(this);
@@ -17083,13 +17098,15 @@ bool ZendCompilerX64::object_property_address(InstContext &ctx) {
 			0);
 		generate_raw_jump(Jump::jne, slow);
 		ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
-		if (!EncodeBase::encode_zend_native_property_slot(
-				GenericValuePart{GenericValuePart::Expr{frame_reg,
-					static_cast<int64_t>(layout.receiver_offset)}},
-				GenericValuePart{GenericValuePart::Expr{
-					std::move(cache),
-					static_cast<int64_t>(layout.cache_offset)}},
-				slot)) {
+		GenericValuePart receiver{GenericValuePart::Expr{frame_reg,
+			static_cast<int64_t>(layout.receiver_offset)}};
+		GenericValuePart cache_entry{GenericValuePart::Expr{
+			std::move(cache), static_cast<int64_t>(layout.cache_offset)}};
+		if (!(receiver_is_object(mir.value_operation)
+				? EncodeBase::encode_zend_native_object_property_slot(
+					std::move(receiver), std::move(cache_entry), slot)
+				: EncodeBase::encode_zend_native_property_slot(
+					std::move(receiver), std::move(cache_entry), slot))) {
 			return false;
 		}
 		const AsmReg slot_reg = slot.cur_reg_or_load(this);

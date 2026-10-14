@@ -35,20 +35,15 @@ typedef struct _zend_native_boxed {
 } zend_native_boxed;
 
 /*
- * The declared property slot of an object receiver whose class and offset
- * the VM run-time cache slot names, or NULL: a non-object receiver, a
- * different class or a dynamic property.
+ * The declared property slot of an object whose class and offset the VM
+ * run-time cache slot names, or NULL: a different class or a dynamic
+ * property.
  */
-ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_cached_property(
-	const zval *receiver, void *const *cache_slot)
+ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_cached_object_property(
+	const zend_object *object, void *const *cache_slot)
 {
-	const zend_object *object;
 	uintptr_t offset;
 
-	if (UNEXPECTED(Z_TYPE_P(receiver) != IS_OBJECT)) {
-		return NULL;
-	}
-	object = Z_OBJ_P(receiver);
 	if (UNEXPECTED(cache_slot[0] != object->ce)) {
 		return NULL;
 	}
@@ -59,6 +54,42 @@ ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_cached_property(
 	return OBJ_PROP(object, offset);
 }
 
+/* The same for a receiver zval, NULL for a non-object one. */
+ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_cached_property(
+	const zval *receiver, void *const *cache_slot)
+{
+	if (UNEXPECTED(Z_TYPE_P(receiver) != IS_OBJECT)) {
+		return NULL;
+	}
+	return zend_native_cached_object_property(Z_OBJ_P(receiver), cache_slot);
+}
+
+/* The slot of a cached declared property, or NULL when it is undefined or
+ * a reference. */
+ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_writable_property(zval *property)
+{
+	if (property == NULL) {
+		return NULL;
+	}
+	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF
+			|| Z_TYPE_P(property) == IS_REFERENCE)
+		? NULL : property;
+}
+
+/* The value a read of a cached declared property sees, as
+ * ZVAL_COPY_DEREF() reads it: the property, or the value of the reference
+ * it holds; NULL when it is unset. */
+ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_readable_property(zval *property)
+{
+	if (property == NULL) {
+		return NULL;
+	}
+	if (UNEXPECTED(Z_TYPE_P(property) == IS_REFERENCE)) {
+		return &Z_REF_P(property)->val;
+	}
+	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF) ? NULL : property;
+}
+
 /*
  * The slot of a declared property of an object receiver whose class and
  * offset the VM run-time cache slot names, or NULL: a non-object receiver, a
@@ -66,14 +97,16 @@ ZEND_NATIVE_SNIPPET_INLINE zval *zend_native_cached_property(
  */
 zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
 {
-	zval *property = zend_native_cached_property(receiver, cache_slot);
+	return zend_native_writable_property(
+		zend_native_cached_property(receiver, cache_slot));
+}
 
-	if (property == NULL) {
-		return NULL;
-	}
-	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF
-			|| Z_TYPE_P(property) == IS_REFERENCE)
-		? NULL : property;
+/* The same for a receiver known to be an object, such as $this. */
+zval *zend_native_object_property_slot(
+	const zval *receiver, void *const *cache_slot)
+{
+	return zend_native_writable_property(
+		zend_native_cached_object_property(Z_OBJ_P(receiver), cache_slot));
 }
 
 /*
@@ -84,15 +117,16 @@ zval *zend_native_property_slot(const zval *receiver, void *const *cache_slot)
 zval *zend_native_property_read_slot(
 	const zval *receiver, void *const *cache_slot)
 {
-	zval *property = zend_native_cached_property(receiver, cache_slot);
+	return zend_native_readable_property(
+		zend_native_cached_property(receiver, cache_slot));
+}
 
-	if (property == NULL) {
-		return NULL;
-	}
-	if (UNEXPECTED(Z_TYPE_P(property) == IS_REFERENCE)) {
-		return &Z_REF_P(property)->val;
-	}
-	return UNEXPECTED(Z_TYPE_P(property) == IS_UNDEF) ? NULL : property;
+/* The same for a receiver known to be an object, such as $this. */
+zval *zend_native_object_property_read_slot(
+	const zval *receiver, void *const *cache_slot)
+{
+	return zend_native_readable_property(
+		zend_native_cached_object_property(Z_OBJ_P(receiver), cache_slot));
 }
 
 /* ZVAL_COPY: the value with a new reference to a counted payload. */
@@ -181,6 +215,24 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_probe_found(
 	return Z_TYPE_P(element) > IS_NULL;
 }
 
+/*
+ * An element under an integer key: never INDIRECT, which only symbol and
+ * property tables hold, under the string names of CVs and declared
+ * properties.
+ */
+ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_probe_found_index(
+	zval *element, bool isset)
+{
+	if (!isset) {
+		__builtin_assume((uintptr_t) element > ZEND_NATIVE_ELEMENT_ABSENT);
+		return (uintptr_t) element;
+	}
+	if (UNEXPECTED(Z_TYPE_P(element) == IS_REFERENCE)) {
+		element = &Z_REF_P(element)->val;
+	}
+	return Z_TYPE_P(element) > IS_NULL;
+}
+
 ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_index_m(
 	const HashTable *table, zend_ulong h, bool isset)
 {
@@ -191,14 +243,14 @@ ZEND_NATIVE_SNIPPET_INLINE uintptr_t zend_native_find_index_m(
 				|| Z_TYPE(table->arPacked[h]) == IS_UNDEF) {
 			return zend_native_absent(isset);
 		}
-		return zend_native_probe_found(&table->arPacked[h], isset);
+		return zend_native_probe_found_index(&table->arPacked[h], isset);
 	}
 	index = HT_HASH_EX(table->arData, (uint32_t) h | table->nTableMask);
 	while (index != HT_INVALID_IDX) {
 		Bucket *bucket = HT_HASH_TO_BUCKET_EX(table->arData, index);
 
 		if (bucket->h == h && bucket->key == NULL) {
-			return zend_native_probe_found(&bucket->val, isset);
+			return zend_native_probe_found_index(&bucket->val, isset);
 		}
 		index = Z_NEXT(bucket->val);
 	}
@@ -995,6 +1047,13 @@ uint64_t zend_native_zval_type_check(const zval *value, uint64_t mask)
 	if (UNEXPECTED(Z_TYPE_P(value) == IS_REFERENCE)) {
 		value = &Z_REF_P(value)->val;
 	}
+	return (mask >> Z_TYPE_P(value)) & 1;
+}
+
+/* The same for a value Zend's type inference proves defined and no
+ * reference. */
+uint64_t zend_native_zval_type_check_plain(const zval *value, uint64_t mask)
+{
 	return (mask >> Z_TYPE_P(value)) & 1;
 }
 
