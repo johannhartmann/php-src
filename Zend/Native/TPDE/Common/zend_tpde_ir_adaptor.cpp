@@ -889,7 +889,6 @@ struct ZendIRAdaptor::InlineClone {
 	zend_tpde_inline_body_shape shape{};
 	bool scalar_diamond = false;
 	const zend_tpde_scalar_diamond &diamond = shape.diamond;
-	bool effect_closed_inline = false;
 	size_t derived_value_checkpoint = 0;
 	size_t machine_reference_checkpoint = 0;
 	size_t operand_checkpoint = 0;
@@ -912,8 +911,10 @@ struct ZendIRAdaptor::InlineClone {
 /*
  * Clones a proof-closed scalar callee body into the caller graph after
  * every component member was lowered: source opcodes are not consulted, and
- * the target backends see ordinary TPDE instructions and values. The
- * observer-enabled path still runs the complete Zend-frame call, so pure
+ * the target backends see ordinary TPDE instructions and values. Only a
+ * call the plan froze as an effect-closed clone gets here, so the plan's
+ * facts for it hold: its guarded cold block, its argument bindings and the
+ * arguments the body reads. The observer-enabled path still runs the complete Zend-frame call, so pure
  * scalar instructions may run speculatively before the observer guard; no
  * effectful, trapping, branching or frame-observing instruction is
  * admitted.
@@ -949,11 +950,6 @@ ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 		return {};
 	}
 	clone.scalar_diamond = clone.shape.scalar_diamond;
-	clone.effect_closed_inline =
-		frozen_effect_closed_inline(clone.caller_instruction_index);
-	if (clone.scalar_diamond && !clone.effect_closed_inline) {
-		return {};
-	}
 
 	clone.values.assign(clone.callee->value_count, INVALID_VALUE_REF);
 	clone.checked_value_steps.assign(clone.callee->value_count, -1);
@@ -1076,8 +1072,7 @@ bool ZendIRAdaptor::map_inline_argument(
 	}
 	/* Neither transport nor unbox an argument an effect-closed body
 	 * never reads; the planner left it unchecked too. */
-	if (clone.effect_closed_inline
-			&& clone.callee->effect_closed_argument_used != nullptr
+	if (clone.callee->effect_closed_argument_used != nullptr
 			&& clone.callee->effect_closed_argument_used[argument_index] == 0) {
 		return true;
 	}
@@ -1099,8 +1094,7 @@ bool ZendIRAdaptor::map_inline_argument(
 			? callee_argument_abi.machine_kind
 			: callee_value.machine_kind;
 	IRValueRef caller_value = INVALID_VALUE_REF;
-	if (clone.effect_closed_inline
-			&& plan_->call_argument_bindings != nullptr) {
+	if (plan_->call_argument_bindings != nullptr) {
 		caller_value = source_binding_value_ref(
 			plan_->call_argument_bindings[
 				clone.call.call_argument_offset + argument_index]);
@@ -1110,8 +1104,7 @@ bool ZendIRAdaptor::map_inline_argument(
 			source_operand_value_ref(argument.source_operand);
 	}
 	if (zend_mir_id_is_valid(argument.value_id)
-			&& (!clone.effect_closed_inline
-				|| caller_value == INVALID_VALUE_REF)) {
+			&& caller_value == INVALID_VALUE_REF) {
 		caller_value = value_ref(argument.value_id);
 	} else if (caller_value == INVALID_VALUE_REF) {
 		const zend_native_direct_call_argument &descriptor_argument =
@@ -1163,8 +1156,7 @@ bool ZendIRAdaptor::map_inline_argument(
 			.exact_type = expected_exact_type});
 		caller_value = transported;
 	}
-	if (clone.effect_closed_inline
-			&& caller_value != INVALID_VALUE_REF
+	if (caller_value != INVALID_VALUE_REF
 			&& machine_kind(caller_value)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			&& zend_tpde_machine_kind_is_long_or_bool(
@@ -6519,6 +6511,7 @@ bool ZendIRAdaptor::Builder::select_machine_result(InstContext &ctx) {
 			&& ctx.record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 			&& ctx.machine_result
 			&& !zend_tpde_direct_call_has_argument_guard(ctx.instruction)
+			&& frozen_effect_closed_inline(ctx.i)
 			? inline_component_scalar_body(ctx.instruction,
 				ctx.i,
 				ctx.result,
