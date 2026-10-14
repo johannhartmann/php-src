@@ -1168,10 +1168,13 @@ bool ZendCompilerA64::emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path) {
 	return for_each_materialization(instruction, interrupt_slow_path,
 			[&](AsmReg frame_reg, IRValueRef value,
-				zend_mir_storage_id, uint64_t offset) {
+				zend_mir_storage_id storage, uint64_t offset) {
 		const zend_tpde_machine_value_kind machine_kind =
 			ir().machine_kind(value);
 		auto value_ref = val_ref(value);
+		if (materialized_in_own_slot(value, storage)) {
+			return true;
+		}
 		auto payload = value_ref.part(0);
 		if (machine_kind == ZEND_TPDE_MACHINE_VALUE_BOOL) {
 			ScratchReg type_info{this};
