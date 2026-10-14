@@ -1941,6 +1941,30 @@ private:
 		uint32_t boxed_op2_boundary_operand_index = UINT32_MAX;
 		uint32_t boundary_semantic_operand_count = UINT32_MAX;
 	};
+	/*
+	 * The fast and the cold node lower_guarded_operation() splits an
+	 * instruction into, which its steps share.
+	 */
+	struct GuardedSplit {
+		uint32_t guarded_hot_block = UINT32_MAX;
+		uint32_t continuation_block = UINT32_MAX;
+		bool frame_authoritative_mutation = false;
+		IRValueRef mutation_result = INVALID_VALUE_REF;
+		bool register_mutation_result = false;
+		IRValueRef guarded_result = INVALID_VALUE_REF;
+		bool deopt_exit = false;
+		IRValueRef fast_result = INVALID_VALUE_REF;
+		IRValueRef cold_result = INVALID_VALUE_REF;
+		uint32_t fast_operand_offset = 0;
+		uint32_t fast_operand_count = 0;
+		uint32_t fast_materialization_operand_index = UINT32_MAX;
+		uint32_t fast_materialization_count = 0;
+		uint32_t fast_block = UINT32_MAX;
+		bool value_assign_source_operand = false;
+		uint32_t cold_operand_offset = 0;
+		uint32_t cold_operand_count = 0;
+		uint32_t cold_materialization_operand_index = UINT32_MAX;
+	};
 
 	void run();
 
@@ -2028,6 +2052,16 @@ private:
 	void materialize_boxed_result_for_helper(
 			uint32_t i, uint32_t materialization_block, IRValueRef value);
 	void lower_guarded_operation(InstContext &ctx);
+	/* The steps of lower_guarded_operation(), in order. */
+	void select_guarded_mutation_result(InstContext &ctx, GuardedSplit &split);
+	void select_guarded_results(InstContext &ctx, GuardedSplit &split);
+	void select_fast_operands(InstContext &ctx, GuardedSplit &split);
+	void add_typed_call_guard(InstContext &ctx, GuardedSplit &split);
+	void add_guarded_fast_node(InstContext &ctx, GuardedSplit &split);
+	void select_cold_operands(InstContext &ctx, GuardedSplit &split);
+	void add_guarded_cold_node(InstContext &ctx, GuardedSplit &split);
+	void join_guarded_results(InstContext &ctx, GuardedSplit &split);
+	void publish_assigned_pointer(InstContext &ctx, GuardedSplit &split);
 	void lower_boxed_cond_branch(InstContext &ctx);
 	void verify_emission();
 	void index_landings();
@@ -9151,11 +9185,29 @@ void ZendIRAdaptor::Builder::materialize_boxed_result_for_helper(
 }
 
 void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
-	const uint32_t guarded_hot_block =
+	GuardedSplit split;
+	split.guarded_hot_block =
 		guarded_hot_blocks[ctx.i];
-	const uint32_t continuation_block =
+	split.continuation_block =
 		guarded_continuation_blocks[ctx.i];
-	const bool frame_authoritative_mutation =
+	select_guarded_mutation_result(ctx, split);
+	select_guarded_results(ctx, split);
+	select_fast_operands(ctx, split);
+	if (split.guarded_hot_block != UINT32_MAX) {
+		add_typed_call_guard(ctx, split);
+	}
+	add_guarded_fast_node(ctx, split);
+	select_cold_operands(ctx, split);
+	add_guarded_cold_node(ctx, split);
+	join_guarded_results(ctx, split);
+	publish_assigned_pointer(ctx, split);
+	reload_slot_authoritative_source_result(
+		ctx.i, ctx.instruction, ctx.record, split.continuation_block);
+}
+
+void ZendIRAdaptor::Builder::select_guarded_mutation_result(
+		InstContext &ctx, GuardedSplit &split) {
+	split.frame_authoritative_mutation =
 		ctx.instruction.has_value_operation
 		&& std::binary_search(
 			frame_authoritative_phi_storages.begin(),
@@ -9183,13 +9235,13 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 			canonical_storage(canonical_mutation_result))
 		&& canonical_storage(canonical_mutation_result)
 			== ctx.instruction.value_operation.op1_storage_id;
-	const bool register_mutation_result =
+	split.register_mutation_result =
 		scalar_mutation_result || boxed_mutation_result;
-	IRValueRef mutation_result =
+	split.mutation_result =
 		mutation_results[ctx.i] != INVALID_VALUE_REF
 			? mutation_results[ctx.i]
 			: canonical_mutation_result;
-	if (register_mutation_result && boxed_mutation_result
+	if (split.register_mutation_result && boxed_mutation_result
 			&& mutation_results[ctx.i]
 				== INVALID_VALUE_REF) {
 		const uint32_t mutation_ssa =
@@ -9200,7 +9252,7 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 				plan_,
 				zend_mir_value_from_original_ssa(
 					mutation_ssa));
-		mutation_result = add_derived_value(
+		split.mutation_result = add_derived_value(
 			ZEND_MIR_REPRESENTATION_ZVAL,
 			ZEND_MIR_SCALAR_TYPE_NONE,
 			ctx.instruction.value_operation.op1_storage_id,
@@ -9218,49 +9270,57 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 		} else {
 			active_value_overrides()[
 				static_cast<uint32_t>(mutation_index)] =
-				mutation_result;
+				split.mutation_result;
 			active_source_ssa_overrides()[mutation_ssa] =
-				mutation_result;
-			set_instruction_result(ctx.i, mutation_result);
+				split.mutation_result;
+			set_instruction_result(ctx.i, split.mutation_result);
 		}
-	} else if (register_mutation_result && scalar_mutation_result
+	} else if (split.register_mutation_result && scalar_mutation_result
 			&& ctx.i < active_instruction_results().size()) {
-		set_instruction_result(ctx.i, mutation_result);
+		set_instruction_result(ctx.i, split.mutation_result);
 	}
-	const IRValueRef guarded_result =
+}
+
+void ZendIRAdaptor::Builder::select_guarded_results(
+		InstContext &ctx, GuardedSplit &split) {
+	split.guarded_result =
 		ctx.machine_result ? ctx.result
-		: register_mutation_result
-			? mutation_result : INVALID_VALUE_REF;
+		: split.register_mutation_result
+			? split.mutation_result : INVALID_VALUE_REF;
 	/* A specialized member's operation whose failed guard
 	 * deoptimizes: the cold block leaves the function and the
 	 * continuation copies the fast result instead of merging. */
-	const bool deopt_exit =
+	split.deopt_exit =
 		function_mode_ == FunctionMode::ZendEntry
 		&& ctx.instruction.deopt_exit_resume_plus_one != 0;
-	const IRValueRef fast_result =
-		guarded_result != INVALID_VALUE_REF
+	split.fast_result =
+		split.guarded_result != INVALID_VALUE_REF
 		? add_derived_value(
-			representation(guarded_result),
-			exact_type(guarded_result),
+			representation(split.guarded_result),
+			exact_type(split.guarded_result),
 			ZEND_MIR_ID_INVALID, false, 0,
-			machine_kind(guarded_result))
+			machine_kind(split.guarded_result))
 		: INVALID_VALUE_REF;
-	const IRValueRef cold_result =
-		guarded_result != INVALID_VALUE_REF && !deopt_exit
+	split.cold_result =
+		split.guarded_result != INVALID_VALUE_REF && !split.deopt_exit
 		? add_derived_value(
-			representation(guarded_result),
-			exact_type(guarded_result),
+			representation(split.guarded_result),
+			exact_type(split.guarded_result),
 			ZEND_MIR_ID_INVALID, false, 0,
-			machine_kind(guarded_result))
+			machine_kind(split.guarded_result))
 		: INVALID_VALUE_REF;
-	uint32_t fast_operand_offset = ctx.operand_offset;
-	uint32_t fast_operand_count = ctx.operand_count;
-	uint32_t fast_materialization_operand_index =
+}
+
+void ZendIRAdaptor::Builder::select_fast_operands(
+		InstContext &ctx, GuardedSplit &split) {
+	split.fast_operand_offset = ctx.operand_offset;
+	split.fast_operand_count = ctx.operand_count;
+	split.fast_materialization_operand_index =
 		ctx.materialization_operand_index;
-	uint32_t fast_materialization_count =
+	split.fast_materialization_count =
 		ctx.materialization_count;
-	uint32_t fast_block = ctx.block;
-	const bool value_assign_source_operand =
+	split.fast_block = ctx.block;
+	split.value_assign_source_operand =
 		(ctx.record.opcode == ZEND_MIR_OPCODE_VALUE_ASSIGN
 			|| ctx.record.opcode
 				== ZEND_MIR_OPCODE_VALUE_QM_ASSIGN)
@@ -9270,23 +9330,23 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 		&& !machine_reference(
 			operands_[ctx.operand_offset], nullptr);
 	const bool value_assign_register_source =
-		value_assign_source_operand
+		split.value_assign_source_operand
 		&& machine_value_is_register_authoritative(
 			operands_[ctx.operand_offset])
 		&& machine_value_has_register_definition(
 			operands_[ctx.operand_offset]);
-	if (value_assign_source_operand
+	if (split.value_assign_source_operand
 			&& !value_assign_register_source) {
 		/*
 		 * copy_slot() reads canonical sources from the frame: no
 		 * allocator-visible use for a value the selector never
 		 * reads.
 		 */
-		++fast_operand_offset;
-		--fast_operand_count;
-		if (fast_materialization_operand_index
+		++split.fast_operand_offset;
+		--split.fast_operand_count;
+		if (split.fast_materialization_operand_index
 				!= UINT32_MAX) {
-			--fast_materialization_operand_index;
+			--split.fast_materialization_operand_index;
 		}
 		if (ctx.machine_reference_operand_index != UINT32_MAX) {
 			--ctx.machine_reference_operand_index;
@@ -9301,10 +9361,10 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 		 * operand; the frame and the materializations stay on the
 		 * cold node for the helper.
 		 */
-		fast_operand_count =
+		split.fast_operand_count =
 			ctx.static_slot_isset_needs_value ? 2 : 1;
-		fast_materialization_operand_index = UINT32_MAX;
-		fast_materialization_count = 0;
+		split.fast_materialization_operand_index = UINT32_MAX;
+		split.fast_materialization_count = 0;
 	}
 	if (ctx.register_bool_unary_operand != INVALID_VALUE_REF) {
 		/*
@@ -9312,123 +9372,130 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 		 * the frame and the materializations stay on the cold node
 		 * for the helper.
 		 */
-		fast_operand_count = 1;
-		fast_materialization_operand_index = UINT32_MAX;
-		fast_materialization_count = 0;
+		split.fast_operand_count = 1;
+		split.fast_materialization_operand_index = UINT32_MAX;
+		split.fast_materialization_count = 0;
 	}
-	if (guarded_hot_block != UINT32_MAX) {
-		/* Operands: the frame when boxed values are
-		 * guarded, the statepoint materializations, then
-		 * (value, expected type) pairs. */
-		const uint32_t guard_operand_offset =
-			static_cast<uint32_t>(operands_.size());
-		const bool guarded_boxed_values =
-			!ctx.typed_call_value_guards.empty();
-		if (guarded_boxed_values) {
-			operands_.push_back(IRValueRef{FRAME_VALUE});
-		}
-		for (uint32_t n = 0;
-				n < ctx.materialization_count; ++n) {
-			const uint32_t materialization_operand =
-				ctx.materialization_operand_index + n;
-			if (materialization_operand >= ctx.operand_count) {
-				valid_ = false;
-				operands_.push_back(INVALID_VALUE_REF);
-			} else {
-				operands_.push_back(
-					operands_[ctx.operand_offset
-						+ materialization_operand]);
-			}
-		}
-		for (const auto &[guarded_value, expected_type] :
-				ctx.typed_call_value_guards) {
-			operands_.push_back(guarded_value);
-			operands_.push_back(add_derived_value(
-				ZEND_MIR_REPRESENTATION_I64,
-				ZEND_MIR_SCALAR_TYPE_I64,
-				ZEND_MIR_ID_INVALID, true, expected_type));
-		}
-		InstNode guard{
-			.kind = InstKind::TypedCallGuard,
-			.mir_instruction_index = ctx.i,
-			.argument_index = ctx.guarded_cold_block,
-			.result = INVALID_VALUE_REF,
-			.operand_offset = guard_operand_offset,
-			.operand_count = static_cast<uint32_t>(guarded_boxed_values)
-				+ ctx.materialization_count
-				+ static_cast<uint32_t>(
-					ctx.typed_call_value_guards.size()) * 2,
-			.has_result = false,
-			.storage_id = ZEND_MIR_ID_INVALID,
-			.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
-			.inlined_user_body = false,
-			.inlined_operand_index = UINT32_MAX,
-			.materialization_operand_index = ctx.materialization_count == 0
-				? UINT32_MAX
-				: static_cast<uint32_t>(
-					guarded_boxed_values),
-			.materialization_count = ctx.materialization_count};
-		guard.control_block = ctx.block;
-		guard.continuation_block = guarded_hot_block;
-		/* The guard reads all of its operands; liveness operands a
-		 * generator resume block appends follow them. */
-		guard.semantic_operand_count = guard.operand_count;
-		add_node(block_instructions, ctx.block, std::move(guard));
+}
 
-		fast_operand_offset =
-			static_cast<uint32_t>(operands_.size());
-		const uint32_t fast_call_argument_count =
-			frozen_typed_component_call(ctx.i)
-				|| (ctx.instruction.direct_call->flags
-					& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
-				? ctx.instruction.call_argument_count : 0;
-		for (uint32_t n = 0;
-				n < fast_call_argument_count; ++n) {
-			operands_.push_back(
-				operands_[ctx.operand_offset + n]);
-		}
-		for (IRValueRef owned_boxed :
-				ctx.typed_call_owned_boxed_arguments) {
-			operands_.push_back(owned_boxed);
-		}
-		fast_operand_count = fast_call_argument_count
-			+ static_cast<uint32_t>(
-				ctx.typed_call_owned_boxed_arguments.size());
-		uint32_t fast_inlined_operand_index = UINT32_MAX;
-		if (ctx.inlined_user_body.valid) {
-			fast_inlined_operand_index = fast_operand_count;
-			const uint32_t inlined_operand_count =
-				ctx.inlined_user_body.operand_count();
-			for (uint32_t n = 0;
-					n < inlined_operand_count; ++n) {
-				operands_.push_back(
-					operands_[ctx.operand_offset
-						+ ctx.inlined_operand_index + n]);
-			}
-			fast_operand_count += inlined_operand_count;
-		}
-		fast_materialization_operand_index = UINT32_MAX;
-		fast_materialization_count = 0;
-		fast_block = guarded_hot_block;
-		ctx.inlined_operand_index =
-			fast_inlined_operand_index;
+void ZendIRAdaptor::Builder::add_typed_call_guard(
+		InstContext &ctx, GuardedSplit &split) {
+	/* Operands: the frame when boxed values are
+	 * guarded, the statepoint materializations, then
+	 * (value, expected type) pairs. */
+	const uint32_t guard_operand_offset =
+		static_cast<uint32_t>(operands_.size());
+	const bool guarded_boxed_values =
+		!ctx.typed_call_value_guards.empty();
+	if (guarded_boxed_values) {
+		operands_.push_back(IRValueRef{FRAME_VALUE});
 	}
+	for (uint32_t n = 0;
+			n < ctx.materialization_count; ++n) {
+		const uint32_t materialization_operand =
+			ctx.materialization_operand_index + n;
+		if (materialization_operand >= ctx.operand_count) {
+			valid_ = false;
+			operands_.push_back(INVALID_VALUE_REF);
+		} else {
+			operands_.push_back(
+				operands_[ctx.operand_offset
+					+ materialization_operand]);
+		}
+	}
+	for (const auto &[guarded_value, expected_type] :
+			ctx.typed_call_value_guards) {
+		operands_.push_back(guarded_value);
+		operands_.push_back(add_derived_value(
+			ZEND_MIR_REPRESENTATION_I64,
+			ZEND_MIR_SCALAR_TYPE_I64,
+			ZEND_MIR_ID_INVALID, true, expected_type));
+	}
+	InstNode guard{
+		.kind = InstKind::TypedCallGuard,
+		.mir_instruction_index = ctx.i,
+		.argument_index = ctx.guarded_cold_block,
+		.result = INVALID_VALUE_REF,
+		.operand_offset = guard_operand_offset,
+		.operand_count = static_cast<uint32_t>(guarded_boxed_values)
+			+ ctx.materialization_count
+			+ static_cast<uint32_t>(
+				ctx.typed_call_value_guards.size()) * 2,
+		.has_result = false,
+		.storage_id = ZEND_MIR_ID_INVALID,
+		.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
+		.inlined_user_body = false,
+		.inlined_operand_index = UINT32_MAX,
+		.materialization_operand_index = ctx.materialization_count == 0
+			? UINT32_MAX
+			: static_cast<uint32_t>(
+				guarded_boxed_values),
+		.materialization_count = ctx.materialization_count};
+	guard.control_block = ctx.block;
+	guard.continuation_block = split.guarded_hot_block;
+	/* The guard reads all of its operands; liveness operands a
+	 * generator resume block appends follow them. */
+	guard.semantic_operand_count = guard.operand_count;
+	add_node(block_instructions, ctx.block, std::move(guard));
+
+	split.fast_operand_offset =
+		static_cast<uint32_t>(operands_.size());
+	const uint32_t fast_call_argument_count =
+		frozen_typed_component_call(ctx.i)
+			|| (ctx.instruction.direct_call->flags
+				& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0
+			? ctx.instruction.call_argument_count : 0;
+	for (uint32_t n = 0;
+			n < fast_call_argument_count; ++n) {
+		operands_.push_back(
+			operands_[ctx.operand_offset + n]);
+	}
+	for (IRValueRef owned_boxed :
+			ctx.typed_call_owned_boxed_arguments) {
+		operands_.push_back(owned_boxed);
+	}
+	split.fast_operand_count = fast_call_argument_count
+		+ static_cast<uint32_t>(
+			ctx.typed_call_owned_boxed_arguments.size());
+	uint32_t fast_inlined_operand_index = UINT32_MAX;
+	if (ctx.inlined_user_body.valid) {
+		fast_inlined_operand_index = split.fast_operand_count;
+		const uint32_t inlined_operand_count =
+			ctx.inlined_user_body.operand_count();
+		for (uint32_t n = 0;
+				n < inlined_operand_count; ++n) {
+			operands_.push_back(
+				operands_[ctx.operand_offset
+					+ ctx.inlined_operand_index + n]);
+		}
+		split.fast_operand_count += inlined_operand_count;
+	}
+	split.fast_materialization_operand_index = UINT32_MAX;
+	split.fast_materialization_count = 0;
+	split.fast_block = split.guarded_hot_block;
+	ctx.inlined_operand_index =
+		fast_inlined_operand_index;
+}
+
+void ZendIRAdaptor::Builder::add_guarded_fast_node(
+		InstContext &ctx, GuardedSplit &split) {
 	InstNode fast{
 		.kind = InstKind::GuardedFast,
 		.mir_instruction_index = ctx.i,
 		.argument_index = ctx.guarded_cold_block,
-		.result = fast_result,
-		.operand_offset = fast_operand_offset,
-		.operand_count = fast_operand_count,
-		.has_result = fast_result != INVALID_VALUE_REF,
+		.result = split.fast_result,
+		.operand_offset = split.fast_operand_offset,
+		.operand_count = split.fast_operand_count,
+		.has_result = split.fast_result != INVALID_VALUE_REF,
 		.storage_id = ZEND_MIR_ID_INVALID,
 		.exact_type = ctx.static_slot_isset_exact_type,
 		.inlined_user_body = false,
 		.inlined_operand_index = UINT32_MAX,
-		.materialization_operand_index = fast_materialization_operand_index,
-		.materialization_count = fast_materialization_count};
-	fast.control_block = fast_block;
-	fast.continuation_block = continuation_block;
+		.materialization_operand_index =
+			split.fast_materialization_operand_index,
+		.materialization_count = split.fast_materialization_count};
+	fast.control_block = split.fast_block;
+	fast.continuation_block = split.continuation_block;
 	fast.machine_reference_operand_index =
 		ctx.machine_reference_operand_index;
 	fast.assign_op_right_operand_index =
@@ -9453,7 +9520,7 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 			ctx.inlined_user_body.checked_steps.begin(),
 			ctx.inlined_user_body.checked_steps.end());
 	}
-	fast.mutation_result = register_mutation_result;
+	fast.mutation_result = split.register_mutation_result;
 	if (ctx.register_bool_unary_operand != INVALID_VALUE_REF) {
 		fast.synthetic = true;
 		fast.synthetic_record = ctx.record;
@@ -9470,12 +9537,15 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 		fast.synthetic_record.barriers = 0;
 		fast.synthetic_record.ownership_actions = 0;
 	}
-	add_node(block_instructions, fast_block, std::move(fast));
+	add_node(block_instructions, split.fast_block, std::move(fast));
+}
 
-	const uint32_t cold_operand_offset =
+void ZendIRAdaptor::Builder::select_cold_operands(
+		InstContext &ctx, GuardedSplit &split) {
+	split.cold_operand_offset =
 		static_cast<uint32_t>(operands_.size());
-	uint32_t cold_operand_count = ctx.operand_count;
-	uint32_t cold_materialization_operand_index =
+	split.cold_operand_count = ctx.operand_count;
+	split.cold_materialization_operand_index =
 		ctx.materialization_operand_index;
 	if (ctx.record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
 		/*
@@ -9493,9 +9563,9 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 			operands_.push_back(
 				IRValueRef{EXECUTION_CONTEXT_ARGUMENT});
 		}
-		cold_operand_count =
+		split.cold_operand_count =
 			4 + ctx.materialization_count;
-		cold_materialization_operand_index =
+		split.cold_materialization_operand_index =
 			ctx.materialization_count == 0
 				? UINT32_MAX : 4;
 		for (uint32_t n = 0;
@@ -9542,7 +9612,7 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 				&& machine_kind(operands_[ctx.operand_offset])
 					== ZEND_TPDE_MACHINE_VALUE_STRING_PTR) {
 			cold_operand_skip = 1;
-		} else if (value_assign_source_operand) {
+		} else if (split.value_assign_source_operand) {
 			cold_operand_skip = 1;
 		} else if (ctx.record.opcode
 					== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
@@ -9577,58 +9647,63 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 			operands_.push_back(
 				operands_[ctx.operand_offset + n]);
 		}
-		cold_operand_count -= cold_operand_skip;
-		if (cold_materialization_operand_index != UINT32_MAX) {
-			cold_materialization_operand_index -=
+		split.cold_operand_count -= cold_operand_skip;
+		if (split.cold_materialization_operand_index != UINT32_MAX) {
+			split.cold_materialization_operand_index -=
 				cold_operand_skip;
 		}
 	}
+}
+
+void ZendIRAdaptor::Builder::add_guarded_cold_node(
+		InstContext &ctx, GuardedSplit &split) {
 	const uint32_t cold_semantic_operand_count =
-		cold_materialization_operand_index == UINT32_MAX
-			? cold_operand_count
-			: cold_materialization_operand_index;
+		split.cold_materialization_operand_index == UINT32_MAX
+			? split.cold_operand_count
+			: split.cold_materialization_operand_index;
 	uint32_t cold_boxed_op1_boundary_operand_index =
 		append_boundary_operand(ctx.boxed_op1_boundary,
-			cold_operand_offset, cold_semantic_operand_count,
-			cold_operand_count);
+			split.cold_operand_offset, cold_semantic_operand_count,
+			split.cold_operand_count);
 	uint32_t cold_boxed_op2_boundary_operand_index = UINT32_MAX;
 	if (ctx.boxed_op2_boundary
 			== (cold_boxed_op1_boundary_operand_index == UINT32_MAX
 				? INVALID_VALUE_REF
-				: operands_[cold_operand_offset
+				: operands_[split.cold_operand_offset
 					+ cold_boxed_op1_boundary_operand_index])) {
 		cold_boxed_op2_boundary_operand_index =
 			cold_boxed_op1_boundary_operand_index;
 	} else {
 		cold_boxed_op2_boundary_operand_index =
 			append_boundary_operand(ctx.boxed_op2_boundary,
-				cold_operand_offset, cold_semantic_operand_count,
-				cold_operand_count);
+				split.cold_operand_offset, cold_semantic_operand_count,
+				split.cold_operand_count);
 	}
 	InstNode cold{
 		.kind = InstKind::GuardedCold,
 		.mir_instruction_index = ctx.i,
 		.argument_index = ctx.guarded_cold_block,
-		.result = cold_result,
-		.operand_offset = cold_operand_offset,
-		.operand_count = cold_operand_count,
-		.has_result = cold_result != INVALID_VALUE_REF,
+		.result = split.cold_result,
+		.operand_offset = split.cold_operand_offset,
+		.operand_count = split.cold_operand_count,
+		.has_result = split.cold_result != INVALID_VALUE_REF,
 		.storage_id = ZEND_MIR_ID_INVALID,
 		.exact_type = ZEND_MIR_SCALAR_TYPE_NONE,
 		.inlined_user_body = false,
 		.inlined_operand_index = UINT32_MAX,
-		.materialization_operand_index = cold_materialization_operand_index,
+		.materialization_operand_index =
+			split.cold_materialization_operand_index,
 		.materialization_count = ctx.materialization_count};
 	cold.control_block = ctx.guarded_cold_block;
-	cold.continuation_block = continuation_block;
+	cold.continuation_block = split.continuation_block;
 	cold.assign_op_right_operand_index =
 		ctx.assign_op_right_operand_index;
 	cold.assign_op_left_operand_index =
 		ctx.assign_op_left_operand_index;
-	cold.mutation_result = register_mutation_result;
+	cold.mutation_result = split.register_mutation_result;
 	add_node(block_instructions, ctx.guarded_cold_block,
 		std::move(cold));
-	nodes_.back().deopt_exit = deopt_exit;
+	nodes_.back().deopt_exit = split.deopt_exit;
 	if (cold_boxed_op1_boundary_operand_index != UINT32_MAX
 			|| cold_boxed_op2_boundary_operand_index != UINT32_MAX) {
 		nodes_.back().semantic_operand_count =
@@ -9638,17 +9713,20 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 		cold_boxed_op1_boundary_operand_index;
 	nodes_.back().boxed_op2_boundary_operand_index =
 		cold_boxed_op2_boundary_operand_index;
-	if (cold_result != INVALID_VALUE_REF
+	if (split.cold_result != INVALID_VALUE_REF
 			&& ctx.record.source_position_id
 				< user_opcode_result_reload_sources_.size()) {
 		user_opcode_result_reload_sources_[
 			ctx.record.source_position_id] = 1;
 	}
+}
 
-	if (mutation_result != INVALID_VALUE_REF
-			&& !register_mutation_result) {
+void ZendIRAdaptor::Builder::join_guarded_results(
+		InstContext &ctx, GuardedSplit &split) {
+	if (split.mutation_result != INVALID_VALUE_REF
+			&& !split.register_mutation_result) {
 		const zend_mir_storage_id mutation_storage =
-			canonical_storage(mutation_result);
+			canonical_storage(split.mutation_result);
 		const IRValueRef mutation_slot =
 			frame_slot_address(mutation_storage);
 		if (mutation_slot == INVALID_VALUE_REF
@@ -9664,26 +9742,26 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 				.kind = InstKind::ZvalPayloadLoad,
 				.mir_instruction_index = ctx.i,
 				.argument_index = UINT32_MAX,
-				.result = mutation_result,
+				.result = split.mutation_result,
 				.operand_offset = reload_operand_offset,
 				.operand_count = 1,
 				.has_result = true,
 				.storage_id = mutation_storage,
-				.exact_type = exact_type(mutation_result)};
-			reload.control_block = continuation_block;
-			add_node(block_instructions, continuation_block,
+				.exact_type = exact_type(split.mutation_result)};
+			reload.control_block = split.continuation_block;
+			add_node(block_instructions, split.continuation_block,
 				std::move(reload));
 		}
 	}
-	if (guarded_result != INVALID_VALUE_REF && deopt_exit) {
+	if (split.guarded_result != INVALID_VALUE_REF && split.deopt_exit) {
 		const uint32_t copy_operand_offset =
 			static_cast<uint32_t>(operands_.size());
-		operands_.push_back(fast_result);
+		operands_.push_back(split.fast_result);
 		InstNode copy{
 			.kind = InstKind::MIR,
 			.mir_instruction_index = ctx.i,
 			.argument_index = UINT32_MAX,
-			.result = guarded_result,
+			.result = split.guarded_result,
 			.operand_offset = copy_operand_offset,
 			.operand_count = 1,
 			.has_result = true};
@@ -9695,46 +9773,46 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 		copy.synthetic_record.writes = 0;
 		copy.synthetic_record.barriers = 0;
 		copy.synthetic_record.ownership_actions = 0;
-		copy.control_block = continuation_block;
-		add_node(block_instructions, continuation_block,
+		copy.control_block = split.continuation_block;
+		add_node(block_instructions, split.continuation_block,
 			std::move(copy));
 	}
-	if (guarded_result != INVALID_VALUE_REF && !deopt_exit) {
-		if (fast_result == INVALID_VALUE_REF
-				|| cold_result == INVALID_VALUE_REF
-				|| static_cast<uint32_t>(guarded_result)
+	if (split.guarded_result != INVALID_VALUE_REF && !split.deopt_exit) {
+		if (split.fast_result == INVALID_VALUE_REF
+				|| split.cold_result == INVALID_VALUE_REF
+				|| static_cast<uint32_t>(split.guarded_result)
 					>= phi_input_slices_.size()
 				|| phi_values_[
 					static_cast<uint32_t>(
-						guarded_result)] != 0) {
+						split.guarded_result)] != 0) {
 			valid_ = false;
 		}
 		const uint32_t phi_input_offset =
 			static_cast<uint32_t>(phi_inputs_.size());
 		phi_inputs_.push_back(
-			{fast_result, IRBlockRef{
-				guarded_hot_block == UINT32_MAX
-					? ctx.block : guarded_hot_block}});
+			{split.fast_result, IRBlockRef{
+				split.guarded_hot_block == UINT32_MAX
+					? ctx.block : split.guarded_hot_block}});
 		phi_inputs_.push_back(
-			{cold_result, IRBlockRef{ctx.guarded_cold_block}});
+			{split.cold_result, IRBlockRef{ctx.guarded_cold_block}});
 		phi_input_slices_[
-			static_cast<uint32_t>(guarded_result)] = {
+			static_cast<uint32_t>(split.guarded_result)] = {
 				phi_input_offset, 2};
 		phi_values_[
-			static_cast<uint32_t>(guarded_result)] = 1;
+			static_cast<uint32_t>(split.guarded_result)] = 1;
 		block_phis.push_back(
-			{continuation_block, guarded_result});
+			{split.continuation_block, split.guarded_result});
 	}
 	materialize_boxed_result_for_helper(
-		ctx.i, continuation_block, guarded_result);
-	if (frame_authoritative_mutation
-			&& register_mutation_result
+		ctx.i, split.continuation_block, split.guarded_result);
+	if (split.frame_authoritative_mutation
+			&& split.register_mutation_result
 			&& mutation_results[ctx.i] != INVALID_VALUE_REF
-			&& machine_kind(guarded_result)
+			&& machine_kind(split.guarded_result)
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
 		const uint32_t store_operand_offset =
 			static_cast<uint32_t>(operands_.size());
-		operands_.push_back(guarded_result);
+		operands_.push_back(split.guarded_result);
 		operands_.push_back(IRValueRef{FRAME_VALUE});
 		InstNode store{
 			.kind = InstKind::ZvalBoxedStore,
@@ -9745,10 +9823,14 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 			.operand_count = 2,
 			.has_result = false,
 			.storage_id = ctx.instruction.value_operation.op1_storage_id};
-		store.control_block = continuation_block;
-		add_node(block_instructions, continuation_block,
+		store.control_block = split.continuation_block;
+		add_node(block_instructions, split.continuation_block,
 			std::move(store));
 	}
+}
+
+void ZendIRAdaptor::Builder::publish_assigned_pointer(
+		InstContext &ctx, GuardedSplit &split) {
 	if (function_mode_ == FunctionMode::ZendEntry
 			&& ctx.record.opcode
 				== ZEND_MIR_OPCODE_VALUE_ASSIGN
@@ -9845,9 +9927,9 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 				.storage_id = storage_id,
 				.exact_type = ZEND_MIR_SCALAR_TYPE_NONE};
 			load.control_block =
-				continuation_block;
+				split.continuation_block;
 			add_node(block_instructions,
-				continuation_block,
+				split.continuation_block,
 				std::move(load));
 			auto &value_overrides =
 				active_value_overrides();
@@ -9866,8 +9948,6 @@ void ZendIRAdaptor::Builder::lower_guarded_operation(InstContext &ctx) {
 			}
 		}
 	}
-	reload_slot_authoritative_source_result(
-		ctx.i, ctx.instruction, ctx.record, continuation_block);
 }
 
 void ZendIRAdaptor::Builder::lower_boxed_cond_branch(InstContext &ctx) {
