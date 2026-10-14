@@ -771,6 +771,35 @@ private:
 			IRValueRef caller_result,
 			uint32_t caller_block,
 			std::vector<BlockItem<IRInstRef>> &block_instructions);
+	/* The steps of inline_component_scalar_body(), and the clone they
+	 * share (zend_tpde_ir_adaptor.cpp). */
+	struct InlineClone;
+	InlinedBody fail_inline(InlineClone &clone);
+	bool map_inline_argument(InlineClone &clone, uint32_t argument_index);
+	IRValueRef mapped_value(InlineClone &clone, zend_mir_value_id value_id);
+	static zend_mir_value_id source_value_id(
+			const zend_mir_source_operand_ref &source);
+	IRValueRef mapped_source_operand(
+			InlineClone &clone, const zend_mir_source_operand_ref &source);
+	int32_t checked_step_for_index(InlineClone &clone, int32_t value_index);
+	int32_t checked_step_for_value(
+			InlineClone &clone, zend_mir_value_id value_id);
+	int32_t checked_step_for_binding(InlineClone &clone,
+			const zend_tpde_source_value_binding &binding);
+	void record_checked_step(
+			InlineClone &clone, int32_t value_index, int32_t step);
+	bool clone_inline_instruction(InlineClone &clone, uint32_t index);
+	bool clone_inline_return_source(
+			InlineClone &clone, const zend_tpde_instruction &instruction);
+	bool clone_inline_checked_binary(
+			InlineClone &clone, const zend_tpde_instruction &instruction);
+	bool clone_inline_string_length(InlineClone &clone,
+			const zend_tpde_instruction &instruction,
+			const zend_mir_instruction_record &record);
+	bool clone_inline_scalar(InlineClone &clone,
+			const zend_tpde_instruction &instruction,
+			const zend_mir_instruction_record &record);
+	bool select_inline_diamond(InlineClone &clone);
 
 	/*
 	 * Construction runs in a Builder (zend_tpde_ir_adaptor.cpp): the adaptor
