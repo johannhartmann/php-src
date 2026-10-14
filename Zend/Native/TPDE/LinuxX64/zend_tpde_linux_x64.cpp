@@ -21117,12 +21117,6 @@ bool ZendCompilerX64::check_direct_user_callee(DirectUserCallContext &du,
 	}
 	act.published_code.reset();
 	emit_observer_exit(call_slow_target(du));
-	ASM(MOV64rm, act.first_reg,
-		FE_MEM(act.frame_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				offsetof(zend_execute_data, call))));
-	ASM(TEST64rr, act.first_reg, act.first_reg);
-	generate_raw_jump(Jump::jne, call_slow_target(du));
 	if (call.direct_call->expected_function
 			->op_array.cache_size != 0) {
 		act.run_time_cache.emplace(this);
@@ -21458,10 +21452,22 @@ bool ZendCompilerX64::reserve_direct_user_frame(DirectUserCallContext &du,
 	ASM(MOV64mr, FE_MEM(act.second_reg, 0, FE_NOREG, 0), act.callee_reg);
 
 	/* The activation leads the callee frame, so the frame ends
-	 * at the stack top and a tier-2 host entry can grow it. */
+	 * at the stack top and a tier-2 host entry can grow it. A
+	 * call nested in another call's arguments finds that call
+	 * pending in EX(call); the activation keeps it for the
+	 * completion to restore. */
 	ASM(LEA64rm, act.callee_reg,
 		FE_MEM(act.first_reg, 0, FE_NOREG,
 			static_cast<int32_t>(act.activation_size)));
+	ASM(MOV64rm, act.second_reg,
+		FE_MEM(act.frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				offsetof(zend_execute_data, call))));
+	ASM(MOV64mr,
+		FE_MEM(act.first_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(
+				zend_native_direct_activation, pending_call))),
+		act.second_reg);
 	ASM(MOV64mr,
 		FE_MEM(act.frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(
@@ -22144,10 +22150,6 @@ bool ZendCompilerX64::link_direct_user_activation(DirectUserCallContext &du,
 		activation_field(offsetof(
 			zend_native_direct_activation, discarded_return)
 			+ 8),
-		0);
-	ASM(MOV64mi,
-		activation_field(offsetof(
-			zend_native_direct_activation, pending_call)),
 		0);
 	ASM(MOV64rm, metadata_first_reg,
 		FE_MEM(act.context_reg, 0, FE_NOREG,

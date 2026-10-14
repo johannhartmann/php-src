@@ -11523,11 +11523,6 @@ void ZendCompilerA64::guard_direct_user_callee() {
 		generate_raw_jump(Jump::Jne, call_slow_target());
 	}
 	emit_observer_exit(call_slow_target());
-	load_off(first_reg, frame_reg,
-		static_cast<uint32_t>(
-			offsetof(zend_execute_data, call)), 8);
-	ASM(CMPxi, first_reg, 0);
-	generate_raw_jump(Jump::Jne, call_slow_target());
 	if (call.direct_call->expected_function
 			->op_array.cache_size != 0) {
 		run_time_cache.emplace(this);
@@ -11862,6 +11857,17 @@ void ZendCompilerA64::initialize_direct_user_frame() {
 				zend_native_execution_context,
 				vm_stack_top)), 8);
 		store_off(address_reg, 0, second_reg, 8);
+		/* A call nested in another call's arguments finds that call
+		 * pending in EX(call); the trailing activation keeps it for
+		 * the completion to restore. */
+		load_off(address_reg, frame_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_execute_data, call)), 8);
+		store_off(callee_reg,
+			static_cast<uint32_t>(call.direct_call->frame_size
+				+ offsetof(zend_native_direct_activation,
+					pending_call)),
+			address_reg, 8);
 	}
 	store_off(frame_reg,
 		static_cast<uint32_t>(
@@ -12491,10 +12497,6 @@ void ZendCompilerA64::link_direct_user_activation() {
 		static_cast<uint32_t>(offsetof(
 			zend_native_direct_activation,
 			setup_record)), 0, 1);
-	store_constant(second_reg,
-		static_cast<uint32_t>(offsetof(
-			zend_native_direct_activation,
-			pending_call)), 0, 8);
 	store_off(first_reg, 0, second_reg, 8);
 	load_off(first_reg, context_reg,
 		static_cast<uint32_t>(offsetof(
