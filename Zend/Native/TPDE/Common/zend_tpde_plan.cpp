@@ -248,6 +248,8 @@ static void freeze_entry_facts(plan_builder &builder) {
 	const zend_ssa *const source_ssa = builder.source_ssa;
 	plan->source_generator = source_op_array == nullptr
 		|| (source_op_array->fn_flags & ZEND_ACC_GENERATOR) != 0;
+	plan->source_function = source_op_array != nullptr
+		&& source_op_array->function_name != nullptr;
 	plan->source_num_args =
 		source_op_array != nullptr ? source_op_array->num_args : 0;
 	plan->source_return_type_mask = source_op_array != nullptr
@@ -3029,6 +3031,15 @@ static bool plan_instructions(plan_builder &builder) {
 				if (!plan->instructions[i].direct_scalar_return) {
 					require_runtime_helper(
 						plan, ZEND_NATIVE_HELPER_RETURN_SOURCE_ZVAL);
+				}
+				/* A function returning a CV moves it, as the VM does,
+				 * and buffers a possible GC root itself. */
+				if (plan->source_function
+						&& plan->instructions[i].has_value_operation
+						&& plan->instructions[i].value_operation.op1.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_CV) {
+					require_runtime_helper(
+						plan, ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT);
 				}
 				break;
 			default:

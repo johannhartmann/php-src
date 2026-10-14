@@ -1267,6 +1267,9 @@ struct zend_tpde_plan {
 	/* The source op array is a generator: only then can an entry frame be
 	 * a generator frame. */
 	bool source_generator;
+	/* The source op array is a function, not the code of a script or an
+	 * eval, whose CVs a symbol table may share. */
+	bool source_function;
 	/* The literal table of the source op array, which outlives the
 	 * compilation: lets the emitter specialize code on literal keys. */
 	const zval *source_literals;

@@ -1132,6 +1132,10 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 		(const void *) zend_native_call_fast_run_time_cache},
 	{ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT, 0,
 		(const void *) zend_native_array_find_element},
+	{ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT,
+		ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT
+			| ZEND_NATIVE_EFFECT_MAY_REENTER,
+		(const void *) gc_possible_root},
 };
 
 _Static_assert(sizeof(zend_native_runtime_helpers)

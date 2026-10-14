@@ -14,7 +14,7 @@ extern "C" {
  * loaded: bump it whenever the helper ids, the execution context, the
  * persisted image layout or what generated code assumes about them change.
  */
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 111u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 112u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
@@ -266,7 +266,10 @@ typedef enum _zend_native_runtime_helper_id {
 	ZEND_NATIVE_HELPER_CALL_FAST_METHOD_INIT = 235,
 	ZEND_NATIVE_HELPER_CALL_FAST_RUN_TIME_CACHE = 236,
 	ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT = 237,
-	ZEND_NATIVE_HELPER_COUNT = 238
+	/* gc_possible_root() of a CV a function moves into its return
+	 * value. */
+	ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT = 238,
+	ZEND_NATIVE_HELPER_COUNT = 239
 } zend_native_runtime_helper_id;
 
 /*

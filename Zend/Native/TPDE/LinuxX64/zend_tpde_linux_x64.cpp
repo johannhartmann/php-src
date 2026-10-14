@@ -24091,6 +24091,12 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 		frame_slot_offset(mir.value_operation.op1_storage_id);
 	const bool cv_return = mir.value_operation.op1.slot_kind
 		== ZEND_MIR_SOURCE_SLOT_CV;
+	/* An observer's end handler sees the frame's CVs, a script's or
+	 * an eval's CVs belong to a symbol table: the VM copies those. */
+	const bool cv_move = cv_return && ir().plan()->source_function
+		&& !ZEND_OBSERVER_ENABLED
+		&& optional_runtime_symbol(
+			ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT).valid();
 	if (mir.value_operation.source_opcode == ZEND_RETURN
 			&& (mir.value_operation.op1.slot_kind
 					== ZEND_MIR_SOURCE_SLOT_TMP
@@ -24154,7 +24160,44 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 					static_cast<int32_t>(
 						offsetof(zval, u1.type_info))),
 				type_reg);
-			if (cv_return) {
+			if (cv_return && cv_move) {
+				/* ZEND_RETURN of a CV in a function: a counted value
+				 * moves into the return value and the CV becomes null,
+				 * so the leave has nothing to release. A value that may
+				 * leak is buffered as a possible GC root first, with
+				 * the opline published for the destructors a collection
+				 * may run. */
+				auto uncounted = text_writer.label_create();
+				auto possible_root = text_writer.label_create();
+				auto moved = text_writer.label_create();
+				ASM(TEST32ri, type_reg,
+					IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+				generate_raw_jump(Jump::je, uncounted);
+				ASM(TEST32mi,
+					FE_MEM(payload_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_refcounted_h, u.type_info))),
+					static_cast<int32_t>(GC_INFO_MASK
+						| (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+				generate_raw_jump(Jump::je, possible_root);
+				label_place(moved);
+				ASM(MOV32mi,
+					FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
+					IS_NULL);
+				label_place(uncounted);
+				cold_begin();
+				label_place(possible_root);
+				emit_publish_opline(frame_reg, return_value_reg,
+					static_cast<int32_t>(uint64_t{
+						record.source_position_id} * sizeof(zend_op)));
+				emit_preserving_call(
+					static_cast<uint64_t>(register_file.used),
+					ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT, [&] {
+						ASM(MOV64rr, FE_DI, payload_reg);
+					}, [] {});
+				generate_raw_jump(Jump::jmp, moved);
+				cold_end();
+			} else if (cv_return) {
 				emit_try_addref(type_reg, payload_reg);
 			} else {
 				ASM(MOV32mi,
