@@ -8417,9 +8417,15 @@ void ZendIRAdaptor::Builder::add_return_source_operands(
 			 * pointer would copy a TMP/VAR source instead of
 			 * transferring and undefining its zval, so those
 			 * returns take the ownership-aware helper. A typed body
-			 * has no canonical frame and returns its ABI value.
+			 * has no canonical frame and returns its ABI value. A
+			 * local-ABI call result never reaches the slot on its
+			 * fast edge and the frame state stores nothing for the
+			 * return, so it returns from its register: the fast
+			 * call's own reference, or the cold call's slot, which
+			 * the return undefines.
 			 */
 			&& ((function_mode_ == FunctionMode::TypedBody)
+				|| immediate_register_call_result
 				|| machine_kind(returned)
 					!= ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR)
 			&& machine_value_has_register_definition(
