@@ -737,6 +737,10 @@ public:
 		AsmReg payload_reg);
 	bool emit_materializations(
 		IRInstRef instruction, bool interrupt_slow_path = false);
+	void emit_truthiness_ladder(AsmReg type_reg, AsmReg value_reg,
+		AsmReg frame_reg, uint32_t operand_offset,
+		std::optional<AsmReg> boxed_payload_reg, ::tpde::Label truthy,
+		::tpde::Label falsey, ::tpde::Label slow, bool slow_after_resource);
 	bool compile_boxed_cond_guard(IRInstRef instruction);
 	bool compile_boxed_cond_cold(IRInstRef instruction);
 	bool compile_boxed_cond_cold_branch(IRInstRef instruction);
@@ -1050,6 +1054,79 @@ bool ZendCompilerA64::emit_materializations(
 	});
 }
 
+/*
+ * The truthiness ladder from false on, for the zval whose masked type is in
+ * type_reg: false is falsey and true truthy, a long, a string, an array and a
+ * resource decide by their value, any other type branches to slow. The
+ * payload is copied into value_reg from boxed_payload_reg, or loaded from
+ * frame_reg + operand_offset without it. With slow_after_resource, another
+ * type branches past the resource test to a jump to slow.
+ */
+void ZendCompilerA64::emit_truthiness_ladder(AsmReg type_reg,
+		AsmReg value_reg, AsmReg frame_reg, uint32_t operand_offset,
+		std::optional<AsmReg> boxed_payload_reg, ::tpde::Label truthy,
+		::tpde::Label falsey, ::tpde::Label slow, bool slow_after_resource) {
+	auto load_payload = [&]() {
+		if (boxed_payload_reg.has_value()) {
+			ASM(ORRx, value_reg, *boxed_payload_reg, *boxed_payload_reg);
+		} else {
+			load_off(value_reg, frame_reg, operand_offset, 8);
+		}
+	};
+	ASM(CMPwi, type_reg, IS_FALSE);
+	generate_raw_jump(Jump::Jeq, falsey);
+	ASM(CMPwi, type_reg, IS_TRUE);
+	generate_raw_jump(Jump::Jeq, truthy);
+	ASM(CMPwi, type_reg, IS_LONG);
+	auto not_long = text_writer.label_create();
+	generate_raw_jump(Jump::Jne, not_long);
+	load_payload();
+	generate_raw_jump(
+		Jump{Jump::Cbnz, value_reg, false}, truthy);
+	generate_raw_jump(Jump::jmp, falsey);
+
+	label_place(not_long);
+	ASM(CMPwi, type_reg, IS_STRING);
+	auto not_string = text_writer.label_create();
+	generate_raw_jump(Jump::Jne, not_string);
+	load_payload();
+	load_off(type_reg, value_reg,
+		static_cast<uint32_t>(offsetof(zend_string, len)), 8);
+	generate_raw_jump(Jump{Jump::Cbz, type_reg, false}, falsey);
+	ASM(CMPxi, type_reg, 1);
+	generate_raw_jump(Jump::Jne, truthy);
+	load_off(type_reg, value_reg,
+		static_cast<uint32_t>(offsetof(zend_string, val)), 1);
+	ASM(CMPwi, type_reg, '0');
+	generate_raw_jump(Jump::Jeq, falsey);
+	generate_raw_jump(Jump::jmp, truthy);
+
+	label_place(not_string);
+	ASM(CMPwi, type_reg, IS_ARRAY);
+	auto not_array = text_writer.label_create();
+	generate_raw_jump(Jump::Jne, not_array);
+	load_payload();
+	load_off(type_reg, value_reg,
+		static_cast<uint32_t>(offsetof(HashTable, nNumOfElements)), 4);
+	generate_raw_jump(Jump{Jump::Cbnz, type_reg, false}, truthy);
+	generate_raw_jump(Jump::jmp, falsey);
+
+	label_place(not_array);
+	ASM(CMPwi, type_reg, IS_RESOURCE);
+	auto not_resource = slow_after_resource
+		? text_writer.label_create() : slow;
+	generate_raw_jump(Jump::Jne, not_resource);
+	load_payload();
+	load_off(type_reg, value_reg,
+		static_cast<uint32_t>(offsetof(zend_resource, handle)), 4);
+	generate_raw_jump(Jump{Jump::Cbnz, type_reg, false}, truthy);
+	generate_raw_jump(Jump::jmp, falsey);
+	if (slow_after_resource) {
+		label_place(not_resource);
+		generate_raw_jump(Jump::jmp, slow);
+	}
+}
+
 bool ZendCompilerA64::compile_boxed_cond_guard(IRInstRef instruction) {
 	const Adaptor::InstNode &node = ir().node(instruction);
 	const zend_tpde_instruction &mir =
@@ -1177,52 +1254,9 @@ bool ZendCompilerA64::compile_boxed_cond_guard(IRInstRef instruction) {
 		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 		ASM(CMPwi, type_reg, IS_NULL);
 		generate_raw_jump(Jump::Jeq, falsey);
-		ASM(CMPwi, type_reg, IS_FALSE);
-		generate_raw_jump(Jump::Jeq, falsey);
-		ASM(CMPwi, type_reg, IS_TRUE);
-		generate_raw_jump(Jump::Jeq, truthy);
-		ASM(CMPwi, type_reg, IS_LONG);
-		auto not_long = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, not_long);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		generate_raw_jump(
-			Jump{Jump::Cbnz, value_reg, false}, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
-
-		label_place(not_long);
-		ASM(CMPwi, type_reg, IS_STRING);
-		auto not_string = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, not_string);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(offsetof(zend_string, len)), 8);
-		generate_raw_jump(Jump{Jump::Cbz, type_reg, false}, falsey);
-		ASM(CMPxi, type_reg, 1);
-		generate_raw_jump(Jump::Jne, truthy);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(offsetof(zend_string, val)), 1);
-		ASM(CMPwi, type_reg, '0');
-		generate_raw_jump(Jump::Jeq, falsey);
-		generate_raw_jump(Jump::jmp, truthy);
-
-		label_place(not_string);
-		ASM(CMPwi, type_reg, IS_ARRAY);
-		auto not_array = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, not_array);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(offsetof(HashTable, nNumOfElements)), 4);
-		generate_raw_jump(Jump{Jump::Cbnz, type_reg, false}, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
-
-		label_place(not_array);
-		ASM(CMPwi, type_reg, IS_RESOURCE);
-		generate_raw_jump(Jump::Jne, slow);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(offsetof(zend_resource, handle)), 4);
-		generate_raw_jump(Jump{Jump::Cbnz, type_reg, false}, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
+		emit_truthiness_ladder(type_reg, value_reg, frame_reg,
+			layout.operand_offset, std::nullopt, truthy, falsey, slow,
+			false);
 	}
 
 	if (register_string && !layout.has_result) {
@@ -4428,60 +4462,9 @@ bool ZendCompilerA64::slot_isset_empty() {
 	if (!layout.is_empty) {
 		generate_raw_jump(Jump::jmp, truthy);
 	} else {
-		ASM(CMPwi, type_reg, IS_FALSE);
-		generate_raw_jump(Jump::Jeq, falsey);
-		ASM(CMPwi, type_reg, IS_TRUE);
-		generate_raw_jump(Jump::Jeq, truthy);
-		ASM(CMPwi, type_reg, IS_LONG);
-		auto not_long = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, not_long);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		generate_raw_jump(
-			Jump{Jump::Cbnz, value_reg, false}, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
-
-		label_place(not_long);
-		ASM(CMPwi, type_reg, IS_STRING);
-		auto not_string = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, not_string);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(offsetof(zend_string, len)), 8);
-		generate_raw_jump(
-			Jump{Jump::Cbz, type_reg, false}, falsey);
-		ASM(CMPxi, type_reg, 1);
-		generate_raw_jump(Jump::Jne, truthy);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(offsetof(zend_string, val)), 1);
-		ASM(CMPwi, type_reg, '0');
-		generate_raw_jump(Jump::Jeq, falsey);
-		generate_raw_jump(Jump::jmp, truthy);
-
-		label_place(not_string);
-		ASM(CMPwi, type_reg, IS_ARRAY);
-		auto not_array = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, not_array);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(
-				offsetof(HashTable, nNumOfElements)), 4);
-		generate_raw_jump(
-			Jump{Jump::Cbnz, type_reg, false}, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
-
-		label_place(not_array);
-		ASM(CMPwi, type_reg, IS_RESOURCE);
-		auto not_resource = text_writer.label_create();
-		generate_raw_jump(Jump::Jne, not_resource);
-		load_off(value_reg, frame_reg, layout.operand_offset, 8);
-		load_off(type_reg, value_reg,
-			static_cast<uint32_t>(
-				offsetof(zend_resource, handle)), 4);
-		generate_raw_jump(
-			Jump{Jump::Cbnz, type_reg, false}, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
-		label_place(not_resource);
-		generate_raw_jump(Jump::jmp, slow);
+		emit_truthiness_ladder(type_reg, value_reg, frame_reg,
+			layout.operand_offset, std::nullopt, truthy, falsey, slow,
+			true);
 	}
 	}
 
@@ -9542,15 +9525,6 @@ bool ZendCompilerA64::compile_value_cond_branch() {
 				boxed_type_info_reg =
 					boxed_type_info->load_to_reg();
 			}
-			auto load_condition_payload = [&]() {
-				if (register_boxed_condition) {
-					ASM(ORRx, value_reg,
-						boxed_payload_reg, boxed_payload_reg);
-				} else {
-					load_off(value_reg, frame_reg,
-						layout.operand_offset, 8);
-				}
-			};
 
 			/*
 			 * Result-producing short-circuit branches must consume their
@@ -9574,58 +9548,12 @@ bool ZendCompilerA64::compile_value_cond_branch() {
 			ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
 			ASM(CMPwi, type_reg, IS_NULL);
 			generate_raw_jump(Jump::Jeq, falsey);
-			ASM(CMPwi, type_reg, IS_FALSE);
-			generate_raw_jump(Jump::Jeq, falsey);
-			ASM(CMPwi, type_reg, IS_TRUE);
-			generate_raw_jump(Jump::Jeq, truthy);
-			ASM(CMPwi, type_reg, IS_LONG);
-			auto not_long = text_writer.label_create();
-			generate_raw_jump(Jump::Jne, not_long);
-			load_condition_payload();
-			generate_raw_jump(
-				Jump{Jump::Cbnz, value_reg, false}, truthy);
-			generate_raw_jump(Jump::jmp, falsey);
-
-			label_place(not_long);
-			ASM(CMPwi, type_reg, IS_STRING);
-			auto not_string = text_writer.label_create();
-			generate_raw_jump(Jump::Jne, not_string);
-			load_condition_payload();
-			load_off(type_reg, value_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_string, len)), 8);
-			generate_raw_jump(
-				Jump{Jump::Cbz, type_reg, false}, falsey);
-			ASM(CMPxi, type_reg, 1);
-			generate_raw_jump(Jump::Jne, truthy);
-			load_off(type_reg, value_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_string, val)), 1);
-			ASM(CMPwi, type_reg, '0');
-			generate_raw_jump(Jump::Jeq, falsey);
-			generate_raw_jump(Jump::jmp, truthy);
-
-			label_place(not_string);
-			ASM(CMPwi, type_reg, IS_ARRAY);
-			auto not_array = text_writer.label_create();
-			generate_raw_jump(Jump::Jne, not_array);
-			load_condition_payload();
-			load_off(type_reg, value_reg,
-				static_cast<uint32_t>(
-					offsetof(HashTable, nNumOfElements)), 4);
-			generate_raw_jump(
-				Jump{Jump::Cbnz, type_reg, false}, truthy);
-			generate_raw_jump(Jump::jmp, falsey);
-			label_place(not_array);
-			ASM(CMPwi, type_reg, IS_RESOURCE);
-			generate_raw_jump(Jump::Jne, slow);
-			load_condition_payload();
-			load_off(type_reg, value_reg,
-				static_cast<uint32_t>(
-					offsetof(zend_resource, handle)), 4);
-			generate_raw_jump(
-				Jump{Jump::Cbnz, type_reg, false}, truthy);
-			generate_raw_jump(Jump::jmp, falsey);
+			emit_truthiness_ladder(type_reg, value_reg, frame_reg,
+				layout.operand_offset,
+				register_boxed_condition
+					? std::optional<AsmReg>{boxed_payload_reg}
+					: std::nullopt,
+				truthy, falsey, slow, false);
 
 			label_place(truthy);
 			materialize_constant(
