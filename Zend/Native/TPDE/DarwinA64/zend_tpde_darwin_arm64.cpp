@@ -11646,10 +11646,18 @@ bool ZendCompilerA64::guard_direct_user_arguments() {
 			}
 			continue;
 		}
+		/* A moved temporary or call result is defined and
+		 * never a reference. */
 		if (zend_mir_scalar_type_is_exact(
 				argument.exact_type)
 				|| argument.source_operand.kind
-					== ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+					== ZEND_MIR_SOURCE_OPERAND_LITERAL
+				|| (argument.mode
+						== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+					&& (argument.source_operand.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_TMP
+						|| argument.source_operand.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_VAR))) {
 			continue;
 		}
 		const uint32_t source_offset =
