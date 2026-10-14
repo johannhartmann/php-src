@@ -1210,6 +1210,28 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 		}
 		return consumer_inst;
 	}
+	/*
+	 * Whether an object operation's receiver is an object: $this as an
+	 * UNUSED op1, which the compiler emits only where $this exists
+	 * (this_guaranteed_exists()), or a CV Zend's type inference proves
+	 * to be one.
+	 */
+	bool receiver_is_object(
+			const zend_mir_executable_value_ref &operation) const {
+		if (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+			return true;
+		}
+		const zend_tpde_plan *plan = this->ir().plan();
+		const uint32_t position = operation.source_position_id;
+		return operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+			&& plan->source_opcodes != nullptr
+			&& position < plan->source_opcode_count
+			&& plan->source_opcodes[position].opcode
+				== operation.source_opcode
+			&& (plan->source_opcodes[position].op1_may_be
+					& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF))
+				== MAY_BE_OBJECT;
+	}
 	/* Zend's inferred MAY_BE_* mask of the value an OP_DATA after the
 	 * operation passes, UINT32_MAX when unknown. */
 	uint32_t op_data_may_be(

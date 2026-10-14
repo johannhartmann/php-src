@@ -5115,6 +5115,10 @@ public:
 		uint64_t result_offset = 0;
 		bool value_literal = false;
 		uint64_t value_offset = 0;
+		/* The value's possible MAY_BE_UNDEF, MAY_BE_REF and counted
+		 * types: none for a literal or a temporary, Zend's type
+		 * inference for a CV. */
+		uint32_t value_may_be = 0;
 		bool known_array = false;
 		tpde::Label slow{};
 		tpde::Label absent{};
@@ -12293,16 +12297,20 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	 * ZEND_ASSIGN_DIM copies it: only the container's own zval holds
 	 * the unshared array, which is another storage (see above) or the
 	 * target of a VAR's INDIRECT, where the VM stores it the same. */
-	if (ae.assigns && !ae.value_literal) {
+	if ((ae.value_may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0) {
 		ScratchReg value_type{this};
 		const AsmReg type_reg = value_type.alloc_gp();
 		ASM(MOVZXr32m8, type_reg, FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(ae.value_offset
 				+ offsetof(zval, u1.v.type))));
-		ASM(CMP32ri, type_reg, IS_UNDEF);
-		generate_raw_jump(Jump::je, ae.slow);
-		ASM(CMP32ri, type_reg, IS_REFERENCE);
-		generate_raw_jump(Jump::je, ae.slow);
+		if ((ae.value_may_be & MAY_BE_UNDEF) != 0) {
+			ASM(TEST32rr, type_reg, type_reg);
+			generate_raw_jump(Jump::je, ae.slow);
+		}
+		if ((ae.value_may_be & MAY_BE_REF) != 0) {
+			ASM(CMP32ri, type_reg, IS_REFERENCE);
+			generate_raw_jump(Jump::je, ae.slow);
+		}
 	}
 	const AsmReg container_base =
 		ae.container_literal ? literals_reg : frame_reg;
@@ -12538,6 +12546,11 @@ int ZendCompilerX64::array_element_layout(ArrayElementContext &ae) {
 		: ae.value_literal
 			? uint64_t{operation.auxiliary.index} * sizeof(zval)
 			: frame_offset(operation.auxiliary_storage_id);
+	ae.value_may_be = !ae.assigns || ae.value_literal
+			|| slot_kind(operation.auxiliary) == ZEND_MIR_SOURCE_SLOT_TMP
+		? 0
+		: slot_kind(operation.auxiliary) == ZEND_MIR_SOURCE_SLOT_CV
+		? op_data_may_be(operation) : UINT32_MAX;
 	/* A CV container Zend's type inference proves to be an array,
 	 * neither undefined nor a reference: the known_* lookups take its
 	 * table without testing the zval. Some of them need one scratch
@@ -13369,7 +13382,9 @@ int ZendCompilerX64::array_element_result(
 					operation.auxiliary.index]));
 		if (counted_literal || (!ae.value_literal
 				&& slot_kind(operation.auxiliary)
-					== ZEND_MIR_SOURCE_SLOT_CV)) {
+					== ZEND_MIR_SOURCE_SLOT_CV
+				&& (ae.value_may_be & (MAY_BE_STRING | MAY_BE_ARRAY
+					| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF)) != 0)) {
 			auto uncounted = text_writer.label_create();
 			ASM(TEST32ri, type_reg, Z_TYPE_FLAGS_MASK);
 			generate_raw_jump(Jump::je, uncounted);
@@ -17086,13 +17101,15 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 	auto type_reg = type.alloc_gp();
 	auto low_word_reg = low_word.alloc_gp();
 	auto decision_reg = decision.alloc_gp();
-	ASM(MOVZXr32m8, type_reg,
-		FE_MEM(frame_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				layout.receiver_offset
-					+ offsetof(zval, u1.type_info))));
-	ASM(CMP32ri, type_reg, IS_OBJECT);
-	generate_raw_jump(Jump::jne, slow);
+	if (!receiver_is_object(mir.value_operation)) {
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(
+					layout.receiver_offset
+						+ offsetof(zval, u1.type_info))));
+		ASM(CMP32ri, type_reg, IS_OBJECT);
+		generate_raw_jump(Jump::jne, slow);
+	}
 	ASM(MOV64rm, object_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(layout.receiver_offset)));

@@ -4946,13 +4946,15 @@ bool ZendCompilerA64::object_property_write() {
 	 * through the frame. */
 	AsmReg value_base = frame_reg;
 
-	load_off(type_reg, frame_reg,
-		layout.receiver_offset
-			+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
-		4);
-	ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
-	ASM(CMPwi, type_reg, IS_OBJECT);
-	generate_raw_jump(Jump::Jne, slow);
+	if (!receiver_is_object(mir.value_operation)) {
+		load_off(type_reg, frame_reg,
+			layout.receiver_offset
+				+ static_cast<uint32_t>(offsetof(zval, u1.type_info)),
+			4);
+		ASM(ANDwi, type_reg, type_reg, Z_TYPE_MASK);
+		ASM(CMPwi, type_reg, IS_OBJECT);
+		generate_raw_jump(Jump::Jne, slow);
+	}
 	load_off(object_reg, frame_reg, layout.receiver_offset, 8);
 	load_off(cache_reg, frame_reg,
 		static_cast<uint32_t>(
