@@ -5310,6 +5310,122 @@ public:
 		ValueCondBranchContext &vc, TruthinessBranch &tb);
 	void emit_condition_result(
 		ValueCondBranchContext &vc, TruthinessBranch &tb);
+	void emit_truthiness_chain(ValueCondBranchContext &vc,
+		TruthinessBranch &tb, uint32_t types);
+	/*
+	 * The truthiness of a boxed value whose type byte is the low byte
+	 * of type_reg: a test per type of the MAY_BE_* mask types, in the
+	 * order null, false, true, long, string, array, resource; the last
+	 * one needs no type test when nothing else is possible. Undefined
+	 * values, references, doubles and objects take slow.
+	 * load_payload() loads the payload into value_reg.
+	 */
+	template <typename LoadPayload>
+	void emit_type_truthiness(AsmReg type_reg, AsmReg value_reg,
+			LoadPayload &&load_payload, tpde::Label truthy,
+			tpde::Label falsey, tpde::Label slow, uint32_t types) {
+		uint32_t remaining = types;
+		/* Whether the code emitted so far can fall through. */
+		bool reachable = true;
+		/* Without an undefined value, null and false share one test. */
+		if ((remaining & MAY_BE_UNDEF) == 0
+				&& (remaining & (MAY_BE_NULL | MAY_BE_FALSE)) != 0
+				&& (remaining & ~(MAY_BE_NULL | MAY_BE_FALSE)) != 0) {
+			ASM(CMP8ri, type_reg, IS_FALSE);
+			generate_raw_jump(Jump::jbe, falsey);
+			remaining &= ~(MAY_BE_NULL | MAY_BE_FALSE);
+		}
+		const auto constant = [&](uint32_t type_bit, uint8_t type,
+				tpde::Label outcome) {
+			if ((remaining & type_bit) == 0) {
+				return;
+			}
+			if (remaining == type_bit) {
+				remaining = 0;
+				generate_raw_jump(Jump::jmp, outcome);
+				reachable = false;
+				return;
+			}
+			remaining &= ~type_bit;
+			ASM(CMP8ri, type_reg, type);
+			generate_raw_jump(Jump::je, outcome);
+		};
+		const auto type_test = [&](uint32_t type_bit, uint8_t type,
+				auto &&body) {
+			if ((remaining & type_bit) == 0) {
+				return;
+			}
+			if (remaining == type_bit) {
+				remaining = 0;
+				body();
+				reachable = false;
+				return;
+			}
+			remaining &= ~type_bit;
+			auto other = text_writer.label_create();
+			ASM(CMP8ri, type_reg, type);
+			generate_raw_jump(Jump::jne, other);
+			body();
+			label_place(other);
+		};
+		constant(MAY_BE_NULL, IS_NULL, falsey);
+		constant(MAY_BE_FALSE, IS_FALSE, falsey);
+		constant(MAY_BE_TRUE, IS_TRUE, truthy);
+		type_test(MAY_BE_LONG, IS_LONG, [&] {
+			load_payload();
+			ASM(TEST64rr, value_reg, value_reg);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+		});
+		type_test(MAY_BE_STRING, IS_STRING, [&] {
+			load_payload();
+			ASM(MOV64rm, type_reg,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, len))));
+			ASM(TEST64rr, type_reg, type_reg);
+			generate_raw_jump(Jump::je, falsey);
+			ASM(CMP64ri, type_reg, 1);
+			generate_raw_jump(Jump::jne, truthy);
+			ASM(CMP8mi,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_string, val))),
+				'0');
+			generate_raw_jump(Jump::je, falsey);
+			generate_raw_jump(Jump::jmp, truthy);
+		});
+		type_test(MAY_BE_ARRAY, IS_ARRAY, [&] {
+			load_payload();
+			ASM(CMP32mi,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(HashTable, nNumOfElements))),
+				0);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+		});
+		type_test(MAY_BE_RESOURCE, IS_RESOURCE, [&] {
+			load_payload();
+			ASM(CMP32mi,
+				FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_resource, handle))),
+				0);
+			generate_raw_jump(Jump::jne, truthy);
+			generate_raw_jump(Jump::jmp, falsey);
+		});
+		if (reachable) {
+			generate_raw_jump(Jump::jmp, slow);
+		}
+	}
+	/* Zend's inferred MAY_BE_* types of a condition's operand, from
+	 * the branch's source opcode; all types when unknown. */
+	uint32_t condition_types(const zend_tpde_instruction &mir) const {
+		const zend_tpde_plan *plan = ir().plan();
+		const uint32_t position = mir.value_operation.source_position_id;
+		const uint32_t may_be = plan->source_opcodes != nullptr
+				&& position < plan->source_opcode_count
+			? plan->source_opcodes[position].op1_may_be : UINT32_MAX;
+		return may_be & (MAY_BE_UNDEF | MAY_BE_ANY | MAY_BE_REF);
+	}
 	bool emit_condition_truthiness(
 		ValueCondBranchContext &vc, TruthinessBranch &tb);
 	bool emit_condition_tails(
@@ -5919,69 +6035,11 @@ bool ZendCompilerX64::compile_boxed_cond_guard(IRInstRef instruction) {
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.operand_offset
 					+ offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, type_reg, IS_NULL);
-		generate_raw_jump(Jump::je, falsey);
-		ASM(CMP32ri, type_reg, IS_FALSE);
-		generate_raw_jump(Jump::je, falsey);
-		ASM(CMP32ri, type_reg, IS_TRUE);
-		generate_raw_jump(Jump::je, truthy);
-		ASM(CMP32ri, type_reg, IS_LONG);
-		auto not_long = text_writer.label_create();
-		generate_raw_jump(Jump::jne, not_long);
-		ASM(MOV64rm, value_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.operand_offset)));
-		ASM(TEST64rr, value_reg, value_reg);
-		generate_raw_jump(Jump::jne, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
-
-		label_place(not_long);
-		ASM(CMP32ri, type_reg, IS_STRING);
-		auto not_string = text_writer.label_create();
-		generate_raw_jump(Jump::jne, not_string);
-		ASM(MOV64rm, value_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.operand_offset)));
-		ASM(MOV64rm, type_reg,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_string, len))));
-		ASM(TEST64rr, type_reg, type_reg);
-		generate_raw_jump(Jump::je, falsey);
-		ASM(CMP64ri, type_reg, 1);
-		generate_raw_jump(Jump::jne, truthy);
-		ASM(MOVZXr32m8, type_reg,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_string, val))));
-		ASM(CMP32ri, type_reg, '0');
-		generate_raw_jump(Jump::je, falsey);
-		generate_raw_jump(Jump::jmp, truthy);
-
-		label_place(not_string);
-		ASM(CMP32ri, type_reg, IS_ARRAY);
-		auto not_array = text_writer.label_create();
-		generate_raw_jump(Jump::jne, not_array);
-		ASM(MOV64rm, value_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.operand_offset)));
-		ASM(MOV32rm, type_reg,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(HashTable, nNumOfElements))));
-		ASM(TEST32rr, type_reg, type_reg);
-		generate_raw_jump(Jump::jne, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
-
-		label_place(not_array);
-		ASM(CMP32ri, type_reg, IS_RESOURCE);
-		generate_raw_jump(Jump::jne, slow);
-		ASM(MOV64rm, value_reg,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(layout.operand_offset)));
-		ASM(MOV32rm, type_reg,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(zend_resource, handle))));
-		ASM(TEST32rr, type_reg, type_reg);
-		generate_raw_jump(Jump::jne, truthy);
-		generate_raw_jump(Jump::jmp, falsey);
+		emit_type_truthiness(type_reg, value_reg, [&] {
+				ASM(MOV64rm, value_reg,
+					FE_MEM(frame_reg, 0, FE_NOREG,
+						static_cast<int32_t>(layout.operand_offset)));
+			}, truthy, falsey, slow, condition_types(mir));
 	}
 
 	if (direct_successor_branches) {
@@ -19636,78 +19694,34 @@ bool ZendCompilerX64::emit_condition_truthiness(
 			generate_raw_jump(Jump::jmp, tb.falsey);
 		}
 		if (!known_bool) {
-			/* A counted temporary, in its slot or held in registers,
-			 * owns a reference that only the helper releases. */
-			if (tb.frame_temporary_condition
-					|| (vc.register_condition
-						&& mir.value_operation.op1.slot_kind
-							== ZEND_MIR_SOURCE_SLOT_TMP)) {
-				ASM(TEST32ri, tb.type_reg,
-					IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-				generate_raw_jump(Jump::jne, tb.slow);
-			}
-			ASM(AND32ri, tb.type_reg, Z_TYPE_MASK);
-			ASM(CMP32ri, tb.type_reg, IS_NULL);
-			generate_raw_jump(Jump::je, tb.falsey);
-			ASM(CMP32ri, tb.type_reg, IS_FALSE);
-			generate_raw_jump(Jump::je, tb.falsey);
-			ASM(CMP32ri, tb.type_reg, IS_TRUE);
-			generate_raw_jump(Jump::je, tb.truthy);
-			ASM(CMP32ri, tb.type_reg, IS_LONG);
-			auto not_long = text_writer.label_create();
-			generate_raw_jump(Jump::jne, not_long);
-			load_condition_payload(vc, tb);
-			ASM(TEST64rr, tb.value_reg, tb.value_reg);
-			generate_raw_jump(Jump::jne, tb.truthy);
-			generate_raw_jump(Jump::jmp, tb.falsey);
-
-			label_place(not_long);
-			ASM(CMP32ri, tb.type_reg, IS_STRING);
-			auto not_string = text_writer.label_create();
-			generate_raw_jump(Jump::jne, not_string);
-			load_condition_payload(vc, tb);
-			ASM(MOV64rm, tb.type_reg,
-				FE_MEM(tb.value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_string, len))));
-			ASM(TEST64rr, tb.type_reg, tb.type_reg);
-			generate_raw_jump(Jump::je, tb.falsey);
-			ASM(CMP64ri, tb.type_reg, 1);
-			generate_raw_jump(Jump::jne, tb.truthy);
-			ASM(MOVZXr32m8, tb.type_reg,
-				FE_MEM(tb.value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_string, val))));
-			ASM(CMP32ri, tb.type_reg, '0');
-			generate_raw_jump(Jump::je, tb.falsey);
-			generate_raw_jump(Jump::jmp, tb.truthy);
-
-			label_place(not_string);
-			ASM(CMP32ri, tb.type_reg, IS_ARRAY);
-			auto not_array = text_writer.label_create();
-			generate_raw_jump(Jump::jne, not_array);
-			load_condition_payload(vc, tb);
-			ASM(MOV32rm, tb.type_reg,
-				FE_MEM(tb.value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(HashTable, nNumOfElements))));
-			ASM(TEST32rr, tb.type_reg, tb.type_reg);
-			generate_raw_jump(Jump::jne, tb.truthy);
-			generate_raw_jump(Jump::jmp, tb.falsey);
-			label_place(not_array);
-			ASM(CMP32ri, tb.type_reg, IS_RESOURCE);
-			generate_raw_jump(Jump::jne, tb.slow);
-			load_condition_payload(vc, tb);
-			ASM(MOV32rm, tb.type_reg,
-				FE_MEM(tb.value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_resource, handle))));
-			ASM(TEST32rr, tb.type_reg, tb.type_reg);
-			generate_raw_jump(Jump::jne, tb.truthy);
-			generate_raw_jump(Jump::jmp, tb.falsey);
+			emit_truthiness_chain(vc, tb, condition_types(mir));
 		}
 	}
 	return true;
+}
+
+/* The truthiness chain of a boxed condition whose type info is in
+ * tb.type_reg (see emit_type_truthiness()). */
+void ZendCompilerX64::emit_truthiness_chain(ValueCondBranchContext &vc,
+		TruthinessBranch &tb, uint32_t types) {
+	const zend_tpde_instruction &mir = vc.mir;
+	/* A counted temporary, in its slot or held in registers,
+	 * owns a reference that only the helper releases. */
+	if ((tb.frame_temporary_condition
+				|| (vc.register_condition
+					&& mir.value_operation.op1.slot_kind
+						== ZEND_MIR_SOURCE_SLOT_TMP))
+			&& (types & (MAY_BE_STRING | MAY_BE_ARRAY
+				| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF)) != 0) {
+		ASM(TEST32ri, tb.type_reg,
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::jne, tb.slow);
+		/* Interned strings and immutable arrays stay. */
+		types &= ~(MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF);
+	}
+	emit_type_truthiness(tb.type_reg, tb.value_reg,
+		[&] { load_condition_payload(vc, tb); },
+		tb.truthy, tb.falsey, tb.slow, types);
 }
 
 bool ZendCompilerX64::emit_condition_tails(
