@@ -2078,8 +2078,8 @@ static void zend_native_call_fast_complete(
 	/* A universal setup record holds no entry cell of its own. */
 	ZEND_ASSERT(activation->setup_record && !activation->cell_active
 		&& !activation->raw_arguments_owned);
-	zend_vm_stack_free_extra_args(callee);
 	zend_free_compiled_variables(callee);
+	zend_vm_stack_free_extra_args(callee);
 	activation->frame_requires_finish = false;
 	activation->frame_initialized = false;
 	if (activation->uses_discarded_return
@@ -2277,9 +2277,9 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 		}
 		/* A variable destructor may inspect the backtrace: the dying frame
 		 * is no longer current. The CVs are released as
-		 * i_free_compiled_variables() releases them. */
+		 * i_free_compiled_variables() releases them, then the extra
+		 * arguments, in the VM's leave order. */
 		EG(current_execute_data) = caller;
-		zend_vm_stack_free_extra_args_ex(call_info, callee);
 		{
 			zval *cv = ZEND_CALL_VAR_NUM(callee, 0);
 			zval *end = cv + callee->func->op_array.last_var;
@@ -2297,6 +2297,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 				}
 			}
 		}
+		zend_vm_stack_free_extra_args_ex(call_info, callee);
 	} else {
 		status = zend_native_execution_finish_direct_frame(callee, status);
 		if (status == ZEND_NATIVE_BAILOUT) {

@@ -97,13 +97,6 @@ static void zend_native_execution_cleanup_frame_ex(
 				(uint32_t) (cleanup_opline - op_array->opcodes), 0);
 		}
 	}
-	zend_vm_stack_free_extra_args(execute_data);
-	if ((ZEND_CALL_INFO(execute_data)
-			& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
-		zend_free_extra_named_params(execute_data->extra_named_params);
-		execute_data->extra_named_params = NULL;
-		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
-	}
 	if ((call_info & ZEND_CALL_CODE) != 0) {
 		/*
 		 * Include/eval frames borrow the caller's symbol table. As the
@@ -117,12 +110,21 @@ static void zend_native_execution_cleanup_frame_ex(
 		}
 		return;
 	}
+	/* The VM's leave order: the CVs, the symbol table, the extra named
+	 * and then the extra positional arguments. */
 	zend_native_execute_free_compiled_variables(execute_data);
 	if ((call_info & ZEND_CALL_HAS_SYMBOL_TABLE) != 0) {
 		zend_clean_and_cache_symbol_table(execute_data->symbol_table);
 		execute_data->symbol_table = NULL;
 		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_SYMBOL_TABLE);
 	}
+	if ((ZEND_CALL_INFO(execute_data)
+			& ZEND_CALL_HAS_EXTRA_NAMED_PARAMS) != 0) {
+		zend_free_extra_named_params(execute_data->extra_named_params);
+		execute_data->extra_named_params = NULL;
+		ZEND_DEL_CALL_FLAG(execute_data, ZEND_CALL_HAS_EXTRA_NAMED_PARAMS);
+	}
+	zend_vm_stack_free_extra_args(execute_data);
 }
 
 void zend_native_execution_cleanup_frame(zend_execute_data *execute_data)
