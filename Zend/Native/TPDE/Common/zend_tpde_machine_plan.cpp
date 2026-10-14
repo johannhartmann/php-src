@@ -1013,26 +1013,427 @@ static bool machine_value_kind_can_be_register_authoritative(
 		|| kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
 }
 
-[[nodiscard]]
-static bool freeze_typed_component_calls(
+/* What freeze_typed_component_calls() made of a member's direct user calls. */
+enum class typed_component_calls : uint8_t {
+	/* The per-instruction eligibility could not be allocated. */
+	allocation_failed,
+	/* A direct user call is not a typed component call, or it is an
+	 * effect-closed clone. */
+	partly_typed,
+	/* Every direct user call is a typed component call. */
+	all_typed,
+};
+
+/*
+ * The direct user call's callee when its target, descriptor and argument
+ * range allow a typed component call or an effect-closed clone, else null.
+ */
+static const zend_tpde_plan *typed_component_call_callee(
+		const zend_tpde_plan *plan,
+		const zend_tpde_instruction &instruction,
+		const zend_tpde_plan *const *component_plans,
+		uint32_t component_count) {
+	const uint32_t target = instruction.component_target_index;
+	const zend_tpde_plan *callee =
+		target < component_count ? component_plans[target] : nullptr;
+	if (instruction.direct_call == nullptr
+			|| callee == nullptr
+			|| instruction.direct_call->expected_function == nullptr
+			|| (instruction.direct_call->expected_function->common.fn_flags
+				& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD)) != 0
+			|| (instruction.entry_cell != nullptr
+				&& instruction.entry_cell->function != nullptr
+				&& (instruction.entry_cell->function->common.fn_flags
+					& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD)) != 0)
+			|| instruction.call_argument_count
+				!= callee->argument_count
+			|| (callee->argument_count != 0
+				&& callee->argument_value_indices == nullptr)
+			|| instruction.call_argument_offset
+				> plan->call_argument_count
+			|| instruction.call_argument_count
+				> plan->call_argument_count
+					- instruction.call_argument_offset) {
+		return nullptr;
+	}
+	return callee;
+}
+
+/* What freeze_typed_component_calls() checks one call's arguments with. */
+struct typed_component_call_check {
+	const zend_tpde_plan *plan;
+	const zend_tpde_plan *const *component_plans;
+	uint32_t component_count;
+	/* Per instruction: the ABI of its result where known. */
+	const std::vector<zend_tpde_local_abi_type> &instruction_result_types;
+	const zend_tpde_instruction &instruction;
+	const zend_tpde_plan *callee;
+	bool effect_closed_inline;
+};
+
+/* The caller ABI of an argument: its source value's, else its binding's
+ * value's, else its defining instruction's result. */
+static zend_tpde_local_abi_type typed_component_call_caller_abi(
+		const typed_component_call_check &check,
+		const zend_tpde_source_value_binding &binding,
+		int32_t source_value) {
+	const zend_tpde_plan *plan = check.plan;
+	const std::vector<zend_tpde_local_abi_type> &instruction_result_types =
+		check.instruction_result_types;
+	zend_tpde_local_abi_type caller_abi{};
+	if (source_value >= 0) {
+		caller_abi = machine_plan_value_abi(
+			plan, static_cast<uint32_t>(source_value));
+	}
+	if (!caller_abi.valid && binding.value_index >= 0
+			&& static_cast<uint32_t>(binding.value_index)
+				< plan->value_count) {
+		caller_abi = machine_plan_value_abi(
+			plan, static_cast<uint32_t>(binding.value_index));
+	}
+	if (!caller_abi.valid
+			&& binding.definition_instruction_index >= 0
+			&& static_cast<uint32_t>(
+				binding.definition_instruction_index)
+				< instruction_result_types.size()) {
+		caller_abi = instruction_result_types[
+			static_cast<uint32_t>(
+				binding.definition_instruction_index)];
+	}
+	return caller_abi;
+}
+
+/* A typed call skips the receive check: a parameter with a declared type
+ * needs an argument that already satisfies it. */
+static bool typed_component_call_checked_argument_supplied(
+		const typed_component_call_check &check,
+		uint32_t argument,
+		const zend_mir_call_argument_ref &source_argument,
+		const zend_tpde_local_abi_type &caller_abi,
+		bool number_binding) {
+	const zend_tpde_plan *plan = check.plan;
+	const zend_tpde_plan *callee = check.callee;
+	if (argument >= 32
+			? callee->checked_boxed_argument_mask != 0
+			: ((callee->checked_boxed_argument_mask >> argument) & 1)
+				!= 0) {
+		const bool number_argument =
+			caller_abi.valid
+			&& (number_binding
+				|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_F64
+				|| (source_argument.send_opline_index
+						< plan->source_opcode_count
+					&& zend_tpde_known_numeric_type(
+						plan->source_opcodes[
+							source_argument.send_opline_index]
+							.op1_known_type)));
+		if (argument >= 32 || !number_argument
+				|| ((callee->number_argument_mask >> argument) & 1)
+					== 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
+ * A property or array read produces a two-part register zval.
+ * The AArch64 entry guard checks its type before the hot block
+ * extracts the refcounted payload, which is then the callee's
+ * borrowed pointer; the cold call keeps Zend semantics.
+ */
+static bool typed_component_call_guarded_pointer_transport(
+		const typed_component_call_check &check,
+		uint32_t argument,
+		const zend_mir_call_argument_ref &source_argument,
+		const zend_tpde_source_value_binding &binding,
+		const zend_tpde_local_abi_type &callee_abi) {
+	const zend_tpde_plan *plan = check.plan;
+	const zend_tpde_instruction &instruction = check.instruction;
+	const zend_tpde_instruction *boxed_read_producer =
+		binding.definition_instruction_index >= 0
+				&& static_cast<uint32_t>(
+					binding.definition_instruction_index)
+					< plan->instruction_count
+			? &plan->instructions[static_cast<uint32_t>(
+				binding.definition_instruction_index)]
+			: nullptr;
+	const zend_tpde_machine_reference *boxed_read_reference =
+		boxed_read_producer != nullptr
+				&& boxed_read_producer->operation_reference_index
+					< plan->machine_reference_count
+			? &plan->machine_references[
+				boxed_read_producer->operation_reference_index]
+			: nullptr;
+	zend_tpde_object_property_read property_layout{};
+	zend_tpde_array_read array_layout{};
+	const bool guarded_property_pointer_transport =
+		boxed_read_producer != nullptr
+		&& boxed_read_producer->record.opcode
+			== ZEND_MIR_OPCODE_OBJECT_FETCH_R
+		&& zend_tpde_object_property_read_at(
+			*boxed_read_producer, &property_layout)
+		&& boxed_read_reference != nullptr
+		&& boxed_read_reference->kind
+			== ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT
+		&& boxed_read_reference->stable_storage_or_layout_id
+			== property_layout.cache_offset
+		&& boxed_read_reference->access_width == sizeof(zval);
+	const bool guarded_array_pointer_transport =
+		boxed_read_producer != nullptr
+		&& boxed_read_producer->record.opcode
+			== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+		&& zend_tpde_array_read_at(
+			*boxed_read_producer, &array_layout,
+			zend_tpde_linux_inline_forms)
+		&& boxed_read_reference != nullptr
+		&& boxed_read_reference->kind
+			== ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT
+		&& zend_mir_id_is_valid(
+			boxed_read_reference->base_value_id)
+		&& zend_mir_id_is_valid(
+			boxed_read_reference->index_value_id)
+		&& boxed_read_reference->scale == sizeof(zval)
+		&& boxed_read_reference->access_width == sizeof(zval);
+	return !check.effect_closed_inline
+		&& callee_abi.valid
+		&& machine_value_kind_can_be_register_authoritative(
+			callee_abi.machine_kind)
+		&& callee_abi.representation
+			== ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
+		&& (guarded_property_pointer_transport
+			|| guarded_array_pointer_transport)
+		&& argument < instruction.direct_call->argument_count
+		&& instruction.direct_call->arguments[argument].exact_type
+			== callee_abi.exact_type
+		&& source_argument.ownership
+			!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
+}
+
+/*
+ * The descriptor's IS_LONG guard for this boxed argument lets
+ * the typed hot edge pass the payload as the callee's I64.
+ */
+static bool typed_component_call_guarded_integer_transport(
+		const typed_component_call_check &check,
+		uint32_t argument,
+		const zend_tpde_source_value_binding &binding,
+		const zend_tpde_value *guarded_integer_source,
+		const zend_tpde_local_abi_type &callee_abi) {
+	const zend_tpde_plan *plan = check.plan;
+	const zend_tpde_instruction &instruction = check.instruction;
+	const int32_t guarded_integer_definition =
+		binding.definition_instruction_index;
+	const zend_mir_instruction_record guarded_integer_definition_record =
+		guarded_integer_definition >= 0
+				&& static_cast<uint32_t>(guarded_integer_definition)
+					< plan->instruction_count
+			? zend_tpde_instruction_record_at(plan,
+				&plan->instructions[static_cast<uint32_t>(
+					guarded_integer_definition)])
+			: zend_mir_instruction_record{};
+	return !check.effect_closed_inline
+		&& guarded_integer_source != nullptr
+		&& guarded_integer_source->representation
+			== ZEND_MIR_REPRESENTATION_ZVAL
+		&& guarded_integer_source->machine_kind
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& guarded_integer_definition >= 0
+		&& guarded_integer_definition_record.opcode
+			!= ZEND_MIR_OPCODE_COPY
+		&& guarded_integer_definition_record.opcode
+			!= ZEND_MIR_OPCODE_PHI
+		&& zend_mir_id_is_valid(
+			guarded_integer_source->canonical_storage_id)
+		&& callee_abi.valid
+		&& callee_abi.representation == ZEND_MIR_REPRESENTATION_I64
+		&& callee_abi.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+		&& callee_abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
+		&& argument < instruction.direct_call->argument_count
+		&& instruction.direct_call->arguments[argument].mode
+			== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+		&& instruction.direct_call->arguments[argument].exact_type
+			== ZEND_MIR_SCALAR_TYPE_I64
+		&& instruction.direct_call_argument_guard_types != nullptr
+		&& instruction.direct_call_argument_guard_types[argument]
+			== ZEND_MIR_SCALAR_TYPE_I64;
+}
+
+/* Whether an effect-closed clone reads the argument's source value as the
+ * callee's ABI. */
+static bool effect_closed_call_source_supplies(
+		const typed_component_call_check &check,
+		uint32_t argument,
+		const zend_mir_call_argument_ref &source_argument,
+		const zend_tpde_value &source,
+		const zend_tpde_local_abi_type &caller_abi,
+		const zend_tpde_local_abi_type &callee_abi) {
+	const zend_tpde_plan *plan = check.plan;
+	const zend_tpde_instruction &instruction = check.instruction;
+	/*
+	 * A canonical refcounted value reaches an effect-closed clone
+	 * by one payload load; its slot stays authoritative, and the
+	 * call needs no private Zend frame.
+	 */
+	if (!caller_abi.valid
+			&& source.machine_kind == callee_abi.machine_kind
+			&& zend_mir_id_is_valid(
+				source.canonical_storage_id)
+			&& machine_value_kind_can_be_register_authoritative(
+				source.machine_kind)) {
+		return true;
+	}
+	if (source.representation
+				== ZEND_MIR_REPRESENTATION_ZVAL
+			&& source.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& (source.exact_type
+					== callee_abi.exact_type
+				|| (source.exact_type
+						== ZEND_MIR_SCALAR_TYPE_NONE
+					&& argument
+						< instruction.direct_call
+							->argument_count
+					&& instruction.direct_call
+							->arguments[argument].exact_type
+						== callee_abi.exact_type))
+			&& zend_tpde_machine_kind_is_long_or_bool(
+				callee_abi.machine_kind)
+			&& zend_mir_id_is_valid(
+				source.canonical_storage_id)) {
+		return true;
+	}
+	if (!caller_abi.valid
+			&& source.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
+			&& callee_abi.machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_I64
+			&& argument < instruction.direct_call->argument_count
+			&& instruction.direct_call->arguments[argument].exact_type
+				== callee_abi.exact_type
+			&& zend_mir_id_is_valid(source.canonical_storage_id)
+			&& source_argument.send_opline_index
+				< plan->source_opcode_count
+			&& plan->source_opcodes[
+				source_argument.send_opline_index].op1_type == IS_CV) {
+		/*
+		 * By-value SEND dereferences a reference-cell CV; with the
+		 * payload type the descriptor fixed, the clone does the
+		 * same load.
+		 */
+		return true;
+	}
+	return false;
+}
+
+/* Whether the call's argument can be supplied in the callee's ABI. */
+static bool typed_component_call_argument_compatible(
+		const typed_component_call_check &check, uint32_t argument) {
+	const zend_tpde_plan *plan = check.plan;
+	const zend_tpde_instruction &instruction = check.instruction;
+	const zend_tpde_plan *callee = check.callee;
+	const bool effect_closed_inline = check.effect_closed_inline;
+	if (effect_closed_inline
+			&& !machine_plan_effect_closed_argument_is_used(
+				callee, argument)) {
+		return true;
+	}
+	zend_mir_call_argument_ref source_argument{};
+	const uint32_t argument_index =
+		instruction.call_argument_offset + argument;
+	const int32_t callee_value =
+		callee->argument_value_indices[argument];
+	if (!zend_tpde_call_argument_at(
+			plan, argument_index, &source_argument)
+			|| callee_value < 0
+			|| static_cast<uint32_t>(callee_value)
+				>= callee->value_count) {
+		return false;
+	}
+	const zend_tpde_source_value_binding &binding =
+		plan->call_argument_bindings[argument_index];
+	const int32_t source_value = machine_plan_source_value_index(
+		plan, source_argument.source_operand);
+	zend_tpde_local_abi_type caller_abi =
+		typed_component_call_caller_abi(check, binding, source_value);
+	/* A proven arithmetic result, or the result of a member that
+	 * returns numbers, owns nothing. */
+	const bool number_binding = machine_plan_binding_is_number(
+		plan, check.component_plans, check.component_count, binding);
+	if (number_binding
+			&& (!caller_abi.valid
+				|| caller_abi.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+		caller_abi = machine_plan_abi(
+			ZEND_MIR_REPRESENTATION_ZVAL,
+			ZEND_MIR_SCALAR_TYPE_NONE,
+			ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+			ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
+	}
+	const zend_tpde_local_abi_type callee_abi =
+		machine_plan_value_abi(
+			callee, static_cast<uint32_t>(callee_value));
+	if (!typed_component_call_checked_argument_supplied(check, argument,
+			source_argument, caller_abi, number_binding)) {
+		return false;
+	}
+	if (typed_component_call_guarded_pointer_transport(check, argument,
+			source_argument, binding, callee_abi)) {
+		caller_abi = callee_abi;
+	}
+	const zend_tpde_value *guarded_integer_source =
+		source_value >= 0
+				&& static_cast<uint32_t>(source_value)
+					< plan->value_count
+			? &plan->values[static_cast<uint32_t>(source_value)]
+			: nullptr;
+	const bool guarded_boxed_integer_transport =
+		typed_component_call_guarded_integer_transport(check, argument,
+			binding, guarded_integer_source, callee_abi);
+	if (guarded_boxed_integer_transport) {
+		caller_abi = callee_abi;
+	}
+	if (effect_closed_inline
+			&& source_value >= 0
+			&& static_cast<uint32_t>(source_value)
+				< plan->value_count
+			&& effect_closed_call_source_supplies(check, argument,
+				source_argument,
+				plan->values[static_cast<uint32_t>(source_value)],
+				caller_abi, callee_abi)) {
+		caller_abi = callee_abi;
+	}
+	const bool by_reference =
+		source_argument.ownership
+			== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
+	const bool guarded_boxed_integer_required =
+		instruction.direct_call_argument_guard_types != nullptr
+		&& instruction.direct_call_argument_guard_types[argument]
+			== ZEND_MIR_SCALAR_TYPE_I64
+		&& guarded_integer_source != nullptr
+		&& guarded_integer_source->representation
+			== ZEND_MIR_REPRESENTATION_ZVAL
+		&& guarded_integer_source->machine_kind
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+	if ((guarded_boxed_integer_required
+			&& !guarded_boxed_integer_transport)
+			|| !machine_plan_call_argument_can_supply(
+			plan, source_argument, caller_abi, callee_abi)
+			|| by_reference
+				!= (callee_abi.machine_kind
+					== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+		return false;
+	}
+	return true;
+}
+
+/* Marks the member's direct user calls that become typed component calls
+ * or effect-closed clones. */
+static void freeze_typed_component_call_sites(
 		zend_tpde_plan *plan,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count) {
-	plan->has_register_component_results = false;
-	if (plan->instruction_count == 0) {
-		return true;
-	}
-	plan->typed_component_call_eligible.reset(static_cast<uint8_t *>(
-		std::calloc(plan->instruction_count, sizeof(uint8_t))));
-	plan->effect_closed_inline_eligible.reset(static_cast<uint8_t *>(
-		std::calloc(plan->instruction_count, sizeof(uint8_t))));
-	if (plan->typed_component_call_eligible == nullptr
-			|| plan->effect_closed_inline_eligible == nullptr) {
-		return false;
-	}
-	if (plan->call_argument_bindings == nullptr) {
-		return true;
-	}
 	std::vector<zend_tpde_local_abi_type> instruction_result_types(
 		plan->instruction_count);
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
@@ -1049,313 +1450,22 @@ static bool freeze_typed_component_calls(
 			}
 			continue;
 		}
-		const uint32_t target = instruction.component_target_index;
-		const zend_tpde_plan *callee =
-			target < component_count ? component_plans[target] : nullptr;
-		if (instruction.direct_call == nullptr
-				|| callee == nullptr
-				|| instruction.direct_call->expected_function == nullptr
-				|| (instruction.direct_call->expected_function->common.fn_flags
-					& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD)) != 0
-				|| (instruction.entry_cell != nullptr
-					&& instruction.entry_cell->function != nullptr
-					&& (instruction.entry_cell->function->common.fn_flags
-						& (ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD)) != 0)
-				|| instruction.call_argument_count
-					!= callee->argument_count
-				|| (callee->argument_count != 0
-					&& callee->argument_value_indices == nullptr)
-				|| instruction.call_argument_offset
-					> plan->call_argument_count
-				|| instruction.call_argument_count
-					> plan->call_argument_count
-						- instruction.call_argument_offset) {
+		const zend_tpde_plan *callee = typed_component_call_callee(
+			plan, instruction, component_plans, component_count);
+		if (callee == nullptr) {
 			continue;
 		}
 		const bool effect_closed_inline =
 			machine_plan_prefers_effect_closed_inline(
 				instruction, callee)
 			&& !zend_tpde_direct_call_has_argument_guard(instruction);
+		const typed_component_call_check check{plan, component_plans,
+			component_count, instruction_result_types, instruction, callee,
+			effect_closed_inline};
 		bool compatible = true;
 		for (uint32_t argument = 0;
 				argument < instruction.call_argument_count; ++argument) {
-			if (effect_closed_inline
-					&& !machine_plan_effect_closed_argument_is_used(
-						callee, argument)) {
-				continue;
-			}
-			zend_mir_call_argument_ref source_argument{};
-			const uint32_t argument_index =
-				instruction.call_argument_offset + argument;
-			const int32_t callee_value =
-				callee->argument_value_indices[argument];
-			if (!zend_tpde_call_argument_at(
-					plan, argument_index, &source_argument)
-					|| callee_value < 0
-					|| static_cast<uint32_t>(callee_value)
-						>= callee->value_count) {
-				compatible = false;
-				break;
-			}
-			const zend_tpde_source_value_binding &binding =
-				plan->call_argument_bindings[argument_index];
-			zend_tpde_local_abi_type caller_abi{};
-			const int32_t source_value = machine_plan_source_value_index(
-				plan, source_argument.source_operand);
-			if (source_value >= 0) {
-				caller_abi = machine_plan_value_abi(
-					plan, static_cast<uint32_t>(source_value));
-			}
-			if (!caller_abi.valid && binding.value_index >= 0
-					&& static_cast<uint32_t>(binding.value_index)
-						< plan->value_count) {
-				caller_abi = machine_plan_value_abi(
-					plan, static_cast<uint32_t>(binding.value_index));
-			}
-			if (!caller_abi.valid
-					&& binding.definition_instruction_index >= 0
-					&& static_cast<uint32_t>(
-						binding.definition_instruction_index)
-						< instruction_result_types.size()) {
-				caller_abi = instruction_result_types[
-					static_cast<uint32_t>(
-						binding.definition_instruction_index)];
-			}
-			/* A proven arithmetic result, or the result of a member that
-			 * returns numbers, owns nothing. */
-			const bool number_binding = machine_plan_binding_is_number(
-				plan, component_plans, component_count, binding);
-			if (number_binding
-					&& (!caller_abi.valid
-						|| caller_abi.machine_kind
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
-				caller_abi = machine_plan_abi(
-					ZEND_MIR_REPRESENTATION_ZVAL,
-					ZEND_MIR_SCALAR_TYPE_NONE,
-					ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
-					ZEND_TPDE_LOCAL_ABI_TRANSFER_IMMORTAL);
-			}
-			const zend_tpde_local_abi_type callee_abi =
-				machine_plan_value_abi(
-					callee, static_cast<uint32_t>(callee_value));
-			/* A typed call skips the receive check: a parameter with a
-			 * declared type needs an argument that already satisfies it. */
-			if (argument >= 32
-					? callee->checked_boxed_argument_mask != 0
-					: ((callee->checked_boxed_argument_mask >> argument) & 1)
-						!= 0) {
-				const bool number_argument =
-					caller_abi.valid
-					&& (number_binding
-						|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_I64
-						|| caller_abi.exact_type == ZEND_MIR_SCALAR_TYPE_F64
-						|| (source_argument.send_opline_index
-								< plan->source_opcode_count
-							&& zend_tpde_known_numeric_type(
-								plan->source_opcodes[
-									source_argument.send_opline_index]
-									.op1_known_type)));
-				if (argument >= 32 || !number_argument
-						|| ((callee->number_argument_mask >> argument) & 1)
-							== 0) {
-					compatible = false;
-					break;
-				}
-			}
-			const zend_tpde_instruction *boxed_read_producer =
-				binding.definition_instruction_index >= 0
-						&& static_cast<uint32_t>(
-							binding.definition_instruction_index)
-							< plan->instruction_count
-					? &plan->instructions[static_cast<uint32_t>(
-						binding.definition_instruction_index)]
-					: nullptr;
-			const zend_tpde_machine_reference *boxed_read_reference =
-				boxed_read_producer != nullptr
-						&& boxed_read_producer->operation_reference_index
-							< plan->machine_reference_count
-					? &plan->machine_references[
-						boxed_read_producer->operation_reference_index]
-					: nullptr;
-			zend_tpde_object_property_read property_layout{};
-			zend_tpde_array_read array_layout{};
-			const bool guarded_property_pointer_transport =
-				boxed_read_producer != nullptr
-				&& boxed_read_producer->record.opcode
-					== ZEND_MIR_OPCODE_OBJECT_FETCH_R
-				&& zend_tpde_object_property_read_at(
-					*boxed_read_producer, &property_layout)
-				&& boxed_read_reference != nullptr
-				&& boxed_read_reference->kind
-					== ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT
-				&& boxed_read_reference->stable_storage_or_layout_id
-					== property_layout.cache_offset
-				&& boxed_read_reference->access_width == sizeof(zval);
-			const bool guarded_array_pointer_transport =
-				boxed_read_producer != nullptr
-				&& boxed_read_producer->record.opcode
-					== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
-				&& zend_tpde_array_read_at(
-					*boxed_read_producer, &array_layout,
-					zend_tpde_linux_inline_forms)
-				&& boxed_read_reference != nullptr
-				&& boxed_read_reference->kind
-					== ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT
-				&& zend_mir_id_is_valid(
-					boxed_read_reference->base_value_id)
-				&& zend_mir_id_is_valid(
-					boxed_read_reference->index_value_id)
-				&& boxed_read_reference->scale == sizeof(zval)
-				&& boxed_read_reference->access_width == sizeof(zval);
-			const bool guarded_boxed_pointer_transport =
-				!effect_closed_inline
-				&& callee_abi.valid
-				&& machine_value_kind_can_be_register_authoritative(
-					callee_abi.machine_kind)
-				&& callee_abi.representation
-					== ZEND_MIR_REPRESENTATION_SEMANTIC_POINTER
-				&& (guarded_property_pointer_transport
-					|| guarded_array_pointer_transport)
-				&& argument < instruction.direct_call->argument_count
-				&& instruction.direct_call->arguments[argument].exact_type
-					== callee_abi.exact_type
-				&& source_argument.ownership
-					!= ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
-			if (guarded_boxed_pointer_transport) {
-				/*
-				 * A property or array read produces a two-part register zval.
-				 * The AArch64 entry guard checks its type before the hot block
-				 * extracts the refcounted payload, which is then the callee's
-				 * borrowed pointer; the cold call keeps Zend semantics.
-				 */
-				caller_abi = callee_abi;
-			}
-			const zend_tpde_value *guarded_integer_source =
-				source_value >= 0
-						&& static_cast<uint32_t>(source_value)
-							< plan->value_count
-					? &plan->values[static_cast<uint32_t>(source_value)]
-					: nullptr;
-			const int32_t guarded_integer_definition =
-				binding.definition_instruction_index;
-			const zend_mir_instruction_record guarded_integer_definition_record =
-				guarded_integer_definition >= 0
-						&& static_cast<uint32_t>(guarded_integer_definition)
-							< plan->instruction_count
-					? zend_tpde_instruction_record_at(plan,
-						&plan->instructions[static_cast<uint32_t>(
-							guarded_integer_definition)])
-					: zend_mir_instruction_record{};
-			const bool guarded_boxed_integer_transport =
-				!effect_closed_inline
-				&& guarded_integer_source != nullptr
-				&& guarded_integer_source->representation
-					== ZEND_MIR_REPRESENTATION_ZVAL
-				&& guarded_integer_source->machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& guarded_integer_definition >= 0
-				&& guarded_integer_definition_record.opcode
-					!= ZEND_MIR_OPCODE_COPY
-				&& guarded_integer_definition_record.opcode
-					!= ZEND_MIR_OPCODE_PHI
-				&& zend_mir_id_is_valid(
-					guarded_integer_source->canonical_storage_id)
-				&& callee_abi.valid
-				&& callee_abi.representation == ZEND_MIR_REPRESENTATION_I64
-				&& callee_abi.exact_type == ZEND_MIR_SCALAR_TYPE_I64
-				&& callee_abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
-				&& argument < instruction.direct_call->argument_count
-				&& instruction.direct_call->arguments[argument].mode
-					== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
-				&& instruction.direct_call->arguments[argument].exact_type
-					== ZEND_MIR_SCALAR_TYPE_I64
-				&& instruction.direct_call_argument_guard_types != nullptr
-				&& instruction.direct_call_argument_guard_types[argument]
-					== ZEND_MIR_SCALAR_TYPE_I64;
-			if (guarded_boxed_integer_transport) {
-				/*
-				 * The descriptor's IS_LONG guard for this boxed argument lets
-				 * the typed hot edge pass the payload as the callee's I64.
-				 */
-				caller_abi = callee_abi;
-			}
-			if (effect_closed_inline
-					&& source_value >= 0
-					&& static_cast<uint32_t>(source_value)
-						< plan->value_count) {
-				const zend_tpde_value &source =
-					plan->values[static_cast<uint32_t>(source_value)];
-				/*
-				 * A canonical refcounted value reaches an effect-closed clone
-				 * by one payload load; its slot stays authoritative, and the
-				 * call needs no private Zend frame.
-				 */
-				if (!caller_abi.valid
-						&& source.machine_kind == callee_abi.machine_kind
-						&& zend_mir_id_is_valid(
-							source.canonical_storage_id)
-						&& machine_value_kind_can_be_register_authoritative(
-							source.machine_kind)) {
-					caller_abi = callee_abi;
-				} else if (source.representation
-							== ZEND_MIR_REPRESENTATION_ZVAL
-						&& source.machine_kind
-							== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-						&& (source.exact_type
-								== callee_abi.exact_type
-							|| (source.exact_type
-									== ZEND_MIR_SCALAR_TYPE_NONE
-								&& argument
-									< instruction.direct_call
-										->argument_count
-								&& instruction.direct_call
-										->arguments[argument].exact_type
-									== callee_abi.exact_type))
-						&& zend_tpde_machine_kind_is_long_or_bool(
-							callee_abi.machine_kind)
-						&& zend_mir_id_is_valid(
-							source.canonical_storage_id)) {
-					caller_abi = callee_abi;
-				} else if (!caller_abi.valid
-						&& source.machine_kind
-							== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR
-						&& callee_abi.machine_kind
-							== ZEND_TPDE_MACHINE_VALUE_I64
-						&& argument < instruction.direct_call->argument_count
-						&& instruction.direct_call->arguments[argument].exact_type
-							== callee_abi.exact_type
-						&& zend_mir_id_is_valid(source.canonical_storage_id)
-						&& source_argument.send_opline_index
-							< plan->source_opcode_count
-						&& plan->source_opcodes[
-							source_argument.send_opline_index].op1_type == IS_CV) {
-					/*
-					 * By-value SEND dereferences a reference-cell CV; with the
-					 * payload type the descriptor fixed, the clone does the
-					 * same load.
-					 */
-					caller_abi = callee_abi;
-				}
-			}
-			const bool by_reference =
-				source_argument.ownership
-					== ZEND_MIR_CALL_ARGUMENT_SOURCE_ZVAL_BY_REFERENCE;
-			const bool guarded_boxed_integer_required =
-				instruction.direct_call_argument_guard_types != nullptr
-				&& instruction.direct_call_argument_guard_types[argument]
-					== ZEND_MIR_SCALAR_TYPE_I64
-				&& guarded_integer_source != nullptr
-				&& guarded_integer_source->representation
-					== ZEND_MIR_REPRESENTATION_ZVAL
-				&& guarded_integer_source->machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
-			if ((guarded_boxed_integer_required
-					&& !guarded_boxed_integer_transport)
-					|| !machine_plan_call_argument_can_supply(
-					plan, source_argument, caller_abi, callee_abi)
-					|| by_reference
-						!= (callee_abi.machine_kind
-							== ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR)) {
+			if (!typed_component_call_argument_compatible(check, argument)) {
 				compatible = false;
 				break;
 			}
@@ -1385,7 +1495,46 @@ static bool freeze_typed_component_calls(
 			callee->typed_body_return_abi;
 		plan->has_register_component_results = true;
 	}
-	return true;
+}
+
+/*
+ * Freezes which direct user calls of the member are typed component calls
+ * and which are effect-closed clones, and says whether every direct user
+ * call became a typed component call.
+ */
+[[nodiscard]]
+static typed_component_calls freeze_typed_component_calls(
+		zend_tpde_plan *plan,
+		const zend_tpde_plan *const *component_plans,
+		uint32_t component_count) {
+	plan->has_register_component_results = false;
+	if (plan->instruction_count == 0) {
+		return typed_component_calls::all_typed;
+	}
+	plan->typed_component_call_eligible.reset(static_cast<uint8_t *>(
+		std::calloc(plan->instruction_count, sizeof(uint8_t))));
+	plan->effect_closed_inline_eligible.reset(static_cast<uint8_t *>(
+		std::calloc(plan->instruction_count, sizeof(uint8_t))));
+	if (plan->typed_component_call_eligible == nullptr
+			|| plan->effect_closed_inline_eligible == nullptr) {
+		return typed_component_calls::allocation_failed;
+	}
+	if (plan->call_argument_bindings != nullptr) {
+		freeze_typed_component_call_sites(
+			plan, component_plans, component_count);
+	}
+	/* Only a Zend entry clones an effect-closed callee; a typed
+	 * body needs a typed call. */
+	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
+		if (zend_tpde_instruction_record_at(
+					plan, &plan->instructions[i]).opcode
+					== ZEND_MIR_OPCODE_CALL_DIRECT_USER
+				&& (plan->typed_component_call_eligible[i] == 0
+					|| plan->effect_closed_inline_eligible[i] != 0)) {
+			return typed_component_calls::partly_typed;
+		}
+	}
+	return typed_component_calls::all_typed;
 }
 
 /*
@@ -3316,22 +3465,12 @@ bool freeze_component_machine_plan(
 						plan.instructions[i].component_body_function_index;
 				}
 			}
-			bool all_typed = freeze_typed_component_calls(
-				&plan, component_plans, component_count);
+			/* The dry run counts an allocation failure as a call that is
+			 * not typed. */
+			freeze.all_typed = freeze_typed_component_calls(
+					&plan, component_plans, component_count)
+				== typed_component_calls::all_typed;
 			freeze.frozen = true;
-			/* Only a Zend entry clones an effect-closed callee; a typed
-			 * body needs a typed call. */
-			for (uint32_t i = 0; all_typed && i < plan.instruction_count;
-					++i) {
-				all_typed = zend_tpde_instruction_record_at(
-						&plan, &plan.instructions[i]).opcode
-							!= ZEND_MIR_OPCODE_CALL_DIRECT_USER
-					|| (plan.typed_component_call_eligible != nullptr
-						&& plan.typed_component_call_eligible[i] != 0
-						&& (plan.effect_closed_inline_eligible == nullptr
-							|| plan.effect_closed_inline_eligible[i] == 0));
-			}
-			freeze.all_typed = all_typed;
 			freeze.callees = std::move(callees);
 		}
 		if (!freeze.all_typed) {
@@ -3410,8 +3549,9 @@ bool freeze_component_machine_plan(
 			}
 		} else {
 			unfreeze_component_calls(index);
-			if (!freeze_typed_component_calls(
-					&plans[index], component_plans, component_count)) {
+			if (freeze_typed_component_calls(
+					&plans[index], component_plans, component_count)
+					== typed_component_calls::allocation_failed) {
 				zend_tpde_set_diagnostic(diag,
 					ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
 					"unable to freeze component-local TPDE call plan");
