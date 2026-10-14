@@ -282,6 +282,15 @@ static void freeze_entry_facts(plan_builder &builder) {
 				counted |= UINT64_C(1) << variable;
 			}
 		}
+		/* RETURN_BY_REF makes its CV a reference without an SSA
+		 * definition, as the function ends there. */
+		for (uint32_t index = 0; index < source_op_array->last; ++index) {
+			const zend_op &opline = source_op_array->opcodes[index];
+			if (opline.opcode == ZEND_RETURN_BY_REF
+					&& opline.op1_type == IS_CV) {
+				counted |= UINT64_C(1) << EX_VAR_TO_NUM(opline.op1.var);
+			}
+		}
 		/* A parameter the tier-2 entry guards holds any type when the
 		 * guard fails: the tier-1 code then runs the frame, which the
 		 * fast-call leave releases. */
