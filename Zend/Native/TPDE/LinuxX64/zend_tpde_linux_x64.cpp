@@ -24087,11 +24087,8 @@ bool ZendCompilerX64::compile_typed_body_return(InstContext &ctx) {
 	 * register, so that no live part of it is evicted. */
 	if (ir().machine_kind(node.operands[0])
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			&& (ir().plan()->typed_body_return_abi.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_I64
-				|| ir().plan()->typed_body_return_abi
-						.machine_kind
-					== ZEND_TPDE_MACHINE_VALUE_F64)) {
+			&& zend_tpde_machine_kind_is_number(
+				ir().plan()->typed_body_return_abi.machine_kind)) {
 		return emit_number_return(node.operands[0]);
 	}
 	ScratchReg status{this};
