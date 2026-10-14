@@ -4792,6 +4792,51 @@ public:
 	bool emit_pointer_addref(
 		zend_tpde_machine_value_kind kind,
 		AsmReg payload_reg);
+	/*
+	 * ZEND_RETURN of a CV in a function, once the value (type info in
+	 * type_reg, payload in payload_reg) is in the return value: a counted
+	 * value moves there and the CV at frame_reg + type_offset's zval
+	 * becomes null, so the leave has nothing to release. A value that
+	 * may leak is buffered as a possible GC root first, out of line, with
+	 * the opline published (through scratch_reg) for the destructors a
+	 * collection may run.
+	 */
+	void emit_return_cv_move(AsmReg frame_reg, int32_t type_offset,
+			AsmReg type_reg, AsmReg payload_reg, AsmReg scratch_reg,
+			uint32_t source_position) {
+		auto uncounted = text_writer.label_create();
+		auto possible_root = text_writer.label_create();
+		auto moved = text_writer.label_create();
+		ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::je, uncounted);
+		ASM(TEST32mi,
+			FE_MEM(payload_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_refcounted_h, u.type_info))),
+			static_cast<int32_t>(
+				GC_INFO_MASK | (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+		generate_raw_jump(Jump::je, possible_root);
+		label_place(moved);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, type_offset), IS_NULL);
+		label_place(uncounted);
+		cold_begin();
+		label_place(possible_root);
+		emit_publish_opline(frame_reg, scratch_reg,
+			static_cast<int32_t>(uint64_t{source_position} * sizeof(zend_op)));
+		emit_preserving_call(static_cast<uint64_t>(register_file.used),
+			ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT, [&] {
+				ASM(MOV64rr, FE_DI, payload_reg);
+			}, [] {});
+		generate_raw_jump(Jump::jmp, moved);
+		cold_end();
+	}
+	/* Whether ZEND_RETURN of a CV moves it (emit_return_cv_move()): an
+	 * observer's end handler sees the frame's CVs, a script's or an
+	 * eval's CVs belong to a symbol table; the VM copies those. */
+	bool return_moves_cv() {
+		return ir().plan()->source_function && !ZEND_OBSERVER_ENABLED
+			&& optional_runtime_symbol(
+				ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT).valid();
+	}
 	/* Z_TRY_ADDREF of a zval whose type info is in type_reg and payload in
 	 * payload_reg: a counted value gains increment references. */
 	void emit_try_addref(
@@ -24091,12 +24136,7 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 		frame_slot_offset(mir.value_operation.op1_storage_id);
 	const bool cv_return = mir.value_operation.op1.slot_kind
 		== ZEND_MIR_SOURCE_SLOT_CV;
-	/* An observer's end handler sees the frame's CVs, a script's or
-	 * an eval's CVs belong to a symbol table: the VM copies those. */
-	const bool cv_move = cv_return && ir().plan()->source_function
-		&& !ZEND_OBSERVER_ENABLED
-		&& optional_runtime_symbol(
-			ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT).valid();
+	const bool cv_move = cv_return && return_moves_cv();
 	if (mir.value_operation.source_opcode == ZEND_RETURN
 			&& (mir.value_operation.op1.slot_kind
 					== ZEND_MIR_SOURCE_SLOT_TMP
@@ -24161,42 +24201,9 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 						offsetof(zval, u1.type_info))),
 				type_reg);
 			if (cv_return && cv_move) {
-				/* ZEND_RETURN of a CV in a function: a counted value
-				 * moves into the return value and the CV becomes null,
-				 * so the leave has nothing to release. A value that may
-				 * leak is buffered as a possible GC root first, with
-				 * the opline published for the destructors a collection
-				 * may run. */
-				auto uncounted = text_writer.label_create();
-				auto possible_root = text_writer.label_create();
-				auto moved = text_writer.label_create();
-				ASM(TEST32ri, type_reg,
-					IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-				generate_raw_jump(Jump::je, uncounted);
-				ASM(TEST32mi,
-					FE_MEM(payload_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_refcounted_h, u.type_info))),
-					static_cast<int32_t>(GC_INFO_MASK
-						| (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
-				generate_raw_jump(Jump::je, possible_root);
-				label_place(moved);
-				ASM(MOV32mi,
-					FE_MEM(frame_reg, 0, FE_NOREG, type_offset),
-					IS_NULL);
-				label_place(uncounted);
-				cold_begin();
-				label_place(possible_root);
-				emit_publish_opline(frame_reg, return_value_reg,
-					static_cast<int32_t>(uint64_t{
-						record.source_position_id} * sizeof(zend_op)));
-				emit_preserving_call(
-					static_cast<uint64_t>(register_file.used),
-					ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT, [&] {
-						ASM(MOV64rr, FE_DI, payload_reg);
-					}, [] {});
-				generate_raw_jump(Jump::jmp, moved);
-				cold_end();
+				emit_return_cv_move(frame_reg, type_offset, type_reg,
+					payload_reg, return_value_reg,
+					record.source_position_id);
 			} else if (cv_return) {
 				emit_try_addref(type_reg, payload_reg);
 			} else {
@@ -24322,6 +24329,14 @@ bool ZendCompilerX64::compile_register_return(InstContext &ctx) {
 		&& refcount_state != ZEND_MIR_REFCOUNT_IMMORTAL;
 	const uint64_t return_source_offset =
 		frame_slot_offset(mir.value_operation.op1_storage_id);
+	/* A counted CV's slot holds the returned value: lazy CVs are
+	 * uncounted (see emit_return_cv_move()). */
+	const bool cv_move = return_addref
+		&& mir.value_operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& zend_mir_id_is_valid(mir.value_operation.op1_storage_id)
+		&& return_source_offset <= INT32_MAX - sizeof(zval)
+		&& return_moves_cv();
 	if (ownership != ZEND_MIR_OWNERSHIP_STATE_BORROWED
 			&& ownership != ZEND_MIR_OWNERSHIP_STATE_OWNED
 			&& ownership
@@ -24392,7 +24407,7 @@ bool ZendCompilerX64::compile_register_return(InstContext &ctx) {
 		if (!have_payload || !have_type_info) {
 			return false;
 		}
-		if (return_addref) {
+		if (return_addref && !cv_move) {
 			auto copied = text_writer.label_create();
 			ASM(TEST32ri, type_info_reg,
 				IS_TYPE_REFCOUNTED
@@ -24414,6 +24429,13 @@ bool ZendCompilerX64::compile_register_return(InstContext &ctx) {
 				static_cast<int32_t>(
 					offsetof(zval, u1.type_info))),
 			type_info_reg);
+		if (cv_move) {
+			emit_return_cv_move(frame_reg,
+				static_cast<int32_t>(return_source_offset
+					+ offsetof(zval, u1.type_info)),
+				type_info_reg, payload_reg, pointer_reg,
+				record.source_position_id);
+		}
 	} else {
 		uint64_t constant_bits = 0;
 		ScratchReg constant_value{this};
