@@ -17380,8 +17380,6 @@ bool ZendCompilerX64::object_property_read(InstContext &ctx) {
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zend_execute_data, run_time_cache))));
-		ASM(TEST64rr, cache_reg, cache_reg);
-		generate_raw_jump(Jump::je, slow);
 		/* A reference property reads as its value (ZVAL_COPY_DEREF);
 		 * a receiver known to be an object is not tested. */
 		ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
@@ -17499,8 +17497,6 @@ bool ZendCompilerX64::object_property_address(InstContext &ctx) {
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zend_execute_data, run_time_cache))));
-		ASM(TEST64rr, cache_reg, cache_reg);
-		generate_raw_jump(Jump::je, slow);
 		/* A typed property's info in the cache entry needs the
 		 * helper's checks. */
 		ASM(CMP64mi,
@@ -17611,8 +17607,6 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(
 				offsetof(zend_execute_data, run_time_cache))));
-	ASM(TEST64rr, cache_reg, cache_reg);
-	generate_raw_jump(Jump::je, slow);
 	ASM(MOV64rm, type_reg,
 		FE_MEM(object_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(zend_object, ce))));
@@ -17810,8 +17804,6 @@ bool ZendCompilerX64::fetch_constant_inline(InstContext &ctx) {
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zend_execute_data, run_time_cache))));
-		ASM(TEST64rr, constant_reg, constant_reg);
-		generate_raw_jump(Jump::je, slow);
 		ASM(MOV64rm, constant_reg,
 			FE_MEM(constant_reg, 0, FE_NOREG,
 				static_cast<int32_t>(operation.extended_value)));
@@ -17902,8 +17894,6 @@ bool ZendCompilerX64::bind_global_inline(InstContext &ctx) {
 		ASM(MOV64rm, offset_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG, static_cast<int32_t>(
 				offsetof(zend_execute_data, run_time_cache))));
-		ASM(TEST64rr, offset_reg, offset_reg);
-		generate_raw_jump(Jump::je, slow);
 		/* The cache holds offset + 1; an empty slot wraps below. */
 		ASM(MOV64rm, offset_reg, FE_MEM(offset_reg, 0, FE_NOREG,
 			static_cast<int32_t>(operation.extended_value)));
@@ -18025,8 +18015,6 @@ bool ZendCompilerX64::class_constant_inline(InstContext &ctx) {
 		ASM(MOV64rm, cache_reg, FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(
 				offsetof(zend_execute_data, run_time_cache))));
-		ASM(TEST64rr, cache_reg, cache_reg);
-		generate_raw_jump(Jump::je, slow);
 		if (!literal_class) {
 			if (fetch == ZEND_FETCH_CLASS_STATIC) {
 				/* The called scope: $this's class or the class This
@@ -18179,8 +18167,6 @@ bool ZendCompilerX64::instanceof_inline(InstContext &ctx) {
 		ASM(MOV64rm, class_reg, FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(
 				offsetof(zend_execute_data, run_time_cache))));
-		ASM(TEST64rr, class_reg, class_reg);
-		generate_raw_jump(Jump::je, slow);
 		ASM(MOV64rm, class_reg, FE_MEM(class_reg, 0, FE_NOREG,
 			static_cast<int32_t>(operation.extended_value)));
 		ASM(TEST64rr, class_reg, class_reg);
@@ -20426,8 +20412,6 @@ bool ZendCompilerX64::compile_frameless_branch(
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(
 				zend_execute_data, run_time_cache))));
-	ASM(TEST64rr, cached_reg, cached_reg);
-	generate_raw_jump(Jump::je, slow);
 	ASM(MOV64rm, cached_reg,
 		FE_MEM(cached_reg, 0, FE_NOREG,
 			static_cast<int32_t>(
