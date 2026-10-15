@@ -670,16 +670,34 @@ static bool fused_slot_operand(const zend_mir_source_operand_ref &operand,
 		&& operand.slot_kind == kind && zend_mir_id_is_valid(storage);
 }
 
+/* A class constant of a literal name, of a literal class or of self::,
+ * parent:: or static::, as class_constant_inline() reads it. */
+static bool fused_class_constant(const zend_tpde_instruction &producer) {
+	const zend_mir_executable_value_ref &operation = producer.value_operation;
+	const uint32_t fetch =
+		operation.op1_unused_payload & ZEND_FETCH_CLASS_MASK;
+	return operation.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT
+		&& operation.source_opcode == ZEND_FETCH_CLASS_CONSTANT
+		&& operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				&& (fetch == ZEND_FETCH_CLASS_SELF
+					|| fetch == ZEND_FETCH_CLASS_PARENT
+					|| fetch == ZEND_FETCH_CLASS_STATIC)))
+		&& operation.extended_value <= INT32_MAX - 2 * sizeof(void *);
+}
+
 /*
  * A producer whose value an array read can use in place: a cached
- * declared property read, or an element read of a CV, a literal or a
- * fused producer's value under a literal or CV key.
+ * declared property read, a class constant, or an element read of a CV,
+ * a literal or a fused producer's value under a literal or CV key.
  */
 static bool fused_container_producer(const zend_tpde_instruction &producer) {
 	const zend_mir_executable_value_ref &operation = producer.value_operation;
 	zend_tpde_object_property_read property{};
 	if (zend_tpde_object_property_read_at(producer, &property)
-			|| zend_tpde_object_property_isset_read_at(producer, &property)) {
+			|| zend_tpde_object_property_isset_read_at(producer, &property)
+			|| fused_class_constant(producer)) {
 		return true;
 	}
 	return ((operation.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
@@ -700,9 +718,10 @@ static bool fused_container_producer(const zend_tpde_instruction &producer) {
 }
 
 /*
- * A property or element read whose temporary only feeds the FETCH_DIM_R,
- * FETCH_DIM_IS, isset() or empty() right after it would copy the value
- * there, counting it, for the consumer to probe it and release it again.
+ * A property, class constant or element read whose temporary only feeds
+ * the FETCH_DIM_R, FETCH_DIM_IS, isset() or empty() right after it would
+ * copy the value there, counting it, for the consumer to probe it and
+ * release it again.
  * Let the consumer evaluate the producer and probe the value in place; a
  * temporary exists only on the way to the helpers (Linux x64).
  */
@@ -720,9 +739,11 @@ void freeze_fused_container_reads(zend_tpde_plan *plan)
 			producer.value_operation;
 		const zend_mir_executable_value_ref &consumed =
 			consumer.value_operation;
+		/* A class constant fetch keeps its helper in line. */
 		if (!producer.has_value_operation || !consumer.has_value_operation
-				|| (producer.machine_control_flow_flags
-					& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0
+				|| ((producer.machine_control_flow_flags
+						& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0
+					&& !fused_class_constant(producer))
 				|| (producer.machine_control_flow_flags
 					& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT) != 0
 				|| (consumer.machine_control_flow_flags

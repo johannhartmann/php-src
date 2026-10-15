@@ -5566,6 +5566,9 @@ public:
 		AsmReg frame_reg, AsmReg literals_reg, AsmReg container_reg,
 		ScratchReg &pointer, tpde::Label failed);
 	bool emit_fused_container_helpers(const zend_tpde_instruction &consumer);
+	void emit_cached_class_constant(
+		const zend_mir_executable_value_ref &operation, AsmReg frame_reg,
+		AsmReg cache_reg, AsmReg scope_reg, tpde::Label slow);
 	bool read_array(InstContext &ctx);
 	bool fused_placeholder(InstContext &ctx);
 	int type_check_inline(InstContext &ctx);
@@ -14161,7 +14164,8 @@ bool ZendCompilerX64::fused_container(ArrayElementContext &ae,
  * The fast path of one fused producer, reading the container at
  * container_reg, or its own operand without one: the address of the
  * value it would copy into its temporary, never a reference, in pointer.
- * A cached declared property is read through its slot; an element of an
+ * A cached declared property is read through its slot, an uncounted
+ * class constant where the run-time cache keeps it; an element of an
  * array under a literal or CV key is found by the read's probes, a
  * missing one of FETCH_DIM_IS (or a null container) reads the null it
  * stores into its own temporary. Anything else jumps to failed.
@@ -14192,6 +14196,20 @@ bool ZendCompilerX64::fused_producer(const zend_tpde_instruction &producer,
 		ASM(TEST64rr, slot_reg, slot_reg);
 		generate_raw_jump(Jump::je, failed);
 		pointer = std::move(slot).into_scratch(this);
+		return true;
+	}
+	/* An uncounted class constant is read where the cache found it. */
+	if (operation.opcode == ZEND_MIR_OPCODE_OBJECT_FETCH_CLASS_CONSTANT) {
+		ScratchReg cache{this};
+		ScratchReg scope{this};
+		const AsmReg cache_reg = cache.alloc_gp();
+		emit_cached_class_constant(operation, frame_reg, cache_reg,
+			scope.alloc_gp(), failed);
+		ASM(TEST32mi, FE_MEM(cache_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
+		generate_raw_jump(Jump::jne, failed);
+		pointer = std::move(cache);
 		return true;
 	}
 	const zend_tpde_plan *plan = ir().plan();
@@ -18375,6 +18393,60 @@ bool ZendCompilerX64::bind_global_inline(InstContext &ctx) {
 }
 
 /*
+ * The address of the value a FETCH_CLASS_CONSTANT of a literal name finds
+ * in the run-time cache, in cache_reg: for a literal class the value
+ * alone decides, for self::, parent:: and static:: the class, resolved
+ * from the caller into scope_reg, must match. A miss jumps to slow.
+ */
+void ZendCompilerX64::emit_cached_class_constant(
+		const zend_mir_executable_value_ref &operation, AsmReg frame_reg,
+		AsmReg cache_reg, AsmReg scope_reg, tpde::Label slow) {
+	const uint32_t fetch =
+		operation.op1_unused_payload & ZEND_FETCH_CLASS_MASK;
+	const int32_t class_slot =
+		static_cast<int32_t>(operation.extended_value);
+	const int32_t value_slot = class_slot
+		+ static_cast<int32_t>(sizeof(void *));
+	ASM(MOV64rm, cache_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(zend_execute_data, run_time_cache))));
+	if (operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		if (fetch == ZEND_FETCH_CLASS_STATIC) {
+			/* The called scope: $this's class or the class This
+			 * holds. */
+			ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, This))));
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, This)
+					+ offsetof(zval, u1.type_info))), IS_OBJECT);
+			/* Mostly a static method, whose This holds the class. */
+			emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
+				ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(zend_object, ce))));
+			});
+		} else {
+			ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, func))));
+			ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_op_array, scope))));
+			if (fetch == ZEND_FETCH_CLASS_PARENT) {
+				ASM(TEST64rr, scope_reg, scope_reg);
+				generate_raw_jump(Jump::je, slow);
+				ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_class_entry, parent))));
+			}
+		}
+		ASM(TEST64rr, scope_reg, scope_reg);
+		generate_raw_jump(Jump::je, slow);
+		ASM(CMP64rm, scope_reg, FE_MEM(cache_reg, 0, FE_NOREG, class_slot));
+		generate_raw_jump(Jump::jne, slow);
+	}
+	ASM(MOV64rm, cache_reg, FE_MEM(cache_reg, 0, FE_NOREG, value_slot));
+	ASM(TEST64rr, cache_reg, cache_reg);
+	generate_raw_jump(Jump::je, slow);
+}
+
+/*
  * FETCH_CLASS_CONSTANT of a literal name as the VM reads it: the
  * run-time cache keeps the class and the constant's value; for a literal
  * class the value alone decides, for self::, parent:: and static:: the
@@ -18412,10 +18484,6 @@ bool ZendCompilerX64::class_constant_inline(InstContext &ctx) {
 		return execute_value_operation(ctx);
 	}
 	const int32_t result_offset = static_cast<int32_t>(result_offset64);
-	const int32_t class_slot =
-		static_cast<int32_t>(operation.extended_value);
-	const int32_t value_slot = class_slot
-		+ static_cast<int32_t>(sizeof(void *));
 	const auto spilled = spill_before_branch(true);
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
@@ -18427,48 +18495,8 @@ bool ZendCompilerX64::class_constant_inline(InstContext &ctx) {
 		auto cache_reg = cache.alloc_gp();
 		auto scope_reg = scope.alloc_gp();
 		auto value_reg = value.alloc_gp();
-		ASM(MOV64rm, cache_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				offsetof(zend_execute_data, run_time_cache))));
-		if (!literal_class) {
-			if (fetch == ZEND_FETCH_CLASS_STATIC) {
-				/* The called scope: $this's class or the class This
-				 * holds. */
-				ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_execute_data, This))));
-				ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_execute_data, This)
-						+ offsetof(zval, u1.type_info))), IS_OBJECT);
-				/* Mostly a static method, whose This holds the class. */
-				emit_cold_branch(Jump::je, text_writer.label_create(), [&] {
-					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(zend_object, ce))));
-				});
-			} else {
-				ASM(MOV64rm, scope_reg, FE_MEM(frame_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_execute_data, func))));
-				ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
-					static_cast<int32_t>(
-						offsetof(zend_op_array, scope))));
-				if (fetch == ZEND_FETCH_CLASS_PARENT) {
-					ASM(TEST64rr, scope_reg, scope_reg);
-					generate_raw_jump(Jump::je, slow);
-					ASM(MOV64rm, scope_reg, FE_MEM(scope_reg, 0, FE_NOREG,
-						static_cast<int32_t>(
-							offsetof(zend_class_entry, parent))));
-				}
-			}
-			ASM(TEST64rr, scope_reg, scope_reg);
-			generate_raw_jump(Jump::je, slow);
-			ASM(CMP64rm, scope_reg,
-				FE_MEM(cache_reg, 0, FE_NOREG, class_slot));
-			generate_raw_jump(Jump::jne, slow);
-		}
-		ASM(MOV64rm, cache_reg, FE_MEM(cache_reg, 0, FE_NOREG, value_slot));
-		ASM(TEST64rr, cache_reg, cache_reg);
-		generate_raw_jump(Jump::je, slow);
+		emit_cached_class_constant(operation, frame_reg, cache_reg,
+			scope_reg, slow);
 		ASM(MOV32rm, value_reg, FE_MEM(cache_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(zval, u1.type_info))));
 		ASM(TEST32ri, value_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);

@@ -5406,6 +5406,10 @@ zend_native_status zend_native_value_fused_container(
 		case ZEND_FETCH_OBJ_IS:
 			return zend_native_execute_object_fetch_is(execute_data, op1, op2,
 				result, extended_value, source_opcode, source_position_id);
+		case ZEND_FETCH_CLASS_CONSTANT:
+			return zend_native_execute_object_fetch_class_constant(
+				execute_data, op1, op2, result, extended_value,
+				source_opcode, source_position_id);
 		case ZEND_FETCH_DIM_R:
 			return zend_native_value_fetch_dim_r(execute_data, op1, op2,
 				result, extended_value, source_opcode, source_position_id);

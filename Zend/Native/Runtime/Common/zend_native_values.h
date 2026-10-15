@@ -266,7 +266,8 @@ zend_native_status zend_native_value_isset_isempty_dim(
  * the one that produced that level's container does nothing, that read
  * copies the value its temporary points to (IS_PTR), without its
  * reference, or null when it points to the temporary itself, and the
- * reads from the failed level on run (FETCH_OBJ_R/IS, FETCH_DIM_R/IS).
+ * reads from the failed level on run (FETCH_OBJ_R/IS,
+ * FETCH_CLASS_CONSTANT, FETCH_DIM_R/IS).
  */
 zend_native_status zend_native_value_fused_container(
 	zend_execute_data *execute_data,
