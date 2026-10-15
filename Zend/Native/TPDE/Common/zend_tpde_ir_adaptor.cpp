@@ -8898,8 +8898,7 @@ void ZendIRAdaptor::Builder::add_internal_call_operands(InstContext &ctx) {
 	ctx.direct_internal_argument_transport =
 		function_mode_ == FunctionMode::ZendEntry
 		&& ctx.instruction.direct_internal_call != nullptr
-		&& plan_->generator_resume_count == 0
-		&& ctx.instruction.call_argument_count != 0;
+		&& plan_->generator_resume_count == 0;
 	for (uint32_t n = 0;
 			ctx.direct_internal_argument_transport
 				&& n < ctx.instruction.call_argument_count; ++n) {
