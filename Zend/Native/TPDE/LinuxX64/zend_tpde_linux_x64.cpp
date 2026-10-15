@@ -8044,6 +8044,18 @@ bool ZendCompilerX64::emit_published_site_init(
 	if (receiver_offset > INT32_MAX - sizeof(zval)) {
 		return false;
 	}
+	/* What the receiver may hold, by Zend's type inference. */
+	const zend_tpde_plan *init_plan = ir().plan();
+	const uint32_t receiver_may_be = method && !this_receiver
+			&& init_plan->source_opcodes != nullptr
+			&& descriptor->init_source_position
+				< init_plan->source_opcode_count
+			&& init_plan->source_opcodes[
+				descriptor->init_source_position].opcode
+				== ZEND_INIT_METHOD_CALL
+		? init_plan->source_opcodes[
+			descriptor->init_source_position].op1_may_be
+		: UINT32_MAX;
 	constexpr int32_t header_offset = -static_cast<int32_t>(
 		sizeof(zend_native_user_call_site_header));
 	auto header_field = [&](AsmReg descriptor_reg, size_t field) {
@@ -8102,23 +8114,22 @@ bool ZendCompilerX64::emit_published_site_init(
 					FE_MEM(canonical_frame_register(), 0,
 						FE_NOREG, static_cast<int32_t>(
 							offsetof(zend_execute_data, This))));
-			} else {
+			} else if (!temporary_receiver
+					&& (receiver_may_be & MAY_BE_REF) != 0) {
 				ASM(LEA64rm, value_reg,
 					FE_MEM(canonical_frame_register(), 0,
 						FE_NOREG,
 						static_cast<int32_t>(receiver_offset)));
-				if (!temporary_receiver) {
-					/* A global or static CV is a reference. */
-					ASM(CMP8mi,
-						FE_MEM(value_reg, 0, FE_NOREG,
-							static_cast<int32_t>(
-								offsetof(zval, u1.type_info))),
-						IS_REFERENCE);
-					emit_cold_branch(Jump::je,
-							text_writer.label_create(), [&] {
-						emit_deref_address(value_reg);
-					});
-				}
+				/* A global or static CV is a reference. */
+				ASM(CMP8mi,
+					FE_MEM(value_reg, 0, FE_NOREG,
+						static_cast<int32_t>(
+							offsetof(zval, u1.type_info))),
+					IS_REFERENCE);
+				emit_cold_branch(Jump::je,
+						text_writer.label_create(), [&] {
+					emit_deref_address(value_reg);
+				});
 				ASM(CMP8mi,
 					FE_MEM(value_reg, 0, FE_NOREG,
 						static_cast<int32_t>(
@@ -8127,6 +8138,21 @@ bool ZendCompilerX64::emit_published_site_init(
 				generate_raw_jump(Jump::jne, init.fast_miss);
 				ASM(MOV64rm, object_reg,
 					FE_MEM(value_reg, 0, FE_NOREG, 0));
+			} else {
+				/* No reference, by Zend's type inference (a temporary
+				 * never is one); an object only needs no test. */
+				if ((receiver_may_be & (MAY_BE_ANY | MAY_BE_UNDEF
+						| MAY_BE_REF)) != MAY_BE_OBJECT) {
+					ASM(CMP8mi,
+						FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+							static_cast<int32_t>(receiver_offset
+								+ offsetof(zval, u1.type_info))),
+						IS_OBJECT);
+					generate_raw_jump(Jump::jne, init.fast_miss);
+				}
+				ASM(MOV64rm, object_reg,
+					FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+						static_cast<int32_t>(receiver_offset)));
 			}
 			ASM(MOV64rm, value_reg,
 				FE_MEM(object_reg, 0, FE_NOREG,
@@ -8278,14 +8304,26 @@ bool ZendCompilerX64::emit_published_site_init(
 					static_cast<int32_t>(
 						offsetof(zend_execute_data, This))), 0);
 		}
-		ASM(MOV32rm, value_reg, header_field(descriptor_reg,
-			offsetof(zend_native_user_call_site_header,
-				fast_call_info)));
-		ASM(MOV32mr,
-			FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
-				offsetof(zend_execute_data, This)
-				+ offsetof(zval, u1.type_info))),
-			value_reg);
+		if (method || static_call) {
+			ASM(MOV32rm, value_reg, header_field(descriptor_reg,
+				offsetof(zend_native_user_call_site_header,
+					fast_call_info)));
+			ASM(MOV32mr,
+				FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
+					offsetof(zend_execute_data, This)
+					+ offsetof(zval, u1.type_info))),
+				value_reg);
+		} else {
+			/* A function site is published only with exactly
+			 * ZEND_CALL_NESTED_FUNCTION
+			 * (zend_native_call_fast_publish()). */
+			static_assert(ZEND_CALL_NESTED_FUNCTION == 0);
+			ASM(MOV32mi,
+				FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
+					offsetof(zend_execute_data, This)
+					+ offsetof(zval, u1.type_info))),
+				ZEND_CALL_NESTED_FUNCTION);
+		}
 		ASM(MOV32mi,
 			FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
 				offsetof(zend_execute_data, This)
