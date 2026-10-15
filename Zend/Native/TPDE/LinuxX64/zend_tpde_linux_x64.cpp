@@ -12069,11 +12069,37 @@ bool ZendCompilerX64::copy_slot(
 		&& node.operands[0] != IRValueRef{Adaptor::FRAME_VALUE}
 		&& ir().machine_value_is_register_authoritative(
 			node.operands[0]);
+	/* A literal's type is known here: an uncounted one needs no
+	 * reference, and a null, boolean, integer or double is stored as
+	 * immediates, as store_scalar_literal() does. */
+	const zend_tpde_plan *copy_plan = ir().plan();
+	const zval *literal = literal_source
+			&& copy_plan->source_literals != nullptr
+			&& source_operand.index < copy_plan->source_literal_count
+		? &copy_plan->source_literals[source_operand.index] : nullptr;
+	const bool uncounted_literal = literal != nullptr
+		&& !Z_REFCOUNTED_P(literal);
+	const bool immediate_literal = uncounted_literal
+		&& Z_TYPE_INFO_P(literal) <= IS_DOUBLE
+		&& Z_TYPE_P(literal) != IS_UNDEF;
 	/* A register long, double or boolean is defined, no reference
-	 * and owns nothing: its type tests are decided here. */
-	const bool scalar_source = register_source
-		&& zend_tpde_machine_kind_is_scalar(
-			ir().machine_kind(node.operands[0]));
+	 * and owns nothing: its type tests are decided here, as are a
+	 * scalar literal's. */
+	const bool scalar_source = (register_source
+			&& zend_tpde_machine_kind_is_scalar(
+				ir().machine_kind(node.operands[0])))
+		|| immediate_literal;
+	/* What the target CV of ASSIGN may hold before it, by Zend's type
+	 * inference: a target without a reference is written directly, and
+	 * one holding nothing counted needs no release. */
+	const zend_tpde_source_opcode *target_facts =
+		fresh_target ? nullptr : fused_source_opcode(ctx.mir);
+	const bool target_reference_free = !fresh_target
+		&& ctx.mir->source_op1_reference_free;
+	const bool target_uncounted = target_reference_free
+		&& target_facts != nullptr
+		&& (target_facts->op1_may_be & (MAY_BE_STRING | MAY_BE_ARRAY
+			| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF)) == 0;
 
 	if (register_source) {
 		const zend_tpde_machine_value_kind source_kind =
@@ -12120,6 +12146,18 @@ bool ZendCompilerX64::copy_slot(
 				}
 			}
 		}
+	} else if (immediate_literal) {
+		uint64_t bits = 0;
+		if (Z_TYPE_P(literal) == IS_LONG || Z_TYPE_P(literal) == IS_DOUBLE) {
+			std::memcpy(&bits, &literal->value, sizeof(bits));
+		}
+		if (bits == 0) {
+			ASM(XOR32rr, source_payload_reg, source_payload_reg);
+		} else {
+			ASM(MOV64ri, source_payload_reg, static_cast<int64_t>(bits));
+		}
+		ASM(MOV32ri, source_type_reg,
+			static_cast<int32_t>(Z_TYPE_INFO_P(literal)));
 	} else if (literal_source) {
 		emit_literal_base(probe_reg, frame_reg);
 		ASM(MOV64rm, source_payload_reg,
@@ -12184,9 +12222,14 @@ bool ZendCompilerX64::copy_slot(
 	}
 	/*
 	 * An immutable counted value must not get a refcount write and is
-	 * duplicated as the VM does it: the cold path copies it.
+	 * duplicated as the VM does it: the cold path copies it. A move
+	 * without a used result writes no refcount.
 	 */
-	if (!scalar_source) {
+	const uint32_t source_refcount_increments =
+		(!move_source ? 1 : 0)
+		+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
+	if (!scalar_source && !uncounted_literal
+			&& source_refcount_increments != 0) {
 		ASM(TEST32ri, source_type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto source_mutable = text_writer.label_create();
@@ -12211,13 +12254,15 @@ bool ZendCompilerX64::copy_slot(
 		FE_MEM(frame_reg, 0, FE_NOREG,
 			static_cast<int32_t>(target_offset)));
 	auto target_released = text_writer.label_create();
-	if (!fresh_target) {
-		/* A CV bound by global, static or & is written through its
-		 * reference, like zend_assign_to_variable(); a reference with
-		 * typed property sources needs the helper's coercion. */
+	if (!fresh_target && !target_uncounted) {
 		ASM(MOV32rm, target_type_reg,
 			FE_MEM(target_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zval, u1.type_info))));
+	}
+	if (!fresh_target && !target_reference_free) {
+		/* A CV bound by global, static or & is written through its
+		 * reference, like zend_assign_to_variable(); a reference with
+		 * typed property sources needs the helper's coercion. */
 		ASM(CMP8ri, target_type_reg, IS_REFERENCE);
 		auto target_plain = text_writer.label_create();
 		auto target_reference = text_writer.label_create();
@@ -12247,6 +12292,8 @@ bool ZendCompilerX64::copy_slot(
 			cold_end();
 		}
 		label_place(target_plain);
+	}
+	if (!fresh_target && !target_uncounted) {
 		ASM(TEST32ri, target_type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::je, target_released);
@@ -12309,10 +12356,8 @@ bool ZendCompilerX64::copy_slot(
 			1);
 	}
 	label_place(target_released);
-	const uint32_t source_refcount_increments =
-		(!move_source ? 1 : 0)
-		+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
-	if (source_refcount_increments != 0 && !scalar_source) {
+	if (source_refcount_increments != 0 && !scalar_source
+			&& !uncounted_literal) {
 		emit_try_addref(source_type_reg, source_payload_reg,
 			static_cast<int32_t>(source_refcount_increments));
 	}
