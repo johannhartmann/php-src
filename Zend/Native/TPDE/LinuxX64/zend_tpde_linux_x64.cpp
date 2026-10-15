@@ -1313,6 +1313,78 @@ public:
 			? &plan->source_opcodes[position] : nullptr;
 	}
 	/*
+	 * left === a string literal of at most 16 bytes, decided by type,
+	 * length and the bytes, compared in at most two words: a zend_string's
+	 * allocation is rounded up to eight bytes, so the word holding the
+	 * last byte is readable. A temporary is consumed first, which leaves
+	 * its other owner. An undefined variable or a reference takes slow.
+	 */
+	void emit_fused_identical_short_string(
+			const zend_tpde_fused_operand &left, const zval *literal,
+			uint32_t may_be, AsmReg frame_reg, tpde::Label matches,
+			tpde::Label differs, tpde::Label slow) {
+		const int32_t left_offset = static_cast<int32_t>(left.offset);
+		const size_t length = Z_STRLEN_P(literal);
+		if (left.temporary) {
+			emit_consume_shared(frame_reg, left_offset, slow);
+		}
+		const bool may_be_other = left.temporary
+			|| (may_be & (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF))
+				!= MAY_BE_STRING;
+		const bool may_be_unusual = !left.temporary
+			&& (may_be & (MAY_BE_UNDEF | MAY_BE_REF)) != 0;
+		auto not_string = text_writer.label_create();
+		if (may_be_other) {
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				left_offset + static_cast<int32_t>(
+					offsetof(zval, u1.v.type))), IS_STRING);
+			generate_raw_jump(Jump::jne,
+				may_be_unusual ? not_string : differs);
+		}
+		ScratchReg string{this};
+		ScratchReg word{this};
+		ScratchReg bytes{this};
+		const AsmReg string_reg = string.alloc_gp();
+		const AsmReg word_reg = word.alloc_gp();
+		const AsmReg bytes_reg = bytes.alloc_gp();
+		ASM(MOV64rm, string_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG, left_offset));
+		ASM(CMP64mi, FE_MEM(string_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_string, len))),
+			static_cast<int32_t>(length));
+		generate_raw_jump(Jump::jne, differs);
+		for (size_t start = 0; start < length; start += sizeof(uint64_t)) {
+			const size_t count = std::min(length - start, sizeof(uint64_t));
+			uint64_t expected = 0;
+			std::memcpy(&expected, Z_STRVAL_P(literal) + start, count);
+			ASM(MOV64rm, word_reg, FE_MEM(string_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_string, val) + start)));
+			ASM(MOV64ri, bytes_reg, static_cast<int64_t>(expected));
+			ASM(XOR64rr, word_reg, bytes_reg);
+			if (count < sizeof(uint64_t)) {
+				/* Only the string's bytes: the low ones. */
+				ASM(SHL64ri, word_reg,
+					static_cast<int32_t>(8 * (sizeof(uint64_t) - count)));
+			}
+			generate_raw_jump(Jump::jne, differs);
+		}
+		generate_raw_jump(Jump::jmp, matches);
+		if (may_be_unusual) {
+			cold_begin();
+			label_place(not_string);
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				left_offset + static_cast<int32_t>(
+					offsetof(zval, u1.v.type))), IS_UNDEF);
+			generate_raw_jump(Jump::je, slow);
+			ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				left_offset + static_cast<int32_t>(
+					offsetof(zval, u1.v.type))), IS_REFERENCE);
+			generate_raw_jump(Jump::je, slow);
+			generate_raw_jump(Jump::jmp, differs);
+			cold_end();
+		}
+	}
+	/*
 	 * === or !== fused into its JMPZ/JMPNZ, as identical_literal() decides
 	 * it: a null, boolean or integer literal by type byte and payload, any
 	 * other operand through zend_native_zval_identical(_any)(). The match
@@ -1342,6 +1414,14 @@ public:
 			&& (Z_TYPE_P(known_literal) <= IS_TRUE
 				|| Z_TYPE_P(known_literal) == IS_LONG)
 			&& Z_TYPE_P(known_literal) != IS_UNDEF;
+		if (known_literal != nullptr && Z_TYPE_P(known_literal) == IS_STRING
+				&& Z_STRLEN_P(known_literal) <= 2 * sizeof(uint64_t)
+				&& unlocked_gp_registers() >= 4) {
+			emit_fused_identical_short_string(left, known_literal,
+				source != nullptr ? source->op1_may_be : UINT32_MAX,
+				frame_reg, matches, differs, slow);
+			return true;
+		}
 		/* The snippet's seven scratch registers, the frame and the
 		 * literals. */
 		if (!typed_literal && unlocked_gp_registers() < 9) {
