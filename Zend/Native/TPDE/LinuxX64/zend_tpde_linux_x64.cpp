@@ -3795,42 +3795,166 @@ public:
 			emit_fast_call_entry(index);
 		}
 	}
-	/* No labels before the prologue (remove_prologue_bytes()): forward
-	 * branches are rel32 jumps patched once their target is known. */
-	uint32_t branch(bool conditional) {
+	/*
+	 * No labels before the prologue (remove_prologue_bytes()): branches
+	 * are rel32 jumps patched once their target is known, which
+	 * compact_fast_call_entry() shortens where the target lies in rel8
+	 * range. The CFA changes wait for the final offsets as well.
+	 */
+	struct PrefixJump {
+		uint32_t start;
+		uint32_t end;
+		uint32_t target;
+		/* jmp rel8 (0xeb) or jcc rel8 (0x70 | cc). */
+		uint8_t short_opcode;
+	};
+	std::vector<PrefixJump> prefix_jumps_;
+	std::vector<std::pair<uint32_t, uint32_t>> prefix_cfa_offsets_;
+	uint32_t prefix_jump(uint8_t short_opcode, uint32_t target) {
 		text_writer.ensure_space(16);
-		if (conditional) {
-			ASMF(JNZ, FE_JMPL, text_writer.cur_ptr());
-		} else {
+		const uint32_t start = static_cast<uint32_t>(text_writer.offset());
+		if (short_opcode == 0xeb) {
 			ASMF(JMP, FE_JMPL, text_writer.cur_ptr());
+		} else {
+			*text_writer.cur_ptr()++ = 0x0f;
+			*text_writer.cur_ptr()++ = static_cast<uint8_t>(
+				short_opcode + 0x10);
+			std::memset(text_writer.cur_ptr(), 0, 4);
+			text_writer.cur_ptr() += 4;
 		}
-		return static_cast<uint32_t>(text_writer.offset());
+		const uint32_t end = static_cast<uint32_t>(text_writer.offset());
+		prefix_jumps_.push_back(PrefixJump{start, end, UINT32_MAX,
+			short_opcode});
+		if (target != UINT32_MAX) {
+			patch(end, target);
+		}
+		return end;
 	}
-	uint32_t branch_zero() {
-		text_writer.ensure_space(16);
-		ASMF(JZ, FE_JMPL, text_writer.cur_ptr());
-		return static_cast<uint32_t>(text_writer.offset());
+	uint32_t branch(bool conditional) {
+		return prefix_jump(conditional ? 0x75 : 0xeb, UINT32_MAX);
 	}
-	uint32_t branch_below() {
-		text_writer.ensure_space(16);
-		ASMF(JC, FE_JMPL, text_writer.cur_ptr());
-		return static_cast<uint32_t>(text_writer.offset());
-	}
-	uint32_t branch_above() {
-		text_writer.ensure_space(16);
-		ASMF(JA, FE_JMPL, text_writer.cur_ptr());
-		return static_cast<uint32_t>(text_writer.offset());
-	}
-	uint32_t branch_not_above() {
-		text_writer.ensure_space(16);
-		ASMF(JBE, FE_JMPL, text_writer.cur_ptr());
-		return static_cast<uint32_t>(text_writer.offset());
+	uint32_t branch_zero() { return prefix_jump(0x74, UINT32_MAX); }
+	uint32_t branch_below() { return prefix_jump(0x72, UINT32_MAX); }
+	uint32_t branch_not_below() { return prefix_jump(0x73, UINT32_MAX); }
+	uint32_t branch_above() { return prefix_jump(0x77, UINT32_MAX); }
+	uint32_t branch_not_above() { return prefix_jump(0x76, UINT32_MAX); }
+	/* A branch to an already known target. */
+	void branch_back(bool conditional, uint32_t target) {
+		prefix_jump(conditional ? 0x75 : 0xeb, target);
 	}
 	void patch(uint32_t branch_end, uint32_t target) {
 		const int32_t displacement = static_cast<int32_t>(
 			static_cast<int64_t>(target) - branch_end);
 		std::memcpy(text_writer.begin_ptr() + branch_end - 4,
 			&displacement, sizeof(displacement));
+		for (auto it = prefix_jumps_.rbegin(); it != prefix_jumps_.rend();
+				++it) {
+			if (it->end == branch_end) {
+				it->target = target;
+				break;
+			}
+		}
+	}
+	/* The CFA is RSP + cfa_offset from the instruction at offset on. */
+	void prefix_cfa(uint32_t offset, uint32_t cfa_offset) {
+		prefix_cfa_offsets_.emplace_back(offset, cfa_offset);
+	}
+	/*
+	 * Shortens the entry's jumps whose targets lie in rel8 range, as
+	 * relax_jumps() does for the body: every jump starts short, those out
+	 * of range grow back, which never shortens another, until a fixed
+	 * point. The code from start on is compacted in place; relocations
+	 * from reloc_start on move with it. Returns the offset map.
+	 */
+	auto compact_fast_call_entry(uint32_t start, size_t reloc_start) {
+		std::vector<PrefixJump> jumps = std::move(prefix_jumps_);
+		prefix_jumps_.clear();
+		std::sort(jumps.begin(), jumps.end(),
+			[](const PrefixJump &a, const PrefixJump &b) {
+				return a.start < b.start;
+			});
+		const size_t count = jumps.size();
+		std::vector<uint8_t> length(count, 2);
+		std::vector<uint32_t> removed(count + 1, 0);
+		auto recount = [&] {
+			for (size_t k = 0; k < count; ++k) {
+				removed[k + 1] = removed[k]
+					+ (jumps[k].end - jumps[k].start - length[k]);
+			}
+		};
+		auto map = [&jumps, &removed](uint32_t offset) -> uint32_t {
+			const auto it = std::lower_bound(jumps.begin(), jumps.end(),
+				offset, [](const PrefixJump &jump, uint32_t value) {
+					return jump.start < value;
+				});
+			return offset - removed[static_cast<size_t>(
+				it - jumps.begin())];
+		};
+		for (bool grown = true; grown;) {
+			grown = false;
+			recount();
+			for (size_t k = 0; k < count; ++k) {
+				if (length[k] != 2) {
+					continue;
+				}
+				ZEND_ASSERT(jumps[k].target != UINT32_MAX);
+				const int64_t displacement =
+					static_cast<int64_t>(map(jumps[k].target))
+					- (static_cast<int64_t>(map(jumps[k].start)) + 2);
+				if (displacement < INT8_MIN || displacement > INT8_MAX) {
+					length[k] = static_cast<uint8_t>(
+						jumps[k].end - jumps[k].start);
+					grown = true;
+				}
+			}
+		}
+		recount();
+		uint8_t *const code = text_writer.begin_ptr();
+		const uint32_t end = static_cast<uint32_t>(text_writer.offset());
+		uint32_t write = start;
+		uint32_t read = start;
+		for (size_t k = 0; k < count; ++k) {
+			const PrefixJump &jump = jumps[k];
+			std::memmove(code + write, code + read, jump.start - read);
+			write += jump.start - read;
+			const int64_t displacement =
+				static_cast<int64_t>(map(jump.target))
+				- (static_cast<int64_t>(write) + length[k]);
+			if (length[k] == 2) {
+				code[write] = jump.short_opcode;
+				code[write + 1] = static_cast<uint8_t>(
+					static_cast<int8_t>(displacement));
+			} else {
+				if (jump.short_opcode == 0xeb) {
+					code[write] = 0xe9;
+				} else {
+					code[write] = 0x0f;
+					code[write + 1] = static_cast<uint8_t>(
+						jump.short_opcode + 0x10);
+				}
+				const int32_t wide = static_cast<int32_t>(displacement);
+				std::memcpy(code + write + length[k] - 4, &wide, 4);
+			}
+			write += length[k];
+			read = jump.end;
+		}
+		std::memmove(code + write, code + read, end - read);
+		write += end - read;
+		text_writer.cur_ptr() = code + write;
+		this->assembler.get_section(text_writer.get_sec_ref())
+			.remap_relocation_offsets(reloc_start, start,
+				[&map](uint64_t offset) -> uint64_t {
+					return map(static_cast<uint32_t>(offset));
+				});
+		return [jumps = std::move(jumps), removed = std::move(removed)](
+				uint32_t offset) -> uint32_t {
+			const auto it = std::lower_bound(jumps.begin(), jumps.end(),
+				offset, [](const PrefixJump &jump, uint32_t value) {
+					return jump.start < value;
+				});
+			return offset - removed[static_cast<size_t>(
+				it - jumps.begin())];
+		};
 	}
 	static int32_t member(size_t offset) {
 		return static_cast<int32_t>(offset);
@@ -3884,6 +4008,11 @@ public:
 		uint32_t result_defined = 0;
 		uint32_t discarded = 0;
 		uint32_t discarded_checked = 0;
+		/* Only a user opcode handler leaves a returned frame without a
+		 * result, and only a counted result needs a release when the
+		 * call discards it. */
+		bool undefined_result_possible = true;
+		bool counted_result_possible = true;
 		std::vector<std::pair<uint32_t, uint32_t>> counted_branches;
 		std::vector<int32_t> counted_slots;
 		bool counted_straight = false;
@@ -3938,19 +4067,47 @@ public:
 			offsetof(zend_execute_data, This)
 				+ offsetof(zval, u1.type_info));
 		fe.min_arguments = fe.plan->fast_call_min_arguments;
-		fe.start = text_writer.offset();
+		fe.undefined_result_possible = fe.plan->user_opcode_callbacks;
+		fe.counted_result_possible = fe.plan->user_opcode_callbacks;
+		for (uint32_t position = 0;
+				position < fe.plan->source_opcode_count; ++position) {
+			const zend_tpde_source_opcode &source =
+				fe.plan->source_opcodes[position];
+			if (source.opcode == ZEND_RETURN_BY_REF
+					|| (source.opcode == ZEND_RETURN
+						&& (source.op1_may_be & (MAY_BE_STRING
+							| MAY_BE_ARRAY | MAY_BE_OBJECT
+							| MAY_BE_RESOURCE | MAY_BE_REF)) != 0)) {
+				fe.counted_result_possible = true;
+			}
+		}
 		/* Its own FDE: the CFA is RSP + area + 8 between the stack
 		 * adjustments. */
+		const uint32_t fde_start = text_writer.offset();
 		text_writer.eh_begin_fde();
+		/* Any other frame continues in zend_native_call_fast_do(), at the
+		 * CFA of the entry before its stack adjustment: in front of the
+		 * entry, so that the entry's checks reach it with rel8 jumps. The
+		 * entry keeps its alignment. */
+		const uint32_t general_do = text_writer.offset();
+		text_writer.ensure_space(32);
+		ASMF(JMP, FE_JMPL, text_writer.cur_ptr());
+		reloc_text(fe.general_symbol, tpde::elf::R_X86_64_PLT32,
+			text_writer.offset() - 4, -4);
+		while ((text_writer.offset() & 15) != (general_do & 15)) {
+			*text_writer.cur_ptr()++ = 0xcc;
+		}
+		fe.start = text_writer.offset();
+		prefix_jumps_.clear();
+		prefix_cfa_offsets_.clear();
+		const size_t reloc_start = this->assembler.get_section(
+			text_writer.get_sec_ref()).reloc_count();
 		emit_fast_entry_checks(fe);
 		emit_fast_entry_frame(fe);
 		emit_fast_entry_call(fe);
-		emit_fast_entry_out_of_line(fe);
-		/* zend_native_call_fast_leave(callee, status, discarded). */
+		/* zend_native_call_fast_leave(callee, status, discarded), right
+		 * behind the plain return the branches to it skip. */
 		const uint32_t general_leave = text_writer.offset();
-		for (uint32_t general : fe.to_general) {
-			patch(general, general_leave);
-		}
 		ASM(MOV64rm, FE_DI, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_frame));
 		ASM(MOV32rr, FE_SI, FE_AX);
 		ASM(XOR32rr, FE_DX, FE_DX);
@@ -3959,18 +4116,23 @@ public:
 		emit_symbol_call(fe.leave_symbol);
 		ASM(ADD64ri, FE_SP, fe.area);
 		ASM(RET);
-		/* Any other frame continues in zend_native_call_fast_do(), at the
-		 * CFA of the entry before its stack adjustment. */
-		const uint32_t general_do = text_writer.offset();
-		text_writer.eh_advance(general_do - fe.out_of_line);
-		text_writer.eh_write_inst(tpde::dwarf::DW_CFA_def_cfa_offset, 8);
+		emit_fast_entry_out_of_line(fe);
+		for (uint32_t general : fe.to_general) {
+			patch(general, general_leave);
+		}
 		for (uint32_t general : fe.to_general_do) {
 			patch(general, general_do);
 		}
-		text_writer.ensure_space(16);
-		ASMF(JMP, FE_JMPL, text_writer.cur_ptr());
-		reloc_text(fe.general_symbol, tpde::elf::R_X86_64_PLT32,
-			text_writer.offset() - 4, -4);
+		const auto map = compact_fast_call_entry(fe.start, reloc_start);
+		fe.exact = map(fe.exact);
+		uint32_t cfa_location = fde_start;
+		for (const auto &[offset, cfa_offset] : prefix_cfa_offsets_) {
+			const uint32_t location = map(offset);
+			text_writer.eh_advance(location - cfa_location);
+			text_writer.eh_write_inst(
+				tpde::dwarf::DW_CFA_def_cfa_offset, cfa_offset);
+			cfa_location = location;
+		}
 		text_writer.eh_end_fde();
 		const tpde::SymRef symbol = assembler.sym_predef_func(
 			"zend_native_fast_call_" + std::to_string(fe.function_index),
@@ -4053,18 +4215,13 @@ public:
 			ASM(MOV32ri, FE_R11, static_cast<int32_t>(mask));
 			ASM(BT32rr, FE_R11, FE_R10);
 			if (((fe.plan->fast_call_class_mask >> parameter) & 1) == 0) {
-				text_writer.ensure_space(16);
-				ASMF(JNC, FE_JMPL, text_writer.cur_ptr());
-				fe.to_general_do.push_back(
-					static_cast<uint32_t>(text_writer.offset()));
+				fe.to_general_do.push_back(branch_not_below());
 			} else {
 				/* A class-typed parameter: an object of the class it last
 				 * accepted fits (the published target cell's
 				 * fast_receive); a dynamic site's frame takes the general
 				 * Do. */
-				text_writer.ensure_space(16);
-				ASMF(JC, FE_JMPL, text_writer.cur_ptr());
-				const uint32_t fits = text_writer.offset();
+				const uint32_t fits = branch_below();
 				ASM(CMP32ri, FE_R10, IS_OBJECT);
 				fe.to_general_do.push_back(branch(true));
 				ASM(TEST64rr, FE_CX, FE_CX);
@@ -4106,9 +4263,7 @@ public:
 		fe.exact = text_writer.offset();
 		ASM(SUB64ri, FE_SP, fe.area);
 		fe.cfi_location = text_writer.offset();
-		text_writer.eh_advance(fe.cfi_location - fe.start);
-		text_writer.eh_write_inst(
-			tpde::dwarf::DW_CFA_def_cfa_offset, fe.area + 8);
+		prefix_cfa(fe.cfi_location, fe.area + 8);
 		ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_context), FE_SI);
 		/* Unlink the frame from EX(call). */
 		ASM(MOV64rm, FE_AX, FE_MEM(FE_DI, 0, FE_NOREG,
@@ -4183,7 +4338,7 @@ public:
 				IS_UNDEF);
 		} else if (locals != 0) {
 			static_assert(IS_UNDEF == 0 && sizeof(zval) == 16);
-			ASM(SSE_XORPDrr, FE_XMM0, FE_XMM0);
+			ASM(SSE_XORPSrr, FE_XMM0, FE_XMM0);
 			uint32_t straight = locals;
 			int32_t straight_base = first_variable;
 			if (locals > 16) {
@@ -4194,19 +4349,18 @@ public:
 				ASM(MOV32ri, FE_R10, static_cast<int32_t>(locals / 4));
 				const uint32_t loop = text_writer.offset();
 				for (int32_t store = 0; store < 4; ++store) {
-					ASM(SSE_MOVDQUmr, FE_MEM(FE_R9, 0, FE_NOREG,
+					ASM(SSE_MOVUPSmr, FE_MEM(FE_R9, 0, FE_NOREG,
 						store * static_cast<int32_t>(sizeof(zval))), FE_XMM0);
 				}
 				ASM(ADD64ri, FE_R9, static_cast<int32_t>(4 * sizeof(zval)));
 				ASM(SUB32ri, FE_R10, 1);
-				text_writer.ensure_space(16);
-				ASM(JNZ, text_writer.begin_ptr() + loop);
+				branch_back(true, loop);
 				straight = locals % 4;
 				straight_base = first_variable + static_cast<int32_t>(
 					(locals - straight) * sizeof(zval));
 			}
 			for (uint32_t variable = 0; variable < straight; ++variable) {
-				ASM(SSE_MOVDQUmr, FE_MEM(FE_AX, 0, FE_NOREG, straight_base
+				ASM(SSE_MOVUPSmr, FE_MEM(FE_AX, 0, FE_NOREG, straight_base
 					+ static_cast<int32_t>(variable * sizeof(zval))),
 					FE_XMM0);
 			}
@@ -4289,16 +4443,23 @@ public:
 		fe.to_general.push_back(branch(true));
 		/* An undefined result becomes null; a discarded counted result is
 		 * released by the general leave. */
-		ASM(MOV64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
-			member(offsetof(zend_execute_data, return_value))));
-		ASM(CMP8mi, FE_MEM(FE_R10, 0, FE_NOREG,
-			member(offsetof(zval, u1.v.type))), IS_UNDEF);
-		fe.undefined_result = branch_zero();
-		fe.result_defined = text_writer.offset();
+		if (fe.undefined_result_possible || fe.counted_result_possible) {
+			ASM(MOV64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
+				member(offsetof(zend_execute_data, return_value))));
+		}
+		if (fe.undefined_result_possible) {
+			ASM(CMP8mi, FE_MEM(FE_R10, 0, FE_NOREG,
+				member(offsetof(zval, u1.v.type))), IS_UNDEF);
+			fe.undefined_result = branch_zero();
+			fe.result_defined = text_writer.offset();
+		}
 		/* A discarded result is checked out of line. */
-		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_result_offset), -1);
-		fe.discarded = branch_zero();
-		fe.discarded_checked = text_writer.offset();
+		if (fe.counted_result_possible) {
+			ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_result_offset),
+				-1);
+			fe.discarded = branch_zero();
+			fe.discarded_checked = text_writer.offset();
+		}
 		/* A variable destructor may inspect the backtrace: the dying frame
 		 * is no longer current. */
 		ASM(MOV64rm, FE_R10, FE_MEM(FE_DI, 0, FE_NOREG,
@@ -4345,8 +4506,7 @@ public:
 			fe.counted_branches.emplace_back(counted, next);
 			ASM(ADD64ri, FE_R10, static_cast<int32_t>(sizeof(zval)));
 			ASM(CMP64rr, FE_R10, FE_R11);
-			text_writer.ensure_space(16);
-			ASM(JNZ, text_writer.begin_ptr() + loop);
+			branch_back(true, loop);
 		}
 		/* The frame lies on top of the VM stack. RDI still holds the
 		 * frame and R9 the context: the out-of-line releases restore
@@ -4364,14 +4524,11 @@ public:
 		ASM(XOR32rr, FE_AX, FE_AX);
 		fe.epilogue = text_writer.offset();
 		ASM(ADD64ri, FE_SP, fe.area);
-		text_writer.eh_advance(text_writer.offset() - fe.cfi_location);
-		text_writer.eh_write_inst(tpde::dwarf::DW_CFA_def_cfa_offset, 8);
+		prefix_cfa(text_writer.offset(), 8);
 		ASM(RET);
 		/* Out of the return path, the CFA is RSP + area + 8 again. */
 		fe.out_of_line = text_writer.offset();
-		text_writer.eh_advance(fe.out_of_line - (fe.epilogue + 4));
-		text_writer.eh_write_inst(
-			tpde::dwarf::DW_CFA_def_cfa_offset, fe.area + 8);
+		prefix_cfa(fe.out_of_line, fe.area + 8);
 	}
 	/* The out-of-line paths of the entry. */
 	void emit_fast_entry_out_of_line(FastCallEntry &fe) {
@@ -4403,15 +4560,20 @@ public:
 		ASM(ADD64ri, FE_SP, fe.area);
 		ASM(RET);
 		/* An undefined result becomes null. */
-		patch(fe.undefined_result, text_writer.offset());
-		ASM(MOV32mi, FE_MEM(FE_R10, 0, FE_NOREG,
-			member(offsetof(zval, u1.type_info))), IS_NULL);
-		patch(branch(false), fe.result_defined);
-		patch(fe.discarded, text_writer.offset());
-		ASM(TEST8mi, FE_MEM(FE_R10, 0, FE_NOREG,
-			member(offsetof(zval, u1.v.type_flags))), IS_TYPE_REFCOUNTED);
-		fe.to_general.push_back(branch(true));
-		patch(branch(false), fe.discarded_checked);
+		if (fe.undefined_result_possible) {
+			patch(fe.undefined_result, text_writer.offset());
+			ASM(MOV32mi, FE_MEM(FE_R10, 0, FE_NOREG,
+				member(offsetof(zval, u1.type_info))), IS_NULL);
+			patch(branch(false), fe.result_defined);
+		}
+		if (fe.counted_result_possible) {
+			patch(fe.discarded, text_writer.offset());
+			ASM(TEST8mi, FE_MEM(FE_R10, 0, FE_NOREG,
+				member(offsetof(zval, u1.v.type_flags))),
+				IS_TYPE_REFCOUNTED);
+			fe.to_general.push_back(branch(true));
+			patch(branch(false), fe.discarded_checked);
+		}
 		/* The callee's first call in the request creates its run-time
 		 * cache; the call preserves nothing. */
 		patch(fe.missing_cache, text_writer.offset());
@@ -4436,8 +4598,7 @@ public:
 		ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_result_offset), -1);
 		ASM(SETZ8r, FE_DX);
 		emit_symbol_call(fe.release_this_symbol);
-		text_writer.ensure_space(16);
-		ASMF(JMP, FE_JMPL, text_writer.begin_ptr() + fe.epilogue);
+		branch_back(false, fe.epilogue);
 		for (size_t branch_index = 0; branch_index < fe.counted_branches.size();
 				++branch_index) {
 			const auto &[counted, next] = fe.counted_branches[branch_index];
@@ -4521,8 +4682,7 @@ public:
 			for (uint32_t done : defaults_done) {
 				patch(done, text_writer.offset());
 			}
-			text_writer.ensure_space(16);
-			ASMF(JMP, FE_JMPL, text_writer.begin_ptr() + fe.defaults_return);
+			branch_back(false, fe.defaults_return);
 		}
 	}
 	/*
@@ -11735,7 +11895,7 @@ bool ZendCompilerX64::branch_to_guarded_cold(InstContext &ctx) {
 			auto value = result.part(part);
 			const AsmReg value_reg = value.alloc_reg();
 			if (value.bank() == tpde::x64::PlatformConfig::FP_BANK) {
-				ASM(SSE_XORPDrr, value_reg, value_reg);
+				ASM(SSE_XORPSrr, value_reg, value_reg);
 			} else {
 				ASM(XOR32rr, value_reg, value_reg);
 			}
@@ -15932,7 +16092,7 @@ int ZendCompilerX64::general_numeric_binary(
 				ScratchReg zero{this};
 				auto zero_fp = zero.alloc(
 					tpde::x64::PlatformConfig::FP_BANK);
-				ASM(SSE_XORPDrr, zero_fp, zero_fp);
+				ASM(SSE_XORPSrr, zero_fp, zero_fp);
 				ASM(SSE_UCOMISDrr, right_fp, zero_fp);
 				generate_raw_jump(Jump::je, slow);
 				ASM(SSE_DIVSDrr, left_fp, right_fp);
