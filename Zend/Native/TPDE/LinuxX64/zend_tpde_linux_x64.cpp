@@ -22846,8 +22846,64 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 		 * Mirror Zend's sequential frame cleanup. A decremented slot
 		 * is made UNDEF before advancing, so the canonical rare path
 		 * can resume safely if a later alias owns the final reference.
-		 * A counted value is released out of line.
+		 * A counted value is released out of line; the last reference
+		 * and a reference take the canonical path.
 		 */
+		ScratchReg root_scratch{this};
+		const AsmReg root_scratch_reg = root_scratch.alloc_gp();
+		/*
+		 * gc_check_possible_root() of a value released with references
+		 * left, out of line: Zend's frame cleanup runs with the caller
+		 * current, so a collection it triggers does too. A destructor's
+		 * exception continues in the canonical path, which finds the
+		 * released slots undefined; release_flag clears the frame's flag
+		 * of what was released already.
+		 */
+		auto buffer_possible_root = [&](AsmReg counted_reg,
+				tpde::Label resume, int32_t release_flag) {
+			ASM(TEST32mi,
+				FE_MEM(counted_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(
+						zend_refcounted_h, u.type_info))),
+				static_cast<int32_t>(GC_INFO_MASK
+					| (GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT)));
+			emit_cold_branch(Jump::je, resume, [&] {
+				const int32_t current = static_cast<int32_t>(offsetof(
+					zend_native_execution_context, current_execute_data));
+				ASM(MOV64rm, root_scratch_reg,
+					FE_MEM(post_context_reg, 0, FE_NOREG, current));
+				ASM(MOV64mr, FE_MEM(root_scratch_reg, 0, FE_NOREG, 0),
+					post_frame_reg);
+				emit_preserving_call(
+					static_cast<uint64_t>(register_file.used),
+					ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT, [&] {
+						ASM(MOV64rr, FE_DI, counted_reg);
+					}, [] {});
+				ASM(MOV64rm, root_scratch_reg,
+					FE_MEM(post_context_reg, 0, FE_NOREG, current));
+				ASM(MOV64mr, FE_MEM(root_scratch_reg, 0, FE_NOREG, 0),
+					post_callee_reg);
+				ASM(MOV64rm, root_scratch_reg,
+					FE_MEM(post_context_reg, 0, FE_NOREG,
+						static_cast<int32_t>(offsetof(
+							zend_native_execution_context, exception))));
+				ASM(CMP64mi, FE_MEM(root_scratch_reg, 0, FE_NOREG, 0), 0);
+				if (release_flag == 0) {
+					generate_raw_jump(Jump::jne, complete_fast);
+				} else {
+					auto no_exception = text_writer.label_create();
+					generate_raw_jump(Jump::je, no_exception);
+					ASM(AND32mi,
+						FE_MEM(post_callee_reg, 0, FE_NOREG,
+							static_cast<int32_t>(
+								offsetof(zend_execute_data, This)
+								+ offsetof(zval, u1.type_info))),
+						~release_flag);
+					generate_raw_jump(Jump::jmp, complete_fast);
+					label_place(no_exception);
+				}
+			});
+		};
 		{
 			ScratchReg counted{this};
 			auto counted_reg = counted.alloc_gp();
@@ -22867,6 +22923,12 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 								zend_refcounted_h, refcount))),
 						1);
 					generate_raw_jump(Jump::je, complete_fast);
+					ASM(CMP8mi,
+						FE_MEM(post_callee_reg, 0, FE_NOREG,
+							offset + static_cast<int32_t>(
+								offsetof(zval, u1.v.type))),
+						IS_REFERENCE);
+					generate_raw_jump(Jump::je, complete_fast);
 					ASM(SUB32mi,
 						FE_MEM(counted_reg, 0, FE_NOREG,
 							static_cast<int32_t>(offsetof(
@@ -22877,6 +22939,8 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 							offset + static_cast<int32_t>(
 								offsetof(zval, u1.type_info))),
 						IS_UNDEF);
+					auto unbuffered = text_writer.label_create();
+					buffer_possible_root(counted_reg, unbuffered, 0);
 				});
 			};
 			/* Only the CVs a local callee's type inference lets hold a
@@ -22924,7 +22988,10 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 				FE_MEM(probe_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(
 						zend_refcounted_h, refcount))), 1);
+			buffer_possible_root(probe_reg, text_writer.label_create(),
+				ZEND_CALL_RELEASE_THIS);
 		}
+		root_scratch.reset();
 
 		/* Helper-free successful completion. */
 		ASM(MOV64rm, probe_reg,

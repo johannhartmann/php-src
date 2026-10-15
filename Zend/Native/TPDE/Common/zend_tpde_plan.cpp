@@ -3054,6 +3054,11 @@ static bool plan_instructions(plan_builder &builder) {
 			default:
 				break;
 		}
+		/* A direct user call's completion buffers the possible GC roots
+		 * it releases, as Zend's frame cleanup does. */
+		if (record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER) {
+			require_runtime_helper(plan, ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT);
+		}
 		if ((record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 					|| record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL)
 				&& !plan_call_site(builder, i)) {

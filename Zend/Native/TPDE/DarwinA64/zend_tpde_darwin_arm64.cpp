@@ -12638,7 +12638,21 @@ void ZendCompilerA64::complete_direct_user_frame_call(
 	 * Mirror Zend's sequential frame cleanup. A decremented slot
 	 * is made UNDEF before advancing, so the canonical rare path
 	 * can resume safely if a later alias owns the final reference.
+	 * A reference and a possible GC root (gc_check_possible_root())
+	 * take the canonical path as well.
 	 */
+	auto canonical_possible_root = [&](AsmReg counted_reg,
+			AsmReg info_reg) {
+		load_off(info_reg, counted_reg,
+			static_cast<uint32_t>(
+				offsetof(zend_refcounted_h, u.type_info)), 4);
+		ASM(TSTwi, info_reg, GC_INFO_MASK);
+		auto buffered = text_writer.label_create();
+		generate_raw_jump(Jump::Jne, buffered);
+		ASM(TSTwi, info_reg, GC_NOT_COLLECTABLE << GC_FLAGS_SHIFT);
+		generate_raw_jump(Jump::Jeq, complete_fast);
+		label_place(buffered);
+	};
 	{
 		ScratchReg counted{this};
 		auto counted_reg = counted.alloc_gp();
@@ -12656,7 +12670,10 @@ void ZendCompilerA64::complete_direct_user_frame_call(
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			auto released = text_writer.label_create();
 			generate_raw_jump(Jump::Jeq, released);
+			ASM(CMPwi, probe_reg, IS_REFERENCE_EX);
+			generate_raw_jump(Jump::Jeq, complete_fast);
 			load_off(counted_reg, post_callee_reg, offset, 8);
+			canonical_possible_root(counted_reg, probe_reg);
 			load_off(probe_reg, counted_reg,
 				static_cast<uint32_t>(
 					offsetof(zend_refcounted_h, refcount)), 4);
@@ -12693,7 +12710,10 @@ void ZendCompilerA64::complete_direct_user_frame_call(
 				IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 			auto released = text_writer.label_create();
 			generate_raw_jump(Jump::Jeq, released);
+			ASM(CMPwi, probe_reg, IS_REFERENCE_EX);
+			generate_raw_jump(Jump::Jeq, complete_fast);
 			load_off(counted_reg, post_callee_reg, offset, 8);
+			canonical_possible_root(counted_reg, probe_reg);
 			load_off(probe_reg, counted_reg,
 				static_cast<uint32_t>(
 					offsetof(zend_refcounted_h, refcount)), 4);
@@ -12724,9 +12744,14 @@ void ZendCompilerA64::complete_direct_user_frame_call(
 				zend_refcounted_h, refcount)), 4);
 		/* The callee may have dropped the caller's own
 		 * reference: the last one is released by the
-		 * canonical finisher. */
+		 * canonical finisher, as is a possible GC root. */
 		ASM(CMPwi, receiver_refcount_reg, 1);
 		generate_raw_jump(Jump::Jeq, complete_fast);
+		{
+			ScratchReg receiver_info{this};
+			canonical_possible_root(probe_reg,
+				receiver_info.alloc_gp());
+		}
 		ASM(SUBwi, receiver_refcount_reg,
 			receiver_refcount_reg, 1);
 		store_off(probe_reg,
