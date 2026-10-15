@@ -1607,6 +1607,11 @@ public:
 		 */
 		auto string_key_split = [&](auto &&string_probe, auto &&general_probe,
 				ValuePart &out) -> bool {
+			/* A key that can only be a string needs no other probe. */
+			if (source != nullptr && (source->op2_may_be & (MAY_BE_ANY
+					| MAY_BE_UNDEF | MAY_BE_REF)) == MAY_BE_STRING) {
+				return string_probe(out);
+			}
 			ScratchReg common{this};
 			const AsmReg common_reg = common.alloc_gp();
 			auto other = text_writer.label_create();
@@ -1909,8 +1914,19 @@ public:
 						offsetof(zval, u1.type_info))));
 			ASM(BT32rr, mask_reg, left_type);
 			generate_raw_jump(Jump::jb, truthy);
-			ASM(TEST32rr, left_type, left_type);
-			generate_raw_jump(Jump::je, slow);
+			/* Only what Zend's type inference allows is tested. */
+			const zend_tpde_source_opcode *source =
+				fused_source_opcode(compare);
+			const uint32_t may_be = source != nullptr
+				? source->op1_may_be : UINT32_MAX;
+			if ((may_be & MAY_BE_UNDEF) != 0) {
+				ASM(TEST32rr, left_type, left_type);
+				generate_raw_jump(Jump::je, slow);
+			}
+			if ((may_be & MAY_BE_REF) == 0) {
+				generate_raw_jump(Jump::jmp, falsey);
+				return true;
+			}
 			ASM(CMP32ri, left_type, IS_REFERENCE);
 			/* A reference's referent is tested out of the hot code. */
 			auto reference = text_writer.label_create();
@@ -2739,11 +2755,6 @@ public:
 				generate_raw_jump(Jump::je, counted);
 				ASM(MOV64rm, check_reg, FE_MEM(frame_reg, 0, FE_NOREG,
 					value_disp));
-				ASM(TEST32mi, FE_MEM(check_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(zend_refcounted_h,
-						u.type_info))),
-					static_cast<int32_t>(GC_PERSISTENT << GC_FLAGS_SHIFT));
-				generate_raw_jump(Jump::jne, general);
 				ASM(ADD32mi, FE_MEM(check_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(zend_refcounted_h,
 						refcount))), 1);
@@ -5439,6 +5450,8 @@ public:
 		 * types: none for a literal or a temporary, Zend's type
 		 * inference for a CV. */
 		uint32_t value_may_be = 0;
+		/* The key's, by Zend's type inference. */
+		uint32_t key_may_be = UINT32_MAX;
 		bool known_array = false;
 		tpde::Label slow{};
 		tpde::Label absent{};
@@ -11756,13 +11769,17 @@ bool ZendCompilerX64::rope_literal_inline(InstContext &ctx) {
 	emit_literal_base(piece_reg, frame_reg);
 	ASM(MOV64rm, piece_reg, FE_MEM(piece_reg, 0, FE_NOREG,
 		static_cast<int32_t>(literal_offset)));
-	ASM(TEST32mi, FE_MEM(piece_reg, 0, FE_NOREG,
-		static_cast<int32_t>(offsetof(zend_refcounted_h, u.type_info))),
-		static_cast<int32_t>(IS_STR_INTERNED << GC_FLAGS_SHIFT));
-	generate_raw_jump(Jump::jne, interned);
-	ASM(ADD32mi, FE_MEM(piece_reg, 0, FE_NOREG,
-		static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))), 1);
-	label_place(interned);
+	/* Zend interns the string literals it compiles: only another one
+	 * needs the test. */
+	if (!ZSTR_IS_INTERNED(Z_STR(plan->source_literals[operation.op2.index]))) {
+		ASM(TEST32mi, FE_MEM(piece_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, u.type_info))),
+			static_cast<int32_t>(IS_STR_INTERNED << GC_FLAGS_SHIFT));
+		generate_raw_jump(Jump::jne, interned);
+		ASM(ADD32mi, FE_MEM(piece_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))), 1);
+		label_place(interned);
+	}
 	ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG,
 		static_cast<int32_t>(piece_offset)), piece_reg);
 	return true;
@@ -13005,6 +13022,7 @@ int ZendCompilerX64::array_element_layout(ArrayElementContext &ae) {
 		? 0
 		: slot_kind(operation.auxiliary) == ZEND_MIR_SOURCE_SLOT_CV
 		? op_data_may_be(operation) : UINT32_MAX;
+	ae.key_may_be = op2_may_be(operation);
 	/* A CV container Zend's type inference proves to be an array,
 	 * neither undefined nor a reference: the known_* lookups take its
 	 * table without testing the zval. Some of them need one scratch
@@ -13062,6 +13080,11 @@ template <typename StringLookup, typename GeneralLookup>
 bool ZendCompilerX64::string_key_split(ArrayElementContext &ae,
 		ArrayElementRegisters &er, StringLookup &&string_lookup,
 		GeneralLookup &&general_lookup, ValuePart &out) {
+	/* A key that can only be a string needs no other lookup. */
+	if ((ae.key_may_be & (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF))
+			== MAY_BE_STRING) {
+		return string_lookup(out);
+	}
 	ScratchReg common{this};
 	const AsmReg common_reg = common.alloc_gp();
 	auto other = text_writer.label_create();
@@ -19672,21 +19695,12 @@ bool ZendCompilerX64::compile_iterator_fetch_branch(
 		ASM(CMP8ri, type_reg, IS_LONG);
 		generate_raw_jump(Jump::jne, slow);
 	} else {
-		/* FE_FETCH_R copies like ZVAL_COPY_OR_DUP; a
-		 * reference, an indirect slot (IS_REFERENCE and
-		 * every type above) or a persistent counted value
-		 * keeps the helper. */
+		/* A reference or an indirect slot (IS_REFERENCE and every
+		 * type above) keeps the helper; FE_FETCH_R copies anything
+		 * else as zend_assign_to_variable() does, with a reference
+		 * for a counted value. */
 		ASM(CMP8ri, type_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::jae, slow);
-		ASM(TEST32ri, type_reg,
-			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
-		generate_raw_jump(Jump::je, value_owned);
-		ASM(TEST32mi,
-			FE_MEM(value_reg, 0, FE_NOREG,
-				static_cast<int32_t>(offsetof(
-					zend_refcounted_h, u.type_info))),
-			GC_PERSISTENT);
-		generate_raw_jump(Jump::jne, slow);
 	}
 	label_place(value_owned);
 	release_iterator_destination(layout, frame_reg, limit_reg, slow);
@@ -20093,13 +20107,6 @@ void ZendCompilerX64::emit_condition_result(
 				IS_TYPE_REFCOUNTED
 					<< Z_TYPE_FLAGS_SHIFT);
 			generate_raw_jump(Jump::je, counted_done);
-			ASM(TEST32mi,
-				FE_MEM(tb.value_reg, 0, FE_NOREG,
-					static_cast<int32_t>(offsetof(
-						zend_refcounted_h,
-						u.type_info))),
-				GC_PERSISTENT);
-			generate_raw_jump(Jump::jne, tb.slow);
 			ASM(ADD32mi,
 				FE_MEM(tb.value_reg, 0, FE_NOREG,
 					static_cast<int32_t>(offsetof(

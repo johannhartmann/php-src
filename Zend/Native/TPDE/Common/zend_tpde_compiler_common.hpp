@@ -1232,6 +1232,18 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 					& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF))
 				== MAY_BE_OBJECT;
 	}
+	/* Zend's inferred MAY_BE_* mask of the operation's op2, UINT32_MAX
+	 * when unknown. */
+	uint32_t op2_may_be(
+			const zend_mir_executable_value_ref &operation) const {
+		const zend_tpde_plan *plan = this->ir().plan();
+		const uint32_t position = operation.source_position_id;
+		return plan->source_opcodes != nullptr
+				&& position < plan->source_opcode_count
+				&& plan->source_opcodes[position].opcode
+					== operation.source_opcode
+			? plan->source_opcodes[position].op2_may_be : UINT32_MAX;
+	}
 	/* Zend's inferred MAY_BE_* mask of the value an OP_DATA after the
 	 * operation passes, UINT32_MAX when unknown. */
 	uint32_t op_data_may_be(
