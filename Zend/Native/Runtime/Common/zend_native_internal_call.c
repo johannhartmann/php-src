@@ -1738,6 +1738,11 @@ static zend_always_inline bool zend_native_internal_call_plain_dynamic(
 			}
 			continue;
 		}
+		/* A temporary, which SEND_VAL sends, holds a plain value. */
+		if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+				&& argument->mode != ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE) {
+			continue;
+		}
 		value = ZEND_CALL_VAR_NUM(caller, last_var + source->index);
 		if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_REFERENCE
 				? Z_TYPE_P(value) != IS_INDIRECT
@@ -1826,11 +1831,11 @@ zend_native_internal_call_direct_execute(
 				}
 				ZVAL_COPY(target, variable);
 			} else if (source->kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-				zend_native_zval_copy_deref_or_dup(
-					target, &op_array->literals[source->index]);
+				/* As SEND_VAL and SEND_VAR copy them. */
+				ZVAL_COPY(target, &op_array->literals[source->index]);
 			} else if (source->slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
-				zend_native_zval_copy_deref_or_dup(
-					target, ZEND_CALL_VAR_NUM(caller, source->index));
+				ZVAL_COPY_DEREF(target,
+					ZEND_CALL_VAR_NUM(caller, source->index));
 			} else {
 				zval *value = ZEND_CALL_VAR_NUM(caller,
 					(uint32_t) op_array->last_var + source->index);
@@ -1839,8 +1844,8 @@ zend_native_internal_call_direct_execute(
 				ZVAL_UNDEF(value);
 			}
 		}
+		/* Linked as invoke() unlinks it: EX(call) keeps its value. */
 		call->prev_execute_data = caller->call;
-		caller->call = call;
 		caller->opline = &op_array->opcodes[descriptor->do_source_position];
 		if (descriptor->result_operand.kind
 				!= ZEND_MIR_SOURCE_OPERAND_UNUSED) {

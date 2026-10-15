@@ -6,6 +6,7 @@
 
 #include "Zend/zend_exceptions.h"
 #include "Zend/zend_API.h"
+#include "Zend/zend_bitset.h"
 #include "Zend/zend_closures.h"
 #include "Zend/zend_execute.h"
 #include "Zend/zend_frameless_function.h"
@@ -2954,6 +2955,21 @@ static zval *zend_native_call_callable_operand(
 		caller, &descriptor->init_op2, true);
 }
 
+/*
+ * An element of a [receiver, method] callable, which is mostly a packed
+ * array without holes.
+ */
+static zend_always_inline zval *zend_native_callable_element(
+	HashTable *callable, zend_ulong index)
+{
+	if (EXPECTED(HT_IS_PACKED(callable) && callable->nNumUsed == 2)) {
+		zval *element = &callable->arPacked[index];
+
+		return Z_ISUNDEF_P(element) ? NULL : element;
+	}
+	return zend_hash_index_find(callable, index);
+}
+
 static bool zend_native_call_dynamic_syntax_target(
 	zval *callable,
 	zend_function **function_out,
@@ -3089,8 +3105,8 @@ static bool zend_native_call_dynamic_syntax_target(
 					"Array callback must have exactly two elements");
 				return false;
 			}
-			receiver = zend_hash_index_find(Z_ARRVAL_P(callable), 0);
-			method = zend_hash_index_find(Z_ARRVAL_P(callable), 1);
+			receiver = zend_native_callable_element(Z_ARRVAL_P(callable), 0);
+			method = zend_native_callable_element(Z_ARRVAL_P(callable), 1);
 			if (receiver == NULL || method == NULL) {
 				zend_throw_error(NULL,
 					"Array callback has to contain indices 0 and 1");
@@ -4693,8 +4709,8 @@ static bool zend_native_call_callable_identity(
 	}
 	if (Z_TYPE_P(callable) == IS_ARRAY
 			&& zend_hash_num_elements(Z_ARRVAL_P(callable)) == 2) {
-		zval *object = zend_hash_index_find(Z_ARRVAL_P(callable), 0);
-		zval *method = zend_hash_index_find(Z_ARRVAL_P(callable), 1);
+		zval *object = zend_native_callable_element(Z_ARRVAL_P(callable), 0);
+		zval *method = zend_native_callable_element(Z_ARRVAL_P(callable), 1);
 
 		*kind = ZEND_NATIVE_CALL_CALLABLE_METHOD;
 		return object != NULL && method != NULL
@@ -4740,6 +4756,7 @@ zend_native_call_fast_receive_prepare(
 	receive->num_args = op_array->num_args;
 	receive->class_mask = 0;
 	receive->ast_mask = 0;
+	receive->typed_mask = 0;
 	for (index = 0; index < op_array->num_args; index++) {
 		const zend_op *opline = &op_array->opcodes[index];
 		const zend_type type = op_array->arg_info[index].type;
@@ -4747,6 +4764,9 @@ zend_native_call_fast_receive_prepare(
 
 		receive->type_masks[index] =
 			zend_native_call_fast_receive_mask(&op_array->arg_info[index]);
+		if (receive->type_masks[index] != UINT32_MAX) {
+			receive->typed_mask |= UINT32_C(1) << index;
+		}
 		receive->defaults[index] = NULL;
 		receive->classes[index] = NULL;
 		if (ZEND_TYPE_IS_SET(type)
@@ -5664,8 +5684,8 @@ static void zend_native_call_recorded_target_record(
 		function = NULL;
 	} else if (Z_TYPE_P(callable) == IS_ARRAY
 			&& zend_hash_num_elements(Z_ARRVAL_P(callable)) == 2) {
-		zval *object = zend_hash_index_find(Z_ARRVAL_P(callable), 0);
-		zval *name = zend_hash_index_find(Z_ARRVAL_P(callable), 1);
+		zval *object = zend_native_callable_element(Z_ARRVAL_P(callable), 0);
+		zval *name = zend_native_callable_element(Z_ARRVAL_P(callable), 1);
 
 		if (object == NULL || name == NULL || Z_TYPE_P(name) != IS_STRING
 				|| !ZSTR_IS_INTERNED(Z_STR_P(name))) {
@@ -5723,6 +5743,18 @@ static void zend_native_call_recorded_target_store(
 	zend_native_call_recorded_target *target =
 		zend_native_call_recorded_target_slot(key, method, scope);
 
+	/* A hit records what the slot already holds in this request. */
+	if (target->epoch == zend_native_call_resolution_cache_epoch
+			&& target->key == key && target->method == method
+			&& target->scope == scope && target->kind == kind
+			&& target->function == function
+			&& target->cell == resolution->entry_cell
+			&& target->entry == resolution->invoke_entry
+			&& (kind != ZEND_NATIVE_CALL_RECORDED_STATIC
+				|| target->called_scope
+					== resolution->object_or_called_scope)) {
+		return;
+	}
 	target->epoch = zend_native_call_resolution_cache_epoch;
 	target->key = key;
 	target->method = method;
@@ -5997,8 +6029,8 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 		owned = Z_OBJ_P(callable);
 	} else if (Z_TYPE_P(callable) == IS_ARRAY
 			&& zend_hash_num_elements(Z_ARRVAL_P(callable)) == 2) {
-		zval *object = zend_hash_index_find(Z_ARRVAL_P(callable), 0);
-		zval *method = zend_hash_index_find(Z_ARRVAL_P(callable), 1);
+		zval *object = zend_native_callable_element(Z_ARRVAL_P(callable), 0);
+		zval *method = zend_native_callable_element(Z_ARRVAL_P(callable), 1);
 		const void *key;
 
 		if (object == NULL || method == NULL
@@ -6511,9 +6543,9 @@ static void zend_native_call_resolution_cache_store(
 			callable_name = Z_STR_P(callable);
 		} else if (callable_kind == ZEND_NATIVE_CALL_CALLABLE_METHOD) {
 			callable_class = Z_OBJCE_P(
-				zend_hash_index_find(Z_ARRVAL_P(callable), 0));
+				zend_native_callable_element(Z_ARRVAL_P(callable), 0));
 			callable_name = Z_STR_P(
-				zend_hash_index_find(Z_ARRVAL_P(callable), 1));
+				zend_native_callable_element(Z_ARRVAL_P(callable), 1));
 		}
 	} else if ((descriptor->init_opcode == ZEND_INIT_METHOD_CALL
 				|| descriptor->init_opcode == ZEND_NEW)
@@ -9691,13 +9723,16 @@ static bool zend_native_call_fast_receive_frame(
 		return false;
 	}
 	ZEND_ASSERT(receive->num_args == declared);
-	for (index = 0; index < received; index++) {
-		const zval *argument = ZEND_CALL_ARG(callee, index + 1);
+	for (uint32_t typed = receive->typed_mask
+				& ((UINT32_C(1) << received) - 1);
+			typed != 0; typed &= typed - 1) {
+		const uint32_t parameter = (uint32_t) zend_ulong_ntz(typed);
+		const zval *argument = ZEND_CALL_ARG(callee, parameter + 1);
 
-		if ((receive->type_masks[index]
+		if ((receive->type_masks[parameter]
 					& (UINT32_C(1) << Z_TYPE_P(argument))) == 0
 				&& !zend_native_call_fast_receive_class_hit(
-					receive, index, argument)) {
+					receive, parameter, argument)) {
 			return false;
 		}
 	}
@@ -9873,13 +9908,16 @@ uint32_t zend_native_call_fast_do(
 			: zend_native_call_fast_run_time_cache(callee);
 		EG(current_execute_data) = callee;
 		if ((flags & ZEND_NATIVE_CALL_FAST_CHECK_ARGS) != 0) {
-			for (uint32_t index = 0; index < argument_count; index++) {
-				const zval *argument = ZEND_CALL_ARG(callee, index + 1);
+			for (uint32_t typed = receive->typed_mask
+						& ((UINT32_C(1) << argument_count) - 1);
+					typed != 0; typed &= typed - 1) {
+				const uint32_t parameter = (uint32_t) zend_ulong_ntz(typed);
+				const zval *argument = ZEND_CALL_ARG(callee, parameter + 1);
 
-				if ((receive->type_masks[index]
+				if ((receive->type_masks[parameter]
 						& (UINT32_C(1) << Z_TYPE_P(argument))) == 0
 						&& !zend_native_call_fast_receive_class_hit(
-							receive, index, argument)) {
+							receive, parameter, argument)) {
 					prepare = true;
 					break;
 				}

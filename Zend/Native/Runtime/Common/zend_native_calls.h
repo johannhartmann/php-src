@@ -50,6 +50,9 @@ typedef struct _zend_native_call_fast_receive {
 	 * receive evaluates as RECV_INIT does, caching it per request in the
 	 * run-time cache. */
 	uint32_t ast_mask;
+	/* Bit n: parameter n does not take every value (type_masks[n] is not
+	 * UINT32_MAX), so its argument is checked. */
+	uint32_t typed_mask;
 	uint32_t type_masks[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 	const zval *defaults[ZEND_NATIVE_CALL_FAST_RECEIVE_MAX];
 	/* Per class-typed parameter: the class of the last object argument the
