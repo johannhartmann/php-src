@@ -529,7 +529,9 @@ class ZendCompilerX64 final
 	 * copy is valid. Store the operands the cold block takes before the
 	 * first check: a register evicted later in the fast path would be
 	 * stored only on the path that falls through. The fast path stored
-	 * them before its exit anyway.
+	 * them before its exit anyway, as it does every value live after this
+	 * block (the continuation joins two paths): storing those here too
+	 * lets the failed checks jump to the cold block directly.
 	 */
 	void spill_cold_block_operands(const Adaptor::InstNode &node) {
 		if (node.control_block == UINT32_MAX) {
@@ -563,6 +565,22 @@ class ZendCompilerX64 final
 		for (IRValueRef phi : adaptor->block_phis(cold)) {
 			spill_value(adaptor->val_as_phi(phi).incoming_val_for_block(
 				IRBlockRef{node.control_block}));
+		}
+		for (auto reg_id : ::tpde::util::BitSetIterator<>{
+				register_file.used}) {
+			const ::tpde::Reg reg{reg_id};
+			const auto local_idx = register_file.reg_local_idx(reg);
+			if (local_idx == INVALID_VAL_LOCAL_IDX) {
+				continue;
+			}
+			::tpde::AssignmentPartRef location{
+				val_assignment(local_idx), register_file.reg_part(reg)};
+			if (location.modified() && !location.fixed_assignment()
+					&& !location.variable_ref()
+					&& this->analyzer.liveness_info(local_idx).last
+						> cur_block_idx) {
+				this->spill(location);
+			}
 		}
 	}
 
@@ -3170,8 +3188,12 @@ public:
 			}
 			::tpde::AssignmentPartRef part{
 				val_assignment(local_idx), register_file.reg_part(reg)};
+			/* A value dead after this block needs no spill either. */
 			if (!part.fixed_assignment() && part.modified()
-					&& !part.variable_ref()) {
+					&& !part.variable_ref()
+					&& (this->analyzer.liveness_info(local_idx).last
+							> cur_block_idx
+						|| part.assignment()->references_left != 0)) {
 				return false;
 			}
 		}
@@ -3179,6 +3201,12 @@ public:
 	}
 	void generate_guarded_direct_exit(
 			tpde::Label slow, IRBlockRef cold, IRBlockRef hot) {
+		generate_guarded_direct_exit(slow, cold, hot, [] {});
+	}
+	/* stub() runs first on the failed checks' way to the cold block. */
+	template <typename Stub>
+	void generate_guarded_direct_exit(tpde::Label slow, IRBlockRef cold,
+			IRBlockRef hot, Stub &&stub) {
 		const auto spilled = spill_before_branch();
 		begin_branch_region();
 		/* The failed checks' jump to the cold block waits in the cold area,
@@ -3189,6 +3217,7 @@ public:
 			cold_begin();
 		}
 		label_place(slow);
+		stub();
 		generate_branch_to_block(Jump::jmp, cold, false, !cold_stub);
 		if (cold_stub) {
 			cold_end();
@@ -12093,31 +12122,12 @@ bool ZendCompilerX64::copy_slot(
 				source_offset + offsetof(zval, u1.type_info))),
 			IS_UNDEF);
 	}
-	if (!register_source) {
-		/* Nothing to publish on the cold edge: leave directly. */
-		source_type.reset();
-		target_type.reset();
-		source_payload.reset();
-		low_word.reset();
-		probe.reset();
-		target_address.reset();
-		if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
-			decision.reset();
-			frame_scratch.reset();
-			generate_guarded_direct_exit(
-				slow, successors[1], successors[0]);
-			return true;
-		}
-	}
-	ASM(MOV32ri, decision_reg, 0);
-	cold_begin();
-	label_place(slow);
-	if (register_source) {
-		/*
-		 * The helper consumes canonical Zend slots.  Keep the source
-		 * register-authoritative on the hot edge and materialize it only
-		 * when the generated guard actually selects the cold edge.
-		 */
+	/*
+	 * The helper consumes canonical Zend slots.  Keep a register source
+	 * register-authoritative on the hot edge and materialize it only when
+	 * the generated guard actually selects the cold edge.
+	 */
+	auto publish_source = [&] {
 		ASM(MOV64mr,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(source_offset)),
@@ -12127,6 +12137,35 @@ bool ZendCompilerX64::copy_slot(
 				static_cast<int32_t>(
 					source_offset + offsetof(zval, u1.type_info))),
 			source_type_reg);
+	};
+	target_type.reset();
+	low_word.reset();
+	probe.reset();
+	target_address.reset();
+	if (!register_source) {
+		source_type.reset();
+		source_payload.reset();
+	}
+	if (guarded_exit_can_jump_directly(successors[1], successors[0])) {
+		decision.reset();
+		if (register_source) {
+			/* The source registers stay held until the stub used them. */
+			generate_guarded_direct_exit(
+				slow, successors[1], successors[0], publish_source);
+		} else {
+			generate_guarded_direct_exit(
+				slow, successors[1], successors[0]);
+		}
+		source_type.reset();
+		source_payload.reset();
+		frame_scratch.reset();
+		return true;
+	}
+	ASM(MOV32ri, decision_reg, 0);
+	cold_begin();
+	label_place(slow);
+	if (register_source) {
+		publish_source();
 	}
 	ASM(MOV32ri, decision_reg, 1);
 	generate_raw_jump(Jump::jmp, done);
