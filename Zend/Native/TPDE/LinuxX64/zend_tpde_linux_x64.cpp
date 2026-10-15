@@ -2566,6 +2566,28 @@ public:
 				saved_xmm.push_back(caller_saved_xmm[i]);
 			}
 		}
+		/* Without vector registers, pushes and pops save the GP ones,
+		 * RBX once more for an odd count to keep the stack aligned; they
+		 * leave the flags check() sets alone, as the moves do. */
+		if (saved_xmm.empty()) {
+			if (saved_gp.size() % 2 != 0) {
+				saved_gp.push_back(FE_BX);
+			}
+			for (FeRegGP reg : saved_gp) {
+				ASM(PUSHr, reg);
+			}
+			set_arguments();
+			if (call_rax) {
+				ASM(CALLr, FE_AX);
+			} else {
+				emit_symbol_call(runtime_symbol(helper));
+			}
+			check();
+			for (size_t i = saved_gp.size(); i-- > 0;) {
+				ASM(POPr, saved_gp[i]);
+			}
+			return;
+		}
 		const int32_t xmm_base = static_cast<int32_t>(
 			(8 * saved_gp.size() + 15) & ~size_t{15});
 		/* A multiple of 16, which keeps the stack aligned. */
@@ -3809,7 +3831,7 @@ public:
 	 * memory operands, then need no SIB byte (R12 would). The other fixed
 	 * values leave RBX to it.
 	 */
-	static constexpr int32_t frame_register_bias = 0x80;
+	static constexpr int32_t frame_register_bias = 0x7f;
 	AsmReg select_fixed_assignment_reg(
 			tpde::AssignmentPartRef part, IRValueRef value) {
 		constexpr uint64_t bx = uint64_t{1} << tpde::x64::AsmReg::BX;
@@ -3824,10 +3846,12 @@ public:
 					&& !this->stack.is_leaf_function
 					&& (this->cur_cc_assigner()->get_ccinfo()
 							.callee_saved_regs & bx) != 0) {
-				/* RBX holds the frame plus 0x80: the frame's header and its
-				 * first slots up to offset 0xff are disp8 operands. No other
-				 * value may use RBX afterwards, even when the frame is dead:
-				 * the encoder rebiases every operand naming it. */
+				/* RBX holds the frame plus 0x7f: the frame's header and its
+				 * first slots up to offset 0xfe are disp8 operands, and so
+				 * is the bias itself, which moving the frame into or out of
+				 * RBX adds or subtracts. No other value may use RBX
+				 * afterwards, even when the frame is dead: the encoder
+				 * rebiases every operand naming it. */
 				this->set_biased_reg(FE_BX, frame_register_bias);
 				this->register_file.allocatable &= ~bx;
 				return AsmReg{tpde::x64::AsmReg::BX};
@@ -3837,9 +3861,20 @@ public:
 		if (this->stack.is_leaf_function) {
 			return Base::select_fixed_assignment_reg(part, value);
 		}
+		/* Other fixed values prefer R14 and R15, then R13, whose operands
+		 * need neither a SIB byte (R12) nor a displacement byte at offset
+		 * zero (R13). */
+		constexpr uint64_t r12 = uint64_t{1} << tpde::x64::AsmReg::R12;
+		constexpr uint64_t r13 = uint64_t{1} << tpde::x64::AsmReg::R13;
 		const uint64_t saved = this->fixed_assignment_nonallocatable_mask;
-		this->fixed_assignment_nonallocatable_mask |= bx;
-		AsmReg reg = Base::select_fixed_assignment_reg(part, value);
+		AsmReg reg{};
+		for (const uint64_t avoided : {bx | r12 | r13, bx | r12, bx}) {
+			this->fixed_assignment_nonallocatable_mask = saved | avoided;
+			reg = Base::select_fixed_assignment_reg(part, value);
+			if (reg.valid()) {
+				break;
+			}
+		}
 		this->fixed_assignment_nonallocatable_mask = saved;
 		if (!reg.valid()) {
 			reg = Base::select_fixed_assignment_reg(part, value);
@@ -22568,10 +22603,10 @@ bool ZendCompilerX64::link_direct_user_activation(DirectUserCallContext &du,
 	static_assert(IS_UNDEF == 0);
 	ASM(XOR32rr, zero_reg, zero_reg);
 	/* ZVAL_UNDEF writes only the type, as the VM's frame setup does,
-	 * through a base biased by 0x80 when that brings two or more
+	 * through a base biased by 0x7f when that brings two or more
 	 * slots into disp8 range. */
 	{
-		constexpr int32_t slot_bias = 0x80;
+		constexpr int32_t slot_bias = 0x7f;
 		auto type_offset = [](uint32_t index) {
 			return static_cast<int32_t>(
 				(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)
