@@ -17733,10 +17733,15 @@ bool ZendCompilerX64::fetch_constant_inline(InstContext &ctx) {
 			constant_reg);
 		generate_raw_jump(Jump::jmp, done);
 	}
+	/* The helper, out of the hot code. */
+	cold_begin();
 	label_place(slow);
 	if (!execute_value_operation(ctx)) {
+		cold_end();
 		return false;
 	}
+	generate_raw_jump(Jump::jmp, done);
+	cold_end();
 	label_place(done);
 	release_spilled_regs(spilled);
 	return true;
@@ -17846,10 +17851,15 @@ bool ZendCompilerX64::bind_global_inline(InstContext &ctx) {
 			IS_REFERENCE_EX);
 		generate_raw_jump(Jump::jmp, done);
 	}
+	/* The helper, out of the hot code. */
+	cold_begin();
 	label_place(slow);
 	if (!execute_value_operation(ctx)) {
+		cold_end();
 		return false;
 	}
+	generate_raw_jump(Jump::jmp, done);
+	cold_end();
 	label_place(done);
 	release_spilled_regs(spilled);
 	return true;
@@ -17965,10 +17975,15 @@ bool ZendCompilerX64::class_constant_inline(InstContext &ctx) {
 			value_reg);
 		generate_raw_jump(Jump::jmp, done);
 	}
+	/* The helper, out of the hot code. */
+	cold_begin();
 	label_place(slow);
 	if (!execute_value_operation(ctx)) {
+		cold_end();
 		return false;
 	}
+	generate_raw_jump(Jump::jmp, done);
+	cold_end();
 	label_place(done);
 	release_spilled_regs(spilled);
 	return true;
@@ -18117,10 +18132,15 @@ bool ZendCompilerX64::instanceof_inline(InstContext &ctx) {
 			BoolSlotSource::True);
 		generate_raw_jump(Jump::jmp, done);
 	}
+	/* The helper, out of the hot code. */
+	cold_begin();
 	label_place(slow);
 	if (!execute_value_operation(ctx)) {
+		cold_end();
 		return false;
 	}
+	generate_raw_jump(Jump::jmp, done);
+	cold_end();
 	label_place(done);
 	release_spilled_regs(spilled);
 	return true;
@@ -18633,10 +18653,15 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 					right_type_reg);
 				generate_raw_jump(Jump::jmp, done);
 			}
+			/* The helper, out of the hot code. */
+			cold_begin();
 			label_place(slow);
 			if (!execute_value_operation(ctx)) {
+				cold_end();
 				return false;
 			}
+			generate_raw_jump(Jump::jmp, done);
+			cold_end();
 			label_place(done);
 			release_spilled_regs(spilled);
 			return true;
@@ -18675,10 +18700,15 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 				type_offset),
 			IS_UNDEF);
 		generate_raw_jump(Jump::jmp, done);
+		/* The helper, out of the hot code. */
+		cold_begin();
 		label_place(slow);
 		if (!execute_value_operation(ctx)) {
+			cold_end();
 			return false;
 		}
+		generate_raw_jump(Jump::jmp, done);
+		cold_end();
 		label_place(done);
 		release_spilled_regs(spilled);
 		return true;
