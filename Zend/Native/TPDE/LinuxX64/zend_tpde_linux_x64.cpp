@@ -21900,11 +21900,9 @@ bool ZendCompilerX64::reserve_direct_user_frame(DirectUserCallContext &du,
 			static_cast<int32_t>(
 				offsetof(zend_execute_data, prev_execute_data))),
 		act.frame_reg);
-	ASM(MOV64mi,
-		FE_MEM(act.callee_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				offsetof(zend_execute_data, symbol_table))),
-		0);
+	/* EX(symbol_table) and EX(extra_named_params) are read only under
+	 * their call info flags, which this frame does not set; the VM
+	 * leaves them unset as well. */
 	if (act.run_time_cache.has_value()) {
 		ASM(MOV64mr,
 			FE_MEM(act.callee_reg, 0, FE_NOREG,
@@ -21919,11 +21917,6 @@ bool ZendCompilerX64::reserve_direct_user_frame(DirectUserCallContext &du,
 					zend_execute_data, run_time_cache))),
 			0);
 	}
-	ASM(MOV64mi,
-		FE_MEM(act.callee_reg, 0, FE_NOREG,
-			static_cast<int32_t>(
-				offsetof(zend_execute_data, extra_named_params))),
-		0);
 	if (call.direct_call->receiver_kind
 			== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
 		ASM(MOV64rm, act.second_reg,
@@ -22419,22 +22412,48 @@ bool ZendCompilerX64::link_direct_user_activation(DirectUserCallContext &du,
 			0, low_word_reg, high_word_reg);
 		emit_try_addref(high_word_reg, low_word_reg);
 	}
-	/* ZVAL_UNDEF writes only the type, as the VM's frame
-	 * setup does. */
-	for (uint32_t index = du.fixed_argument_count;
-			index < du.compiled_variable_count; ++index) {
-		const int32_t offset = static_cast<int32_t>(
-			(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)
-			+ offsetof(zval, u1.type_info));
-		ASM(MOV32mi,
-			FE_MEM(act.callee_reg, 0, FE_NOREG, offset), IS_UNDEF);
-	}
-
 	/* Complete and link the activation. */
 	ScratchReg metadata_first{this};
 	ScratchReg metadata_second{this};
+	ScratchReg zero{this};
 	auto metadata_first_reg = metadata_first.alloc_gp();
 	auto metadata_second_reg = metadata_second.alloc_gp();
+	auto zero_reg = zero.alloc_gp();
+	static_assert(IS_UNDEF == 0);
+	ASM(XOR32rr, zero_reg, zero_reg);
+	/* ZVAL_UNDEF writes only the type, as the VM's frame setup does,
+	 * through a base biased by 0x80 when that brings two or more
+	 * slots into disp8 range. */
+	{
+		constexpr int32_t slot_bias = 0x80;
+		auto type_offset = [](uint32_t index) {
+			return static_cast<int32_t>(
+				(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)
+				+ offsetof(zval, u1.type_info));
+		};
+		uint32_t far_slots = 0;
+		for (uint32_t index = du.fixed_argument_count;
+				index < du.compiled_variable_count; ++index) {
+			far_slots += type_offset(index) > INT8_MAX
+				&& type_offset(index) - slot_bias <= INT8_MAX ? 1 : 0;
+		}
+		const bool biased = far_slots >= 2;
+		if (biased) {
+			ASM(LEA64rm, metadata_first_reg,
+				FE_MEM(act.callee_reg, 0, FE_NOREG, slot_bias));
+		}
+		for (uint32_t index = du.fixed_argument_count;
+				index < du.compiled_variable_count; ++index) {
+			const int32_t offset = type_offset(index);
+			if (biased && offset > INT8_MAX) {
+				ASM(MOV32mr, FE_MEM(metadata_first_reg, 0, FE_NOREG,
+					offset - slot_bias), zero_reg);
+			} else {
+				ASM(MOV32mr, FE_MEM(act.callee_reg, 0, FE_NOREG,
+					offset), zero_reg);
+			}
+		}
+	}
 	/* The activation register is biased so that every field
 	 * is reachable with an 8-bit displacement. */
 	constexpr int32_t activation_bias = 0x80;
@@ -22457,10 +22476,10 @@ bool ZendCompilerX64::link_direct_user_activation(DirectUserCallContext &du,
 			zend_native_direct_activation, callee)),
 		act.callee_reg);
 	if (du.local_component_call) {
-		ASM(MOV64mi,
+		ASM(MOV64mr,
 			activation_field(offsetof(
 				zend_native_direct_activation, cell)),
-			0);
+			zero_reg);
 	} else {
 		ASM(MOV64mr,
 			activation_field(offsetof(
@@ -22468,10 +22487,10 @@ bool ZendCompilerX64::link_direct_user_activation(DirectUserCallContext &du,
 			act.cell_reg);
 	}
 	if (du.local_component_call) {
-		ASM(MOV64mi,
+		ASM(MOV64mr,
 			activation_field(offsetof(
 				zend_native_direct_activation, code)),
-			0);
+			zero_reg);
 	} else {
 		act.published_code_reg = act.published_code.alloc_gp();
 		ASM(MOV64rm, act.published_code_reg,
@@ -22527,15 +22546,14 @@ bool ZendCompilerX64::link_direct_user_activation(DirectUserCallContext &du,
 		activation_field(offsetof(
 			zend_native_direct_activation, status) + 8),
 		du.generation_leased ? 0 : 1);
-	ASM(MOV64mi,
-		activation_field(offsetof(
-			zend_native_direct_activation, discarded_return)),
-		0);
-	ASM(MOV64mi,
+	/* The discarded result is read through its type word first
+	 * (Z_ISUNDEF()), which alone is cleared. */
+	ASM(MOV64mr,
 		activation_field(offsetof(
 			zend_native_direct_activation, discarded_return)
 			+ 8),
-		0);
+		zero_reg);
+	zero.reset();
 	ASM(MOV64rm, metadata_first_reg,
 		FE_MEM(act.context_reg, 0, FE_NOREG,
 			static_cast<int32_t>(offsetof(
@@ -22828,6 +22846,7 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 		 * Mirror Zend's sequential frame cleanup. A decremented slot
 		 * is made UNDEF before advancing, so the canonical rare path
 		 * can resume safely if a later alias owns the final reference.
+		 * A counted value is released out of line.
 		 */
 		{
 			ScratchReg counted{this};
@@ -22839,26 +22858,26 @@ bool ZendCompilerX64::complete_direct_user_activation(DirectUserCallContext &du,
 							offsetof(zval, u1.v.type_flags))),
 					IS_TYPE_REFCOUNTED);
 				auto released = text_writer.label_create();
-				generate_raw_jump(Jump::je, released);
-				ASM(MOV64rm, counted_reg,
-					FE_MEM(post_callee_reg, 0, FE_NOREG, offset));
-				ASM(CMP32mi,
-					FE_MEM(counted_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_refcounted_h, refcount))),
-					1);
-				generate_raw_jump(Jump::je, complete_fast);
-				ASM(SUB32mi,
-					FE_MEM(counted_reg, 0, FE_NOREG,
-						static_cast<int32_t>(offsetof(
-							zend_refcounted_h, refcount))),
-					1);
-				ASM(MOV32mi,
-					FE_MEM(post_callee_reg, 0, FE_NOREG,
-						offset + static_cast<int32_t>(
-							offsetof(zval, u1.type_info))),
-					IS_UNDEF);
-				label_place(released);
+				emit_cold_branch(Jump::jne, released, [&] {
+					ASM(MOV64rm, counted_reg,
+						FE_MEM(post_callee_reg, 0, FE_NOREG, offset));
+					ASM(CMP32mi,
+						FE_MEM(counted_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_refcounted_h, refcount))),
+						1);
+					generate_raw_jump(Jump::je, complete_fast);
+					ASM(SUB32mi,
+						FE_MEM(counted_reg, 0, FE_NOREG,
+							static_cast<int32_t>(offsetof(
+								zend_refcounted_h, refcount))),
+						1);
+					ASM(MOV32mi,
+						FE_MEM(post_callee_reg, 0, FE_NOREG,
+							offset + static_cast<int32_t>(
+								offsetof(zval, u1.type_info))),
+						IS_UNDEF);
+				});
 			};
 			/* Only the CVs a local callee's type inference lets hold a
 			 * counted value at its return need a test. */
