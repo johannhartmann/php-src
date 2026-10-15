@@ -296,6 +296,7 @@ uint32_t generator_suspend_value_index(
 [[nodiscard]] bool freeze_machine_plan_consumers(
 	zend_tpde_plan *plan, zend_native_diagnostic *diag);
 void freeze_fused_compare_branches(zend_tpde_plan *plan);
+void freeze_fused_container_reads(zend_tpde_plan *plan);
 void freeze_register_boolean_results(zend_tpde_plan *plan);
 void freeze_machine_control_flow(zend_tpde_plan *plan);
 

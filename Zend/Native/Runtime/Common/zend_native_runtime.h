@@ -269,7 +269,10 @@ typedef enum _zend_native_runtime_helper_id {
 	/* gc_possible_root() of a CV a function moves into its return
 	 * value. */
 	ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT = 238,
-	ZEND_NATIVE_HELPER_COUNT = 239
+	/* A read fused into the array read of its value: the temporary the
+	 * consumer's helper reads (zend_native_value_fused_container()). */
+	ZEND_NATIVE_HELPER_VALUE_FUSED_CONTAINER = 239,
+	ZEND_NATIVE_HELPER_COUNT = 240
 } zend_native_runtime_helper_id;
 
 /*

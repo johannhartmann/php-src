@@ -662,6 +662,131 @@ void freeze_fused_compare_branches(zend_tpde_plan *plan)
 	}
 }
 
+/* A frame slot operand: a CV or temporary with its storage. */
+static bool fused_slot_operand(const zend_mir_source_operand_ref &operand,
+		zend_mir_storage_id storage, zend_mir_source_slot_kind kind) {
+	return (operand.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+			|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+		&& operand.slot_kind == kind && zend_mir_id_is_valid(storage);
+}
+
+/*
+ * A producer whose value an array read can use in place: a cached
+ * declared property read, or an element read of a CV, a literal or a
+ * fused producer's value under a literal or CV key.
+ */
+static bool fused_container_producer(const zend_tpde_instruction &producer) {
+	const zend_mir_executable_value_ref &operation = producer.value_operation;
+	zend_tpde_object_property_read property{};
+	if (zend_tpde_object_property_read_at(producer, &property)
+			|| zend_tpde_object_property_isset_read_at(producer, &property)) {
+		return true;
+	}
+	return ((operation.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+				&& operation.source_opcode == ZEND_FETCH_DIM_R)
+			|| (operation.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS
+				&& operation.source_opcode == ZEND_FETCH_DIM_IS))
+		&& (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| fused_slot_operand(operation.op1, operation.op1_storage_id,
+				ZEND_MIR_SOURCE_SLOT_CV)
+			|| (producer.fused_container_plus_one != 0
+				&& fused_slot_operand(operation.op1,
+					operation.op1_storage_id, ZEND_MIR_SOURCE_SLOT_TMP)))
+		&& (operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| fused_slot_operand(operation.op2, operation.op2_storage_id,
+				ZEND_MIR_SOURCE_SLOT_CV))
+		&& operation.op1_storage_id != operation.result_storage_id
+		&& operation.op2_storage_id != operation.result_storage_id;
+}
+
+/*
+ * A property or element read whose temporary only feeds the FETCH_DIM_R,
+ * FETCH_DIM_IS, isset() or empty() right after it would copy the value
+ * there, counting it, for the consumer to probe it and release it again.
+ * Let the consumer evaluate the producer and probe the value in place; a
+ * temporary exists only on the way to the helpers (Linux x64).
+ */
+void freeze_fused_container_reads(zend_tpde_plan *plan)
+{
+	if (!zend_tpde_linux_inline_forms || plan->user_opcode_callbacks
+			|| plan->value_consumer_offsets == nullptr
+			|| plan->value_consumers == nullptr) {
+		return;
+	}
+	for (uint32_t index = 0; index + 1 < plan->instruction_count; ++index) {
+		zend_tpde_instruction &producer = plan->instructions[index];
+		zend_tpde_instruction &consumer = plan->instructions[index + 1];
+		const zend_mir_executable_value_ref &produced =
+			producer.value_operation;
+		const zend_mir_executable_value_ref &consumed =
+			consumer.value_operation;
+		if (!producer.has_value_operation || !consumer.has_value_operation
+				|| (producer.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0
+				|| (producer.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_REGISTER_RESULT) != 0
+				|| (consumer.machine_control_flow_flags
+					& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0
+				|| consumer.fused_into_branch
+				|| !((consumed.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+						&& consumed.source_opcode == ZEND_FETCH_DIM_R)
+					|| (consumed.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS
+						&& consumed.source_opcode == ZEND_FETCH_DIM_IS)
+					|| (consumed.opcode
+							== ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM
+						&& consumed.source_opcode
+							== ZEND_ISSET_ISEMPTY_DIM_OBJ))
+				|| produced.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				|| !zend_mir_id_is_valid(produced.result_storage_id)
+				|| !fused_slot_operand(consumed.op1, consumed.op1_storage_id,
+					ZEND_MIR_SOURCE_SLOT_TMP)
+				|| consumed.op1_storage_id != produced.result_storage_id
+				|| consumed.op2_storage_id == produced.result_storage_id
+				/* The forms array_element() lowers: a literal or slot key
+				 * and a temporary result in its own slot. */
+				|| (consumed.op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+					&& !fused_slot_operand(consumed.op2,
+						consumed.op2_storage_id, ZEND_MIR_SOURCE_SLOT_CV)
+					&& !fused_slot_operand(consumed.op2,
+						consumed.op2_storage_id, ZEND_MIR_SOURCE_SLOT_TMP))
+				|| (consumed.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+					&& consumed.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+				|| !zend_mir_id_is_valid(consumed.result_storage_id)
+				|| consumed.result_storage_id == consumed.op1_storage_id
+				|| consumed.result_storage_id == consumed.op2_storage_id
+				|| producer.record.block_id != consumer.record.block_id
+				|| !fused_container_producer(producer)) {
+			continue;
+		}
+		/* The temporary has no register value that a statepoint would
+		 * store over the placeholders the consumer leaves there. */
+		const int32_t result_index = machine_source_binding_value_index(
+			plan, producer.source_result_binding);
+		if (result_index < 0
+				|| plan->values[static_cast<uint32_t>(result_index)]
+					.register_authoritative
+				|| machine_single_source_consumer(plan, result_index)
+					!= static_cast<int32_t>(index + 1)) {
+			continue;
+		}
+		producer.fused_into_container = true;
+		consumer.fused_container_plus_one = index + 1;
+		require_runtime_helper(plan, ZEND_NATIVE_HELPER_VALUE_FUSED_CONTAINER);
+		/* The consumer's statepoint published the producer's value into
+		 * the temporary; the markers and their helper own it now. */
+		zend_tpde_materialization *records = plan->materializations.get()
+			+ consumer.materialization_offset;
+		uint32_t kept = 0;
+		for (uint32_t record = 0; record < consumer.materialization_count;
+				++record) {
+			if (records[record].storage_id != produced.result_storage_id) {
+				records[kept++] = records[record];
+			}
+		}
+		consumer.materialization_count = kept;
+	}
+}
+
 /* The MIR definition, else the first instruction whose source result
  * is the value. */
 static int32_t register_boolean_value_definition(

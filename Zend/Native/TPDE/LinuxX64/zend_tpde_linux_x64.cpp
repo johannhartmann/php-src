@@ -5505,6 +5505,13 @@ public:
 		AsmReg element_reg{};
 		AsmReg answer_reg{};
 		tpde::Label unknown{};
+		/* The container is the value of the producers fused into it
+		 * (freeze_fused_container_reads()), outermost first: slow
+		 * stores their markers and continues at fused_slow. */
+		bool fused = false;
+		std::vector<const zend_tpde_instruction *> fused_chain{};
+		tpde::Label fused_slow{};
+		ScratchReg *fused_pointer = nullptr;
 	};
 	/* The frame, registers and addresses array_element() owns. */
 	struct ArrayElementRegisters {
@@ -5546,8 +5553,21 @@ public:
 	int array_element_result(
 		ArrayElementContext &ae, ArrayElementRegisters &er);
 	int array_element_register(InstContext &ctx);
+	void array_element_finish(
+		ArrayElementContext &ae, ArrayElementRegisters &er);
+	std::vector<const zend_tpde_instruction *> fused_container_chain(
+		const zend_tpde_instruction &consumer) const;
+	void store_fused_markers(
+		std::span<const zend_tpde_instruction *const> chain,
+		AsmReg frame_reg, uint32_t failed, AsmReg pointer);
+	bool fused_container(ArrayElementContext &ae, AsmReg frame_reg,
+		AsmReg literals_reg, ScratchReg &pointer);
+	bool fused_producer(const zend_tpde_instruction &producer,
+		AsmReg frame_reg, AsmReg literals_reg, AsmReg container_reg,
+		ScratchReg &pointer, tpde::Label failed);
+	bool emit_fused_container_helpers(const zend_tpde_instruction &consumer);
 	bool read_array(InstContext &ctx);
-	bool fused_into_branch_placeholder(InstContext &ctx);
+	bool fused_placeholder(InstContext &ctx);
 	int type_check_inline(InstContext &ctx);
 	int identical_literal(InstContext &ctx);
 	int key_exists_inline(InstContext &ctx);
@@ -11125,6 +11145,13 @@ bool ZendCompilerX64::execute_value_operation_with(
 	if (!emit_deopt_stress_transfer(node.mir_instruction_index)) {
 		return false;
 	}
+	/* A fused container's temporary, after a transfer, which resumes
+	 * here with the markers. */
+	if (node.kind == Adaptor::InstKind::GuardedCold
+			&& mir.fused_container_plus_one != 0 && !ir().typed_body()
+			&& !emit_fused_container_helpers(mir)) {
+		return false;
+	}
 	/* CHECK_UNDEF_ARGS: only a pending frame flagged as possibly
 	 * holding undefined arguments needs the helper. */
 	if (helper == ZEND_NATIVE_HELPER_VALUE_CHECK_UNDEF_ARGS
@@ -12066,6 +12093,11 @@ bool ZendCompilerX64::branch_to_guarded_cold(InstContext &ctx) {
 			|| node.argument_index == UINT32_MAX) {
 		return false;
 	}
+	/* The cold block runs every read fused into the container. */
+	if (mir.fused_container_plus_one != 0 && !ir().typed_body()) {
+		store_fused_markers(fused_container_chain(mir),
+			canonical_frame_register(), 0, AsmReg::make_invalid());
+	}
 	for (IRValueRef operand : node.operands) {
 		if (ir().machine_reference(operand, nullptr)) {
 			continue;
@@ -12783,12 +12815,42 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			}
 		}
 	}
+	/* A fused element read of a literal container or under a literal
+	 * key that is no integer reads the literals too. */
+	const bool producer_literals = std::any_of(ae.fused_chain.begin(),
+		ae.fused_chain.end(), [&](const zend_tpde_instruction *producer) {
+			const zend_mir_executable_value_ref &read =
+				producer->value_operation;
+			const zend_tpde_plan *plan = ir().plan();
+			return (read.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+					|| read.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS)
+				&& (read.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| (read.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+						&& Z_TYPE(plan->source_literals[read.op2.index])
+							!= IS_LONG));
+		});
+	const bool consumer_literals = ae.container_literal || ae.value_literal
+		|| (ae.key_literal && ae.literal_key != LiteralKey::Index);
 	ScratchReg literals{this};
 	AsmReg literals_reg = frame_reg;
-	if (ae.container_literal || ae.value_literal
-			|| (ae.key_literal && ae.literal_key != LiteralKey::Index)) {
+	if (consumer_literals || producer_literals) {
 		literals_reg = literals.alloc_gp();
 		emit_literal_base(literals_reg, frame_reg);
+	}
+	/* The producers fused into the container leave its address; the
+	 * operation's failures store their markers first. */
+	ScratchReg fused_pointer{this};
+	if (ae.fused) {
+		ae.fused_slow = ae.slow;
+		ae.slow = text_writer.label_create();
+		ae.fused_pointer = &fused_pointer;
+		if (!fused_container(ae, frame_reg, literals_reg, fused_pointer)) {
+			return -1;
+		}
+		if (!consumer_literals) {
+			literals.reset();
+			literals_reg = frame_reg;
+		}
 	}
 	/* The operation consumes a temporary key: one that needs a release
 	 * (a counted string) takes the helper. */
@@ -12818,8 +12880,8 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 			generate_raw_jump(Jump::je, ae.slow);
 		}
 	}
-	const AsmReg container_base =
-		ae.container_literal ? literals_reg : frame_reg;
+	const AsmReg container_base = ae.fused ? fused_pointer.cur_reg()
+		: ae.container_literal ? literals_reg : frame_reg;
 	ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
 	auto container_address = address(container_base, ae.container_offset);
 	auto key_address = ae.key_literal
@@ -12851,9 +12913,11 @@ int ZendCompilerX64::array_element(InstContext &ctx, ElementAccess access) {
 	 * its own lookup. */
 	ae.reuse_store = access == ElementAccess::Isset
 		&& reuse_read != IRInstRef{UINT32_MAX} && !ae.container_temporary
+		&& !ae.fused
 		&& !ae.register_key && ae.literal_key != LiteralKey::Register;
 	ae.reuse_load = (access == ElementAccess::Read
 			|| (access == ElementAccess::Write && !ae.container_var))
+		&& !ae.fused
 		&& lookup_reuse_armed(instruction) && !ae.register_key
 		&& ae.literal_key != LiteralKey::Register
 		&& unlocked_gp_registers() >= 10;
@@ -12899,12 +12963,23 @@ int ZendCompilerX64::array_element_layout(ArrayElementContext &ae) {
 		&& ir().representation(node.operands[0])
 			== ZEND_MIR_REPRESENTATION_I64;
 	/* A container or key held as a machine value is published to its
-	 * frame slot first, as the helper of the cold block reads it. */
+	 * frame slot first, as the helper of the cold block reads it. A
+	 * fused container's temporary holds the placeholders the markers
+	 * replace. */
+	ae.fused = ae.ctx.mir->fused_container_plus_one != 0
+		&& !ir().typed_body();
 	std::vector<std::pair<IRValueRef, zend_mir_storage_id>> published;
+	std::vector<IRValueRef> placeholders;
 	for (IRValueRef operand : node.operands) {
 		if (operand == IRValueRef{Adaptor::FRAME_VALUE}
 				|| operand == IRValueRef{
 					Adaptor::EXECUTION_CONTEXT_ARGUMENT}) {
+			continue;
+		}
+		if (ae.fused
+				&& ir().canonical_storage(operand)
+					== operation.op1_storage_id) {
+			placeholders.push_back(operand);
 			continue;
 		}
 		/* An element reference only describes the packed form; the
@@ -13079,7 +13154,9 @@ int ZendCompilerX64::array_element_layout(ArrayElementContext &ae) {
 					| MAY_BE_REF | MAY_BE_INDIRECT)) == MAY_BE_ARRAY;
 	}();
 	/* The lookup snippets use up to seven scratch registers; with the
-	 * literal register held across them, one stays spare. */
+	 * literal register held across them, one stays spare, which a fused
+	 * container's address takes (the literals are held only for a
+	 * lookup that reads them). */
 	if (ae.container_offset > INT32_MAX - sizeof(zval)
 			|| ae.key_offset > INT32_MAX - sizeof(zval)
 			|| ae.result_offset > INT32_MAX - sizeof(zval)
@@ -13087,10 +13164,19 @@ int ZendCompilerX64::array_element_layout(ArrayElementContext &ae) {
 			|| unlocked_gp_registers() < 9) {
 		return 0;
 	}
+	if (ae.fused) {
+		ae.fused_chain = fused_container_chain(*ae.ctx.mir);
+		ae.container_temporary = false;
+		ae.container_offset = 0;
+	}
 	for (const auto &[operand, storage] : published) {
 		if (!materialize_cold_operand(ae.ctx, operand, storage)) {
 			return -1;
 		}
+	}
+	for (IRValueRef operand : placeholders) {
+		auto consumed = val_ref(operand);
+		(void) consumed;
 	}
 	return 1;
 }
@@ -13270,8 +13356,7 @@ int ZendCompilerX64::array_element_isset(
 		store_bool_slot(er.frame_reg, static_cast<int32_t>(ae.result_offset), BoolSlotSource::InPlace, answer_reg);
 	}
 	er.answer.reset();
-	finish_guarded(ae.slow, ae.done, std::move(er.decision), er.frame_scratch,
-		ae.successors);
+	array_element_finish(ae, er);
 	return 1;
 }
 
@@ -13981,9 +14066,300 @@ int ZendCompilerX64::array_element_result(
 		store_bool_slot(er.frame_reg, static_cast<int32_t>(ae.result_offset), BoolSlotSource::InPlace, ae.answer_reg);
 	}
 	er.answer.reset();
+	array_element_finish(ae, er);
+	return 1;
+}
+
+/* The guarded exit: through the fused producers' markers when a failure
+ * leaves the fused container's address. */
+void ZendCompilerX64::array_element_finish(
+		ArrayElementContext &ae, ArrayElementRegisters &er) {
+	if (ae.fused) {
+		cold_begin();
+		label_place(ae.slow);
+		store_fused_markers(ae.fused_chain, er.frame_reg,
+			static_cast<uint32_t>(ae.fused_chain.size()), er.container_base);
+		generate_raw_jump(Jump::jmp, ae.fused_slow);
+		cold_end();
+		ae.fused_pointer->reset();
+		ae.slow = ae.fused_slow;
+	}
 	finish_guarded(ae.slow, ae.done, std::move(er.decision), er.frame_scratch,
 		ae.successors);
-	return 1;
+}
+
+/* The producers fused into a consumer's container, outermost first. */
+std::vector<const zend_tpde_instruction *>
+ZendCompilerX64::fused_container_chain(
+		const zend_tpde_instruction &consumer) const {
+	std::vector<const zend_tpde_instruction *> chain;
+	for (const zend_tpde_instruction *current = &consumer;
+			current->fused_container_plus_one != 0;) {
+		current = &ir().plan()->instructions[
+			current->fused_container_plus_one - 1];
+		chain.push_back(current);
+	}
+	std::reverse(chain.begin(), chain.end());
+	return chain;
+}
+
+/*
+ * What zend_native_value_fused_container() reads when a level of a fused
+ * chain failed (the consumer's is the chain's length): the address of the
+ * failed level's container in the temporary of the read that produced it
+ * (IS_PTR), and the level in the consumer's container. OPcache reuses the
+ * temporaries along a chain, so each read decides by the level, not by
+ * its temporary.
+ */
+void ZendCompilerX64::store_fused_markers(
+		std::span<const zend_tpde_instruction *const> chain,
+		AsmReg frame_reg, uint32_t failed, AsmReg pointer) {
+	if (failed != 0) {
+		const int32_t offset = static_cast<int32_t>(frame_slot_offset(
+			chain[failed - 1]->value_operation.result_storage_id));
+		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, offset), pointer);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+			offset + static_cast<int32_t>(offsetof(zval, u1.type_info))),
+			IS_PTR);
+	}
+	ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+		static_cast<int32_t>(frame_slot_offset(
+			chain.back()->value_operation.result_storage_id)
+			+ offsetof(zval, u2.extra))),
+		static_cast<int32_t>(failed));
+}
+
+/*
+ * The fast paths of the producers fused into the container of an array
+ * read (freeze_fused_container_reads()), outermost first: each finds the
+ * value its temporary would hold from the previous one's and leaves its
+ * address in pointer. Each failure stores the markers and takes the
+ * guarded cold block, whose helpers run the reads from there.
+ */
+bool ZendCompilerX64::fused_container(ArrayElementContext &ae,
+		AsmReg frame_reg, AsmReg literals_reg, ScratchReg &pointer) {
+	for (uint32_t level = 0; level < ae.fused_chain.size(); ++level) {
+		auto failed = text_writer.label_create();
+		ScratchReg found{this};
+		const AsmReg container_reg =
+			level == 0 ? AsmReg::make_invalid() : pointer.cur_reg();
+		if (!fused_producer(*ae.fused_chain[level], frame_reg, literals_reg,
+				container_reg, found, failed)) {
+			return false;
+		}
+		cold_begin();
+		label_place(failed);
+		store_fused_markers(ae.fused_chain, frame_reg, level, container_reg);
+		generate_raw_jump(Jump::jmp, ae.fused_slow);
+		cold_end();
+		pointer = std::move(found);
+	}
+	return true;
+}
+
+/*
+ * The fast path of one fused producer, reading the container at
+ * container_reg, or its own operand without one: the address of the
+ * value it would copy into its temporary, never a reference, in pointer.
+ * A cached declared property is read through its slot; an element of an
+ * array under a literal or CV key is found by the read's probes, a
+ * missing one of FETCH_DIM_IS (or a null container) reads the null it
+ * stores into its own temporary. Anything else jumps to failed.
+ */
+bool ZendCompilerX64::fused_producer(const zend_tpde_instruction &producer,
+		AsmReg frame_reg, AsmReg literals_reg, AsmReg container_reg,
+		ScratchReg &pointer, tpde::Label failed) {
+	const zend_mir_executable_value_ref &operation = producer.value_operation;
+	zend_tpde_object_property_read property;
+	if (zend_tpde_object_property_read_at(producer, &property)
+			|| zend_tpde_object_property_isset_read_at(producer, &property)) {
+		ScratchReg cache{this};
+		ASM(MOV64rm, cache.alloc_gp(), FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, run_time_cache))));
+		ValuePart slot{tpde::x64::PlatformConfig::GP_BANK, 8};
+		GenericValuePart receiver{GenericValuePart::Expr{frame_reg,
+			static_cast<int64_t>(property.receiver_offset)}};
+		GenericValuePart cache_entry{GenericValuePart::Expr{
+			std::move(cache), static_cast<int64_t>(property.cache_offset)}};
+		if (!(receiver_is_object(operation)
+				? EncodeBase::encode_zend_native_object_property_read_slot(
+					std::move(receiver), std::move(cache_entry), slot)
+				: EncodeBase::encode_zend_native_property_read_slot(
+					std::move(receiver), std::move(cache_entry), slot))) {
+			return false;
+		}
+		const AsmReg slot_reg = slot.cur_reg_or_load(this);
+		ASM(TEST64rr, slot_reg, slot_reg);
+		generate_raw_jump(Jump::je, failed);
+		pointer = std::move(slot).into_scratch(this);
+		return true;
+	}
+	const zend_tpde_plan *plan = ir().plan();
+	const bool coalesce = operation.source_opcode == ZEND_FETCH_DIM_IS;
+	const AsmReg container_base = container_reg.valid() ? container_reg
+		: operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		? literals_reg : frame_reg;
+	const int32_t container_offset = container_reg.valid() ? 0
+		: operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+		? static_cast<int32_t>(operation.op1.index * sizeof(zval))
+		: static_cast<int32_t>(frame_slot_offset(operation.op1_storage_id));
+	const bool key_literal =
+		operation.op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
+	const zval *literal = key_literal
+		? &plan->source_literals[operation.op2.index] : nullptr;
+	const AsmReg key_base = key_literal ? literals_reg : frame_reg;
+	const int32_t key_offset = key_literal
+		? static_cast<int32_t>(operation.op2.index * sizeof(zval))
+		: static_cast<int32_t>(frame_slot_offset(operation.op2_storage_id));
+	auto container = [&] { return address(container_base, container_offset); };
+	auto key = [&] { return address(key_base, key_offset); };
+	auto constant = [&](uint64_t value) {
+		return GenericValuePart{ValuePartRef{this, value, 8,
+			tpde::x64::PlatformConfig::GP_BANK}};
+	};
+	ValuePart element{tpde::x64::PlatformConfig::GP_BANK, 8};
+	bool found;
+	if (literal != nullptr && Z_TYPE_P(literal) == IS_LONG) {
+		const uint64_t index = static_cast<uint64_t>(Z_LVAL_P(literal));
+		found = coalesce
+			? EncodeBase::encode_zend_native_array_test_idx(
+				container(), constant(index), element)
+			: EncodeBase::encode_zend_native_array_find_idx(
+				container(), constant(index), element);
+	} else if (literal != nullptr && Z_TYPE_P(literal) == IS_STRING
+			&& ZSTR_H(Z_STR_P(literal)) != 0) {
+		ScratchReg name{this};
+		ASM(MOV64rm, name.alloc_gp(),
+			FE_MEM(literals_reg, 0, FE_NOREG, key_offset));
+		const uint64_t hash = ZSTR_H(Z_STR_P(literal));
+		found = coalesce
+			? EncodeBase::encode_zend_native_array_test_str(container(),
+				GenericValuePart{std::move(name)}, constant(hash), element)
+			: EncodeBase::encode_zend_native_array_find_str(container(),
+				GenericValuePart{std::move(name)}, constant(hash), element);
+	} else if (key_literal) {
+		found = coalesce
+			? EncodeBase::encode_zend_native_array_test_literal(
+				container(), key(), element)
+			: EncodeBase::encode_zend_native_array_find_literal(
+				container(), key(), element);
+	} else {
+		found = coalesce
+			? EncodeBase::encode_zend_native_array_test_key(
+				container(), key(), element)
+			: EncodeBase::encode_zend_native_array_find_key(
+				container(), key(), element);
+	}
+	if (!found) {
+		return false;
+	}
+	const AsmReg element_reg = element.cur_reg_or_load(this);
+	auto unknown = text_writer.label_create();
+	auto absent = text_writer.label_create();
+	auto decide = text_writer.label_create();
+	auto resolved = text_writer.label_create();
+	label_place(decide);
+	ASM(CMP64ri, element_reg,
+		static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+	generate_raw_jump(Jump::jb, unknown);
+	generate_raw_jump(Jump::je, coalesce ? absent : failed);
+	/* An element that is a reference reads as its value. */
+	ASM(CMP8mi, FE_MEM(element_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(zval, u1.v.type))), IS_REFERENCE);
+	emit_cold_branch(Jump::je, resolved, [&] {
+		ASM(MOV64rm, element_reg, FE_MEM(element_reg, 0, FE_NOREG, 0));
+		ASM(LEA64rm, element_reg, FE_MEM(element_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_reference, val))));
+	});
+	cold_begin();
+	/* A key the probe cannot decide is found in C, as array_element()
+	 * does. */
+	label_place(unknown);
+	if (!(literal != nullptr && Z_TYPE_P(literal) == IS_LONG)
+			&& optional_runtime_symbol(
+				ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT).valid()) {
+		emit_find_element_filter(container_base, container_offset, key_base,
+			key_offset, failed);
+		emit_find_element_call(element_reg,
+			coalesce ? ZEND_NATIVE_FIND_TEST : 0, frame_reg,
+			container_base, container_offset, key_base, key_offset);
+		ASM(CMP64ri, element_reg,
+			static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
+		generate_raw_jump(Jump::ja, decide);
+		generate_raw_jump(Jump::jb, failed);
+		generate_raw_jump(Jump::jmp, coalesce ? absent : failed);
+	} else {
+		generate_raw_jump(Jump::jmp, failed);
+	}
+	if (coalesce) {
+		const int32_t result_offset = static_cast<int32_t>(
+			frame_slot_offset(operation.result_storage_id));
+		label_place(absent);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, result_offset
+			+ static_cast<int32_t>(offsetof(zval, u1.type_info))), IS_NULL);
+		ASM(LEA64rm, element_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG, result_offset));
+		generate_raw_jump(Jump::jmp, resolved);
+	}
+	cold_end();
+	pointer = std::move(element).into_scratch(this);
+	return true;
+}
+
+/*
+ * The fused producers' temporaries, before the consumer's helper reads
+ * its container: zend_native_value_fused_container() of each, outermost
+ * first, with the producer's operands as its helper takes them and its
+ * level.
+ */
+bool ZendCompilerX64::emit_fused_container_helpers(
+		const zend_tpde_instruction &consumer) {
+	const auto chain = fused_container_chain(consumer);
+	const uint64_t container = frame_slot_offset(
+		consumer.value_operation.op1_storage_id);
+	for (uint32_t level = 0; level < chain.size(); ++level) {
+		const zend_tpde_instruction *producer = chain[level];
+		const zend_mir_executable_value_ref &operation =
+			producer->value_operation;
+		const bool payloads = zend_tpde_helper_has_unused_operand_payloads(
+			producer->runtime_helper);
+		tpde::x64::CCAssignerSysV assigner{false};
+		CallBuilder builder{*this, assigner};
+		ScratchReg frame_copy{this};
+		ASM(MOV64rr, frame_copy.alloc_gp(), canonical_frame_register());
+		ValuePart frame_argument{tpde::x64::PlatformConfig::GP_BANK, 8};
+		frame_argument.set_value(this, std::move(frame_copy));
+		builder.add_arg(std::move(frame_argument), tpde::CCAssignment{});
+		add_const_arg(builder, payloads
+			? encode_source_operand(operation.op1,
+				operation.op1_unused_payload)
+			: encode_source_operand(operation.op1), 8);
+		add_const_arg(builder, payloads
+			? encode_source_operand(operation.op2,
+				operation.op2_unused_payload)
+			: encode_source_operand(operation.op2), 8);
+		add_const_arg(builder, payloads
+			? encode_source_operand(operation.result,
+				operation.result_unused_payload)
+			: encode_source_operand(operation.result), 8);
+		for (uint32_t value : {operation.extended_value,
+				operation.source_opcode, operation.source_position_id}) {
+			add_const_arg(builder, value, 4);
+		}
+		add_const_arg(builder, level | container << 32, 8);
+		builder.call(runtime_symbol(ZEND_NATIVE_HELPER_VALUE_FUSED_CONTAINER));
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		builder.add_ret(status, tpde::CCAssignment{});
+		auto status_reg = status.cur_reg_or_load(this);
+		ASM(CMP32ri, status_reg, ZEND_NATIVE_RETURNED);
+		auto returned = text_writer.label_create();
+		generate_raw_jump(Jump::je, returned);
+		status.reset(this);
+		emit_exception_exit(zend_mir_id_is_valid(producer->exception_block_id)
+			? producer->exception_block_id : consumer.exception_block_id);
+		label_place(returned);
+	}
+	return true;
 }
 
 /*
@@ -14232,19 +14608,23 @@ bool ZendCompilerX64::read_array(InstContext &ctx) {
 			element != 0) {
 		return element > 0;
 	}
-	if (const int element = array_element_register(ctx); element != 0) {
-		return element > 0;
+	/* A fused container has no register value. */
+	if (ctx.mir->fused_container_plus_one == 0 || ir().typed_body()) {
+		if (const int element = array_element_register(ctx); element != 0) {
+			return element > 0;
+		}
 	}
 	return branch_to_guarded_cold(ctx);
 }
 
 /*
  * A comparison or TYPE_CHECK fused into the following branch (see
- * freeze_fused_compare_branches): the branch evaluates it. Its operands,
- * including boundary transports, are dead; statepoint materializations
- * were consumed already.
+ * freeze_fused_compare_branches), or a read fused into the array read of
+ * its value (freeze_fused_container_reads): the consumer evaluates it.
+ * Its operands, including boundary transports, are dead; statepoint
+ * materializations were consumed already.
  */
-bool ZendCompilerX64::fused_into_branch_placeholder(InstContext &ctx) {
+bool ZendCompilerX64::fused_placeholder(InstContext &ctx) {
 	const IRInstRef instruction = ctx.instruction;
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &mir = *ctx.mir;
@@ -18844,9 +19224,11 @@ bool ZendCompilerX64::compile_object_dynamic(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &mir = *ctx.mir;
 	const zend_mir_instruction_record &record = ctx.record;
-	if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
-			&& mir.fused_into_branch && !ir().typed_body()) {
-		return fused_into_branch_placeholder(ctx);
+	if (((record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
+					&& mir.fused_into_branch)
+				|| mir.fused_into_container)
+			&& !ir().typed_body()) {
+		return fused_placeholder(ctx);
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK
 			&& node.kind == Adaptor::InstKind::GuardedFast) {
@@ -25203,12 +25585,18 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 		case ZEND_MIR_OPCODE_VALUE_ADD_ARRAY_UNPACK:
 			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R:
+			if (mir.fused_into_container && !ir().typed_body()) {
+				return fused_placeholder(ctx);
+			}
 			return read_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_W:
 			return write_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_RW:
 			return write_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_IS:
+			if (mir.fused_into_container && !ir().typed_body()) {
+				return fused_placeholder(ctx);
+			}
 			return coalesce_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_DIM_FUNC_ARG:
 			return execute_value_operation(ctx);
@@ -25222,7 +25610,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 			if (mir.fused_into_branch && !ir().typed_body()) {
-				return fused_into_branch_placeholder(ctx);
+				return fused_placeholder(ctx);
 			}
 			return isset_array(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:
@@ -25237,7 +25625,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
 			if (mir.fused_into_branch && !ir().typed_body()) {
-				return fused_into_branch_placeholder(ctx);
+				return fused_placeholder(ctx);
 			}
 			return long_binary(ctx);
 		case ZEND_MIR_OPCODE_VALUE_UNARY_OP:
@@ -25246,7 +25634,7 @@ bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
 			return execute_value_operation(ctx);
 		case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_CV:
 			if (mir.fused_into_branch && !ir().typed_body()) {
-				return fused_into_branch_placeholder(ctx);
+				return fused_placeholder(ctx);
 			}
 			return slot_isset_empty(ctx);
 		case ZEND_MIR_OPCODE_VALUE_FETCH_LIST:

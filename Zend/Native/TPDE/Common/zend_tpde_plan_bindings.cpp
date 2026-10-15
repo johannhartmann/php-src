@@ -1198,10 +1198,12 @@ bool freeze_entry_undef_temporaries(
 			return false;
 		}
 		if (storage >= first_temporary) {
-			/* A helper of an operation fused into its branch runs after
-			 * the branch stored a placeholder into its result (Zend
-			 * entry), which is as fresh as an initialized one. */
-			if (instruction.fused_into_branch) {
+			/* A helper of an operation fused into its branch or its
+			 * consumer runs after that stored a placeholder into its
+			 * result (Zend entry), which is as fresh as an initialized
+			 * one. */
+			if (instruction.fused_into_branch
+					|| instruction.fused_into_container) {
 				if (required[storage - first_temporary] == 0) {
 					fused_need[storage - first_temporary] = 1;
 				}

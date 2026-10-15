@@ -499,6 +499,12 @@ struct zend_tpde_instruction {
 	 * targets directly (1 + the comparison's index on the branch). */
 	bool fused_into_branch;
 	uint32_t fused_compare_plus_one;
+	/* A property or element read whose only consumer is the array read
+	 * right after it, which uses the value in place: in a Zend entry the
+	 * consumer evaluates it and its temporary only exists on the way to
+	 * the helpers (1 + the producer's index on the consumer). */
+	bool fused_into_container;
+	uint32_t fused_container_plus_one;
 	/* A Zend-entry typed call whose body may fail: a failed call takes the
 	 * canonical cold call instead. */
 	bool typed_call_may_fail;

@@ -16,6 +16,7 @@
 #include "Zend/Native/Lowering/zend_mir_lowering_source.h"
 #include "Zend/Native/Runtime/Common/zend_native_operands.h"
 #include "Zend/Native/Runtime/Common/zend_native_calls.h"
+#include "Zend/Native/Runtime/Common/zend_native_objects.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -5372,6 +5373,46 @@ zend_native_status zend_native_value_fetch_dim_is(
 	return zend_native_value_fetch_dim_impl(
 		execute_data, op1, op2, result, extended_value, source_opcode,
 		source_position_id, ZEND_FETCH_DIM_IS, ZEND_NATIVE_DIM_IS, tried);
+}
+
+zend_native_status zend_native_value_fused_container(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint64_t level)
+{
+	zval *temporary = ZEND_NATIVE_OPERAND_VAR(execute_data, result);
+	const uint32_t failed = Z_EXTRA_P(
+		(zval *) ((char *) execute_data + (level >> 32)));
+	zval *value;
+
+	if ((uint32_t) level + 1 < failed) {
+		return ZEND_NATIVE_RETURNED;
+	}
+	if ((uint32_t) level + 1 == failed) {
+		value = Z_PTR_P(temporary);
+		if (value == temporary) {
+			ZVAL_NULL(temporary);
+		} else {
+			ZVAL_COPY_DEREF(temporary, value);
+		}
+		return ZEND_NATIVE_RETURNED;
+	}
+	ZVAL_UNDEF(temporary);
+	switch (source_opcode) {
+		case ZEND_FETCH_OBJ_R:
+			return zend_native_execute_object_fetch_r(execute_data, op1, op2,
+				result, extended_value, source_opcode, source_position_id);
+		case ZEND_FETCH_OBJ_IS:
+			return zend_native_execute_object_fetch_is(execute_data, op1, op2,
+				result, extended_value, source_opcode, source_position_id);
+		case ZEND_FETCH_DIM_R:
+			return zend_native_value_fetch_dim_r(execute_data, op1, op2,
+				result, extended_value, source_opcode, source_position_id);
+		default: /* ZEND_FETCH_DIM_IS */
+			return zend_native_value_fetch_dim_is(execute_data, op1, op2,
+				result, extended_value, source_opcode, source_position_id);
+	}
 }
 
 /* FETCH_DIM_FUNC_ARG for a by-value parameter reads like FETCH_DIM_R. */

@@ -3290,6 +3290,7 @@ static bool freeze_plan_passes(plan_builder &builder) {
 	}
 	freeze_register_boolean_results(plan);
 	freeze_fused_compare_branches(plan);
+	freeze_fused_container_reads(plan);
 	/* After the fusion: a fused operation's helper needs no initialized
 	 * destination in the Zend entry. */
 	if (!freeze_entry_undef_temporaries(plan, source_op_array, diag)) {

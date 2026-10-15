@@ -258,6 +258,21 @@ zend_native_status zend_native_value_isset_isempty_dim(
 	uint64_t op1, uint64_t op2, uint64_t result,
 	uint32_t extended_value, uint32_t source_opcode,
 	uint32_t source_position_id);
+/*
+ * The temporary of a read fused into the array read of its value, before
+ * the consumer's helper reads it. level holds the read's position in the
+ * fused chain (low word) and the byte offset of the consumer's container
+ * (high word), whose u2.extra names the level that failed: a read before
+ * the one that produced that level's container does nothing, that read
+ * copies the value its temporary points to (IS_PTR), without its
+ * reference, or null when it points to the temporary itself, and the
+ * reads from the failed level on run (FETCH_OBJ_R/IS, FETCH_DIM_R/IS).
+ */
+zend_native_status zend_native_value_fused_container(
+	zend_execute_data *execute_data,
+	uint64_t op1, uint64_t op2, uint64_t result,
+	uint32_t extended_value, uint32_t source_opcode,
+	uint32_t source_position_id, uint64_t level);
 zend_native_status zend_native_value_fe_free(
 	zend_execute_data *execute_data,
 	uint64_t op1, uint64_t op2, uint64_t result,

@@ -3203,10 +3203,13 @@ void ZendIRAdaptor::Builder::mark_source_result_consumers() {
 			case ZEND_MIR_OPCODE_VALUE_ISSET_ISEMPTY_DIM:
 				/*
 				 * Guarded reads and isset/empty consume the array
-				 * payload and the key directly.
+				 * payload and the key directly; a fused container is
+				 * evaluated in place and has no value.
 				 */
-				mark_source_producer(
-					consumer.source_op1_binding);
+				if (consumer.fused_container_plus_one == 0) {
+					mark_source_producer(
+						consumer.source_op1_binding);
+				}
 				mark_source_producer(
 					consumer.source_op2_binding);
 				break;
@@ -6212,8 +6215,10 @@ bool ZendIRAdaptor::Builder::select_source_boxed_result(InstContext &ctx) {
 					== ZEND_TPDE_MACHINE_VALUE_STRING_PTR;
 		}
 	}
+	/* A read fused into its consumer has no value of its own. */
 	if (function_mode_ == FunctionMode::ZendEntry
 			&& ctx.instruction.has_value_operation
+			&& !ctx.instruction.fused_into_container
 			&& source_result_used[ctx.i] != 0
 			&& source_result_has_direct_consumer(ctx.i)) {
 		const zend_tpde_machine_reference *reference = nullptr;
@@ -7368,12 +7373,15 @@ void ZendIRAdaptor::Builder::add_boxed_boundary_operands(InstContext &ctx) {
 	if (function_mode_ == FunctionMode::ZendEntry
 			&& ctx.instruction.has_value_operation
 			&& zend_mir_opcode_is_executable_value(ctx.record.opcode)) {
-		ctx.boxed_op1_boundary = direct_boxed_source(ctx,
-			ctx.instruction.source_op1_binding,
-			ctx.instruction.value_operation.op1,
-			ctx.instruction.value_operation.op1_storage_id,
-			ctx.instruction.value_operation
-				.op1_definition_ssa_variable_id_plus_one);
+		/* The markers of a fused container own its temporary. */
+		ctx.boxed_op1_boundary = ctx.instruction.fused_container_plus_one != 0
+			? INVALID_VALUE_REF
+			: direct_boxed_source(ctx,
+				ctx.instruction.source_op1_binding,
+				ctx.instruction.value_operation.op1,
+				ctx.instruction.value_operation.op1_storage_id,
+				ctx.instruction.value_operation
+					.op1_definition_ssa_variable_id_plus_one);
 		ctx.boxed_op2_boundary = direct_boxed_source(ctx,
 			ctx.instruction.source_op2_binding,
 			ctx.instruction.value_operation.op2,
@@ -7470,10 +7478,13 @@ IRValueRef ZendIRAdaptor::Builder::direct_boxed_source(InstContext &ctx,
 
 void ZendIRAdaptor::Builder::emit_instruction_node(InstContext &ctx) {
 	add_node(block_instructions, static_cast<uint32_t>(ctx.block), InstNode{
+		/* A read fused into its consumer calls no helper itself. */
 		.kind = ctx.type_check_selection
 					!= ScalarTypeCheckSelection::Invalid
 				|| ctx.register_cond_branch
 				|| ctx.register_bool_unary_operand != INVALID_VALUE_REF
+				|| (ctx.instruction.fused_into_container
+					&& function_mode_ == FunctionMode::ZendEntry)
 			? InstKind::MIR
 			: ctx.record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE
 				&& !ctx.lazy_store

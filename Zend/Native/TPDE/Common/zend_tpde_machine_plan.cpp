@@ -3062,7 +3062,8 @@ static bool freeze_machine_cfg(
 				? !typed_body
 				: (instruction.machine_control_flow_flags
 						& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0
-					&& !(!typed_body && instruction.fused_into_branch)
+					&& !(!typed_body && (instruction.fused_into_branch
+						|| instruction.fused_into_container))
 					&& !(typed_body
 						&& (zend_tpde_typed_numeric_binary(plan, instruction)
 							|| zend_tpde_typed_forward_assign(instruction)));
