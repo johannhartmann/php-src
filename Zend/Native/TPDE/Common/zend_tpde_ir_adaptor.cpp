@@ -8850,7 +8850,9 @@ void ZendIRAdaptor::Builder::add_zend_frame_call_operands(InstContext &ctx) {
 			}
 			const bool leaf_scalar_frame =
 				(ctx.instruction.direct_call->flags
-					& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0;
+					& (ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME
+						| ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME))
+					!= 0;
 			frame_use_count = zend_tpde_direct_user_call_frame_uses(
 				leaf_scalar_frame, ctx.machine_result,
 				!leaf_scalar_frame
@@ -8879,7 +8881,9 @@ void ZendIRAdaptor::Builder::add_zend_frame_call_operands(InstContext &ctx) {
 				(ctx.instruction.direct_call->flags
 					& ZEND_NATIVE_DIRECT_CALL_INLINE_FRAME) != 0,
 				(ctx.instruction.direct_call->flags
-					& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0,
+					& (ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME
+						| ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME))
+					!= 0,
 				ctx.inlined_user_body.valid, ctx.machine_result);
 		for (uint32_t n = 0; n < context_use_count; ++n) {
 			operands_.push_back(

@@ -2418,6 +2418,57 @@ public:
 		reloc_text(symbol, tpde::elf::R_X86_64_PLT32,
 			text_writer.offset() - 4, -4);
 	}
+	/*
+	 * A helper of operation in a private frame (EX(call) is 1, see
+	 * zend_tpde_private_retry_body()): nothing ran that the caller can
+	 * see, so release what the failed read owns and return
+	 * ZEND_NATIVE_RETRY. Emitted where the frame's slots are complete,
+	 * before anything of the helper path.
+	 */
+	void emit_private_frame_retry(const zend_tpde_instruction &mir,
+			const zend_mir_executable_value_ref &operation) {
+		if (!ir().plan()->private_retry_frame || ir().typed_body()) {
+			return;
+		}
+		auto owned = [&](const zend_mir_source_operand_ref &operand,
+				zend_mir_storage_id storage) -> uint64_t {
+			if ((operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+						&& operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+					|| (operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+						&& operand.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+					|| !zend_mir_id_is_valid(storage)) {
+				return UINT32_MAX;
+			}
+			return frame_slot_offset(storage);
+		};
+		/* A fused container's temporary holds no value. */
+		const uint64_t op1 = mir.fused_container_plus_one != 0
+			? uint64_t{UINT32_MAX}
+			: owned(operation.op1, operation.op1_storage_id);
+		const uint64_t op2 = owned(operation.op2, operation.op2_storage_id);
+		auto retry = text_writer.label_create();
+		ASM(CMP64mi, FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, call))), 1);
+		generate_raw_jump(Jump::je, retry);
+		cold_begin();
+		label_place(retry);
+		this->stack.generated_call = true;
+		ASM(LEA64rm, FE_DI,
+			FE_MEM(canonical_frame_register(), 0, FE_NOREG, 0));
+		ASM(MOV32ri, FE_SI,
+			static_cast<int32_t>(operation.source_position_id));
+		ASM(MOV64ri, FE_DX, static_cast<int64_t>(op1 | (op2 << 32)));
+		emit_symbol_call(
+			runtime_symbol(ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY));
+		{
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(ValuePart{ZEND_NATIVE_RETRY, 4,
+				tpde::x64::PlatformConfig::GP_BANK},
+				::tpde::CCAssignment{});
+			return_builder.ret_local_path();
+		}
+		cold_end();
+	}
 	/* reg = &symbol, RIP-relative. */
 	template <typename Reg>
 	void emit_symbol_address(Reg reg, tpde::SymRef symbol) {
@@ -5171,9 +5222,11 @@ public:
 	}
 	/* Whether ZEND_RETURN of a CV moves it (emit_return_cv_move()): an
 	 * observer's end handler sees the frame's CVs, a script's or an
-	 * eval's CVs belong to a symbol table; the VM copies those. */
+	 * eval's CVs belong to a symbol table, and a private frame's
+	 * arguments are borrowed; the VM copies those. */
 	bool return_moves_cv() {
 		return ir().plan()->source_function && !ZEND_OBSERVER_ENABLED
+			&& !ir().plan()->private_retry_frame
 			&& optional_runtime_symbol(
 				ZEND_NATIVE_HELPER_GC_POSSIBLE_ROOT).valid();
 	}
@@ -5851,6 +5904,9 @@ public:
 		bool local_component_call = false;
 		bool generated_fast_path = false;
 		bool private_inline_body = false;
+		/* The private frame is a read-only callee's, whose helpers retry
+		 * (ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME). */
+		bool private_retry_frame = false;
 		uint32_t typed_body_function = UINT32_MAX;
 		bool result_unused = false;
 		bool generation_leased = false;
@@ -5920,6 +5976,9 @@ public:
 	bool compile_direct_user_inlined_body(DirectUserCallContext &du);
 	bool compile_direct_user_typed_body(DirectUserCallContext &du);
 	bool emit_direct_user_fast_path(DirectUserCallContext &du);
+	void emit_private_frame_header(DirectUserCallContext &du,
+		AsmReg frame_reg, AsmReg context_reg, AsmReg cell_reg,
+		AsmReg callee_reg, AsmReg work_reg, AsmReg function_reg);
 	bool emit_direct_user_leaf_call(DirectUserCallContext &du,
 		ScratchReg &fast_callee_argument_register);
 	bool emit_direct_user_activation_call(DirectUserCallContext &du,
@@ -6599,6 +6658,7 @@ bool ZendCompilerX64::compile_boxed_cond_cold(IRInstRef instruction) {
 		generate_raw_jump(Jump::jmp, scalar_join);
 		label_place(scalar_helper);
 	}
+	emit_private_frame_retry(mir, mir.value_operation);
 	tpde::x64::CCAssignerSysV assigner{false};
 	CallBuilder builder{*this, assigner};
 	builder.add_arg(CallArg{node.operands[0]});
@@ -11164,6 +11224,7 @@ bool ZendCompilerX64::execute_value_operation_with(
 			&& operation.op2_unused_payload <= MAX_ARG_FLAG_NUM) {
 		return emit_quick_check_func_arg(vo);
 	}
+	emit_private_frame_retry(mir, operation);
 	if (!emit_deopt_stress_transfer(node.mir_instruction_index)) {
 		return false;
 	}
@@ -21055,7 +21116,11 @@ bool ZendCompilerX64::compile_direct_user_descriptor_call(
 		du.generated_fast_path
 		&& (call.direct_call->flags
 			& ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME) != 0;
-	du.private_inline_body = leaf_scalar_frame;
+	du.private_retry_frame =
+		du.generated_fast_path
+		&& (call.direct_call->flags
+			& ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME) != 0;
+	du.private_inline_body = leaf_scalar_frame || du.private_retry_frame;
 	du.typed_body_function =
 		du.local_component_call
 			&& ir().typed_component_call(instruction)
@@ -21615,6 +21680,81 @@ bool ZendCompilerX64::emit_direct_user_fast_path(DirectUserCallContext &du) {
 		du, fast_callee_argument_register);
 }
 
+/*
+ * The header of a read-only callee's private frame after its function
+ * (in function_reg) and call marker: the run-time cache, which a
+ * request's first call creates through the Zend frame, the borrowed
+ * receiver or called scope, call info and argument count, and the
+ * other CVs undefined. A frame probe observes every frame.
+ */
+void ZendCompilerX64::emit_private_frame_header(DirectUserCallContext &du,
+		AsmReg frame_reg, AsmReg context_reg, AsmReg cell_reg,
+		AsmReg callee_reg, AsmReg work_reg, AsmReg function_reg) {
+	const zend_native_direct_call_descriptor *descriptor =
+		du.call.direct_call;
+	ASM(CMP64mi, FE_MEM(cell_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(
+			zend_native_entry_cell, frame_probe))), 0);
+	generate_raw_jump(Jump::jne, call_slow_target(du));
+	ASM(MOV64rm, work_reg, FE_MEM(function_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(
+			zend_op_array, run_time_cache__ptr))));
+	auto pointer = text_writer.label_create();
+	ASM(TEST32ri, work_reg, 1);
+	generate_raw_jump(Jump::je, pointer);
+	ASM(MOV64rm, function_reg, FE_MEM(context_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(
+			zend_native_execution_context, map_ptr_base_address))));
+	ASM(MOV64rm, function_reg, FE_MEM(function_reg, 0, FE_NOREG, 0));
+	ASM(MOV64rm, work_reg, FE_MEM(function_reg, 1, work_reg, 0));
+	label_place(pointer);
+	ASM(TEST64rr, work_reg, work_reg);
+	generate_raw_jump(Jump::je, call_slow_target(du));
+	ASM(MOV64mr, FE_MEM(callee_reg, 0, FE_NOREG,
+		static_cast<int32_t>(offsetof(
+			zend_execute_data, run_time_cache))), work_reg);
+	const int32_t this_offset = static_cast<int32_t>(
+		offsetof(zend_execute_data, This));
+	uint32_t call_info = ZEND_CALL_NESTED_FUNCTION;
+	if (descriptor->receiver_kind
+			== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS) {
+		ASM(MOV64rm, work_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG, this_offset));
+		call_info |= ZEND_CALL_HAS_THIS;
+	} else if (descriptor->receiver_kind
+			== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE) {
+		/* static:: names the caller's called scope. */
+		auto scope = text_writer.label_create();
+		ASM(MOV64rm, work_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG, this_offset));
+		ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG, this_offset
+			+ static_cast<int32_t>(offsetof(zval, u1.v.type))),
+			IS_OBJECT);
+		generate_raw_jump(Jump::jne, scope);
+		ASM(MOV64rm, work_reg, FE_MEM(work_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_object, ce))));
+		label_place(scope);
+	} else {
+		ASM(XOR32rr, work_reg, work_reg);
+	}
+	ASM(MOV64mr, FE_MEM(callee_reg, 0, FE_NOREG, this_offset),
+		work_reg);
+	ASM(MOV64ri, work_reg, static_cast<int64_t>(
+		(uint64_t{du.argument_count} << 32) | call_info));
+	ASM(MOV64mr, FE_MEM(callee_reg, 0, FE_NOREG, this_offset
+		+ static_cast<int32_t>(offsetof(zval, u1.type_info))),
+		work_reg);
+	for (uint32_t variable = du.argument_count;
+			variable < descriptor->callee_compiled_variable_count;
+			++variable) {
+		ASM(MOV32mi, FE_MEM(callee_reg, 0, FE_NOREG,
+			static_cast<int32_t>(
+				(ZEND_CALL_FRAME_SLOT + variable) * sizeof(zval)
+					+ offsetof(zval, u1.type_info))),
+			IS_UNDEF);
+	}
+}
+
 /* A leaf scalar callee runs in a private frame on the native stack. */
 bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 		ScratchReg &fast_callee_argument_register) {
@@ -21689,6 +21829,10 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 			static_cast<int32_t>(offsetof(
 				zend_execute_data, call))),
 		1);
+	if (du.private_retry_frame) {
+		emit_private_frame_header(du, frame_reg, context_reg, cell_reg,
+			callee_reg, first_reg, second_reg);
+	}
 
 	for (uint32_t index = 0;
 			index < du.argument_count; ++index) {
@@ -21771,6 +21915,25 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 						call.direct_call->arguments[index].scalar_bits != 0
 							? BoolSlotSource::True : BoolSlotSource::False,
 						AsmReg::make_invalid(), AsmReg::make_invalid(), true);
+				} else if (du.private_retry_frame
+						&& !zend_mir_scalar_type_is_exact(
+							call.direct_call->arguments[index]
+								.exact_type)) {
+					/* Any literal, borrowed from the literal table. */
+					ScratchReg base{this};
+					ScratchReg low_word{this};
+					ScratchReg high_word{this};
+					auto base_reg = base.alloc_gp();
+					emit_literal_base(base_reg, frame_reg);
+					if (uint64_t{source_argument.source_operand.index}
+							* sizeof(zval) > INT32_MAX - sizeof(zval)) {
+						return false;
+					}
+					emit_zval_copy(callee_reg, offset, base_reg,
+						static_cast<int32_t>(
+							source_argument.source_operand.index
+								* sizeof(zval)),
+						low_word.alloc_gp(), high_word.alloc_gp());
 				} else {
 					ScratchReg literal{this};
 					auto literal_reg = literal.alloc_gp();
@@ -21805,6 +21968,18 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 					low_word.alloc_gp();
 				auto high_word_reg =
 					high_word.alloc_gp();
+				if (du.private_retry_frame) {
+					/* The frame borrows a defined value: an undefined
+					 * or referenced CV takes the Zend frame. */
+					ASM(MOVZXr32m8, high_word_reg,
+						FE_MEM(source_frame_reg, 0, FE_NOREG,
+							source_offset + static_cast<int32_t>(
+								offsetof(zval, u1.v.type))));
+					ASM(CMP32ri, high_word_reg, IS_UNDEF);
+					generate_raw_jump(Jump::je, call_slow_target(du));
+					ASM(CMP32ri, high_word_reg, IS_REFERENCE);
+					generate_raw_jump(Jump::je, call_slow_target(du));
+				}
 				emit_zval_copy(callee_reg, offset,
 					source_frame_reg, source_offset,
 					low_word_reg, high_word_reg);
@@ -21839,10 +22014,39 @@ bool ZendCompilerX64::emit_direct_user_leaf_call(DirectUserCallContext &du,
 					offset + static_cast<int32_t>(
 						offsetof(zval, u2))),
 				0);
-			if (copy_argument) {
+			if (du.private_retry_frame) {
+				ASM(CMP8ri, high_word.cur_reg(), IS_UNDEF);
+				generate_raw_jump(Jump::je, call_slow_target(du));
+				ASM(CMP8ri, high_word.cur_reg(), IS_REFERENCE);
+				generate_raw_jump(Jump::je, call_slow_target(du));
+			} else if (copy_argument) {
 				emit_try_addref(high_word.cur_reg(),
 					low_word.cur_reg());
 			}
+		} else if (du.private_retry_frame
+				&& zend_tpde_machine_kind_is_pointer(
+					ir().machine_kind(node.operands[index]))) {
+			/* A string, array or object pointer, borrowed; a
+			 * reference takes the Zend frame. */
+			const zend_tpde_machine_value_kind kind =
+				ir().machine_kind(node.operands[index]);
+			if (kind == ZEND_TPDE_MACHINE_VALUE_REFERENCE_PTR) {
+				generate_raw_jump(Jump::jmp, call_slow_target(du));
+				continue;
+			}
+			auto argument_reg = argument.load_to_reg();
+			ScratchReg type_info{this};
+			auto type_info_reg = type_info.alloc_gp();
+			if (!emit_machine_zval_type_info(
+					kind, argument_reg, type_info_reg)) {
+				return false;
+			}
+			ASM(MOV64mr, FE_MEM(callee_reg, 0, FE_NOREG, offset),
+				argument_reg);
+			ASM(MOV32mr, FE_MEM(callee_reg, 0, FE_NOREG,
+				offset + static_cast<int32_t>(
+					offsetof(zval, u1.type_info))),
+				type_info_reg);
 		} else {
 			auto argument_reg =
 				argument.load_to_reg();
@@ -25263,6 +25467,7 @@ bool ZendCompilerX64::compile_return_source_zval(InstContext &ctx) {
 		emit_status_return(ZEND_NATIVE_RETURNED);
 		label_place(helper);
 	}
+	emit_private_frame_retry(mir, mir.value_operation);
 	tpde::x64::CCAssignerSysV assigner{false};
 	CallBuilder builder{*this, assigner};
 	builder.add_arg(

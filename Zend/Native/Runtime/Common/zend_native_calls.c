@@ -2227,6 +2227,32 @@ void zend_native_call_fast_release_cv(zval *variable)
 	}
 }
 
+zend_native_status zend_native_private_frame_retry(
+	zend_execute_data *execute_data, uint32_t op_num, uint64_t operands)
+{
+	const zend_op_array *op_array = &execute_data->func->op_array;
+
+	for (uint32_t i = 0; i < op_array->last_live_range; i++) {
+		const zend_live_range *range = &op_array->live_range[i];
+
+		if (range->start > op_num) {
+			break;
+		}
+		if (op_num < range->end) {
+			zval_ptr_dtor_nogc(
+				ZEND_CALL_VAR(execute_data, range->var & ~ZEND_LIVE_MASK));
+		}
+	}
+	for (uint32_t shift = 0; shift < 64; shift += 32) {
+		uint32_t offset = (uint32_t) (operands >> shift);
+
+		if (offset != UINT32_MAX) {
+			zval_ptr_dtor_nogc(ZEND_CALL_VAR(execute_data, offset));
+		}
+	}
+	return ZEND_NATIVE_RETRY;
+}
+
 uint32_t zend_native_call_fast_release_this(
 	zend_object *object, zval *result, bool discard_result)
 {
@@ -8257,6 +8283,7 @@ static bool zend_native_direct_call_enter_valid(
 				| ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER
 				| ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE
 				| ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME
+				| ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME
 				| ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT
 				| ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED
 				| ZEND_NATIVE_DIRECT_CALL_ENTER_VALID

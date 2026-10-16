@@ -1732,6 +1732,80 @@ bool zend_tpde_direct_call_has_argument_guard(
 	return false;
 }
 
+/*
+ * The reads a private frame runs: their fast paths read the frame, $this
+ * and containers without an effect, and every other case is a helper,
+ * which a private frame retries instead (zend_tpde_private_retry_body()).
+ */
+static bool zend_tpde_private_retry_opcode(const zend_op *opline)
+{
+	switch (opline->opcode) {
+		case ZEND_NOP:
+		case ZEND_EXT_STMT:
+		case ZEND_RECV:
+		case ZEND_ISSET_ISEMPTY_CV:
+		case ZEND_ISSET_ISEMPTY_DIM_OBJ:
+		case ZEND_ISSET_ISEMPTY_PROP_OBJ:
+		case ZEND_FETCH_OBJ_R:
+		case ZEND_FETCH_OBJ_IS:
+		case ZEND_FETCH_DIM_R:
+		case ZEND_FETCH_DIM_IS:
+		case ZEND_IS_IDENTICAL:
+		case ZEND_IS_NOT_IDENTICAL:
+		case ZEND_BOOL:
+		case ZEND_BOOL_NOT:
+		case ZEND_TYPE_CHECK:
+		case ZEND_QM_ASSIGN:
+		case ZEND_RETURN:
+			return true;
+		case ZEND_JMP:
+			return OP_JMP_ADDR(opline, opline->op1) > opline;
+		case ZEND_JMPZ:
+		case ZEND_JMPNZ:
+		case ZEND_JMPZ_EX:
+		case ZEND_JMPNZ_EX:
+		case ZEND_COALESCE:
+			return OP_JMP_ADDR(opline, opline->op2) > opline;
+		default:
+			return false;
+	}
+}
+
+bool zend_tpde_private_retry_body(const zend_op_array *op_array)
+{
+	if (!zend_tpde_linux_inline_forms || op_array == nullptr
+			|| op_array->type != ZEND_USER_FUNCTION
+			|| op_array->function_name == nullptr
+			|| (op_array->fn_flags & (ZEND_ACC_GENERATOR | ZEND_ACC_VARIADIC
+				| ZEND_ACC_RETURN_REFERENCE | ZEND_ACC_HAS_FINALLY_BLOCK
+				| ZEND_ACC_CALL_VIA_TRAMPOLINE | ZEND_ACC_DEPRECATED
+				| ZEND_ACC_NODISCARD | ZEND_ACC_CLOSURE)) != 0
+			|| op_array->last_try_catch != 0
+			|| op_array->static_variables != nullptr) {
+		return false;
+	}
+	for (uint32_t argument = 0; argument < op_array->num_args; ++argument) {
+		if (op_array->arg_info != nullptr
+				&& ZEND_ARG_SEND_MODE(&op_array->arg_info[argument]) != 0) {
+			return false;
+		}
+	}
+	for (uint32_t index = 0; index < op_array->last_live_range; ++index) {
+		if ((op_array->live_range[index].var & ZEND_LIVE_MASK)
+				!= ZEND_LIVE_TMPVAR) {
+			return false;
+		}
+	}
+	for (uint32_t index = 0; index < op_array->last; ++index) {
+		const zend_op *opline = &op_array->opcodes[index];
+		if (!zend_tpde_private_retry_opcode(opline)
+				|| zend_get_user_opcode_handler(opline->opcode) != nullptr) {
+			return false;
+		}
+	}
+	return true;
+}
+
 bool zend_tpde_numeric_binary_at(
 	const zend_tpde_plan *plan,
 	const zend_tpde_instruction &instruction)

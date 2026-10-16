@@ -252,6 +252,11 @@ static void freeze_entry_facts(plan_builder &builder) {
 		&& source_op_array->function_name != nullptr;
 	plan->source_num_args =
 		source_op_array != nullptr ? source_op_array->num_args : 0;
+	plan->private_retry_frame =
+		zend_tpde_private_retry_body(source_op_array);
+	if (plan->private_retry_frame) {
+		require_runtime_helper(plan, ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY);
+	}
 	plan->source_return_type_mask = source_op_array != nullptr
 			&& (source_op_array->fn_flags & ZEND_ACC_HAS_RETURN_TYPE) != 0
 			&& source_op_array->arg_info != nullptr

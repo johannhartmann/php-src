@@ -1139,6 +1139,9 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_VALUE_FUSED_CONTAINER,
 		ZEND_NATIVE_EFFECT_ARRAY_SLOW_READ | ZEND_NATIVE_EFFECT_OBJECT_SLOW_READ,
 		(const void *) zend_native_value_fused_container},
+	{ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY,
+		ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT,
+		(const void *) zend_native_private_frame_retry},
 };
 
 _Static_assert(sizeof(zend_native_runtime_helpers)

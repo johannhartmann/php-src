@@ -250,6 +250,9 @@ typedef struct _zend_native_direct_call_argument {
 #define ZEND_NATIVE_DIRECT_CALL_CONSUME_RECEIVER UINT32_C(2)
 #define ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE UINT32_C(4)
 #define ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME UINT32_C(8)
+/* The callee may run in a private frame on the caller's native stack,
+ * whose helpers retry the call through a Zend frame. */
+#define ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME UINT32_C(16)
 #define ZEND_NATIVE_DIRECT_CALL_REQUIRE_SCALAR_RESULT UINT32_C(32)
 #define ZEND_NATIVE_DIRECT_CALL_GENERATION_LEASED UINT32_C(128)
 /*
@@ -999,6 +1002,15 @@ zend_native_status zend_native_deopt_transfer(zend_execute_data *execute_data,
  * zend_native_call_fast_leave() releases it, after the entry dropped its
  * reference: freed at zero, else checked as a possible GC root. */
 void zend_native_call_fast_release_cv(zval *variable);
+/*
+ * A helper reached in a private frame (ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY):
+ * the read at op_num failed before any effect. Releases the temporaries
+ * live there, as cleanup_live_vars() does, and the read's own operands
+ * (two frame offsets, UINT32_MAX for none), which its helper would have
+ * consumed; returns ZEND_NATIVE_RETRY.
+ */
+zend_native_status zend_native_private_frame_retry(
+	zend_execute_data *execute_data, uint32_t op_num, uint64_t operands);
 /* The rest of OBJ_RELEASE() for the object a fast-call entry's leave
  * released (its reference already dropped): destroyed at zero, else a
  * possible GC root. A throwing destructor fails the call and frees its

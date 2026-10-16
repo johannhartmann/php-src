@@ -1660,6 +1660,51 @@ static bool freeze_direct_call_inline_frame(
 			descriptor->flags |=
 				ZEND_NATIVE_DIRECT_CALL_LEAF_SCALAR_FRAME;
 		}
+		/* A callee of reads runs in a private frame too, whose helpers
+		 * retry the call (zend_tpde_private_retry_body()): every
+		 * parameter by value from a CV or a literal, which the frame
+		 * borrows, and a result the caller keeps. */
+		bool private_retry_frame = !leaf_scalar_frame
+			&& user_bindings[binding_index].direct_native
+			&& zend_tpde_private_retry_body(&callee->op_array)
+			&& (descriptor->receiver_kind
+					== ZEND_NATIVE_INTERNAL_RECEIVER_NONE
+				|| descriptor->receiver_kind
+					== ZEND_NATIVE_INTERNAL_RECEIVER_CALLER_THIS
+				|| (descriptor->receiver_kind
+						== ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE
+					&& (descriptor->flags
+						& ZEND_NATIVE_DIRECT_CALL_INHERIT_CALLED_SCOPE)
+						!= 0))
+			&& site.arguments.count == callee->op_array.num_args
+			&& (descriptor->result_operand.kind
+					== ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| descriptor->result_operand.kind
+					== ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& (descriptor->result_operand.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_TMP
+				|| descriptor->result_operand.slot_kind
+					== ZEND_MIR_SOURCE_SLOT_VAR);
+		for (uint32_t n = 0;
+				private_retry_frame && n < site.arguments.count; ++n) {
+			const zend_mir_source_operand_ref &source =
+				descriptor->arguments[n].source_operand;
+			private_retry_frame =
+				descriptor->arguments[n].ordinal == n
+				&& descriptor->arguments[n].mode
+					== ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
+				&& !zend_mir_scalar_type_is_exact(
+					argument_guard_types[n])
+				&& (source.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL
+					|| ((source.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+							|| source.kind
+								== ZEND_MIR_SOURCE_OPERAND_SSA)
+						&& source.slot_kind == ZEND_MIR_SOURCE_SLOT_CV));
+		}
+		if (private_retry_frame) {
+			descriptor->flags |=
+				ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME;
+		}
 	}
 	return true;
 }

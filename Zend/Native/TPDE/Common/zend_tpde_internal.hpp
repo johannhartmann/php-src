@@ -1285,6 +1285,9 @@ struct zend_tpde_plan {
 	bool zend_entry_may_emit_calls;
 	bool typed_body_may_emit_calls;
 	bool user_opcode_callbacks;
+	/* The Zend entry may run in a caller's private frame
+	 * (zend_tpde_private_retry_body()): its helpers retry there. */
+	bool private_retry_frame;
 };
 
 uint32_t zend_tpde_block_successor_count(
@@ -1649,6 +1652,15 @@ bool zend_tpde_inline_body_begin(
 		const zend_tpde_instruction &call,
 		const zend_tpde_plan *callee,
 		zend_tpde_inline_body_shape *shape);
+
+/*
+ * Whether op_array's Zend entry may run in a private frame its caller
+ * keeps on the native stack (ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME):
+ * a straight-line body of reads whose every effect is behind a helper,
+ * which in a private frame returns ZEND_NATIVE_RETRY instead, so the
+ * caller repeats the call through a Zend frame. Linux x64 only.
+ */
+bool zend_tpde_private_retry_body(const zend_op_array *op_array);
 
 /* Classifies the next callee instruction of an inline body, in order. */
 zend_tpde_inline_body_step zend_tpde_inline_body_step_at(

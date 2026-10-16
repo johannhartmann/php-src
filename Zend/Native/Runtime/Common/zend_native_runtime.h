@@ -272,7 +272,11 @@ typedef enum _zend_native_runtime_helper_id {
 	/* A read fused into the array read of its value: the temporary the
 	 * consumer's helper reads (zend_native_value_fused_container()). */
 	ZEND_NATIVE_HELPER_VALUE_FUSED_CONTAINER = 239,
-	ZEND_NATIVE_HELPER_COUNT = 240
+	/* A helper reached in a private frame: release what the failed read
+	 * left owned and return ZEND_NATIVE_RETRY
+	 * (zend_native_private_frame_retry()). */
+	ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY = 240,
+	ZEND_NATIVE_HELPER_COUNT = 241
 } zend_native_runtime_helper_id;
 
 /*
