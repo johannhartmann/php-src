@@ -2152,6 +2152,7 @@ public:
 			const zend_tpde_instruction &branch, FrameRegister &frame_scratch) {
 		const zend_mir_executable_value_ref &operation =
 			compare->value_operation;
+		emit_private_frame_retry(*compare, operation);
 		{
 			tpde::x64::CCAssignerSysV assigner{false};
 			CallBuilder builder{*this, assigner};
@@ -19761,6 +19762,7 @@ bool ZendCompilerX64::compile_value_cond_branch(InstContext &ctx) {
 				<= INT32_MAX - sizeof(void *)) {
 		return compile_frameless_branch(vc);
 	}
+	emit_private_frame_retry(mir, mir.value_operation);
 	tpde::x64::CCAssignerSysV assigner{false};
 	CallBuilder builder{*this, assigner};
 	builder.add_arg(CallArg{node.operands[0]});
@@ -20838,6 +20840,7 @@ bool ZendCompilerX64::emit_condition_tails(
 		tb.boxed_condition.reset();
 	}
 
+	emit_private_frame_retry(mir, mir.value_operation);
 	tpde::x64::CCAssignerSysV assigner{false};
 	CallBuilder builder{*this, assigner};
 	ValuePart frame_argument{
