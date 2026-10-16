@@ -3284,14 +3284,16 @@ public:
 	/*
 	 * A guarded fast path can leave its node with plain jumps, the success
 	 * path to the continuation and each failed check to the cold block,
-	 * when neither block has PHIs (no edge moves) and no register holds an
-	 * unspilled value (the branch spill emits no code the checks would
-	 * skip). Otherwise it selects the edge through a decision register.
+	 * when no register holds an unspilled value the cold path needs (the
+	 * branch spill emits no code the checks would skip). Both jumps are
+	 * unconditional, so each carries its own edge moves (in a branch
+	 * region they leave the value state alone): a value dead after this
+	 * block whose remaining uses are the continuation's PHIs needs no
+	 * spill on the cold path. Otherwise it selects the edge through a
+	 * decision register.
 	 */
 	bool guarded_exit_can_jump_directly(IRBlockRef cold, IRBlockRef hot) {
-		if (branch_needs_split(cold) || branch_needs_split(hot)) {
-			return false;
-		}
+		const IRBlockRef current = this->analyzer.block_ref(cur_block_idx);
 		for (auto reg_id : ::tpde::util::BitSetIterator<>{
 				register_file.used}) {
 			const ::tpde::Reg reg{reg_id};
@@ -3301,12 +3303,29 @@ public:
 			}
 			::tpde::AssignmentPartRef part{
 				val_assignment(local_idx), register_file.reg_part(reg)};
-			/* A value dead after this block needs no spill either. */
-			if (!part.fixed_assignment() && part.modified()
-					&& !part.variable_ref()
-					&& (this->analyzer.liveness_info(local_idx).last
-							> cur_block_idx
-						|| part.assignment()->references_left != 0)) {
+			if (part.fixed_assignment() || !part.modified()
+					|| part.variable_ref()) {
+				continue;
+			}
+			const uint32_t references = part.assignment()->references_left;
+			if (this->analyzer.liveness_info(local_idx).last > cur_block_idx) {
+				return false;
+			}
+			if (references == 0) {
+				continue;
+			}
+			uint32_t hot_phi_uses = 0;
+			for (IRValueRef phi : adaptor->block_phis(cold)) {
+				if (adaptor->val_local_idx(adaptor->val_as_phi(phi)
+						.incoming_val_for_block(current)) == local_idx) {
+					return false;
+				}
+			}
+			for (IRValueRef phi : adaptor->block_phis(hot)) {
+				hot_phi_uses += adaptor->val_local_idx(adaptor->val_as_phi(phi)
+					.incoming_val_for_block(current)) == local_idx;
+			}
+			if (hot_phi_uses != references) {
 				return false;
 			}
 		}
