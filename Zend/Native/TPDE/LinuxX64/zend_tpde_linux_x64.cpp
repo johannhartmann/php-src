@@ -20882,6 +20882,46 @@ bool ZendCompilerX64::emit_condition_tails(
 			vc.fused_compare, mir, tb.frame_scratch)) {
 		return false;
 	}
+	/* Each outcome jumps to its block: see below. */
+	const auto emit_direct_tails = [&] {
+		/* One tail only forwards (jump threading resolves
+		 * the jumps to it to the block) and stays in the cold
+		 * area; the other follows the inline code, which
+		 * falls into it. The truthy one does when its block
+		 * comes next: the inline code's jump to the falsey
+		 * one then becomes the inverted branch to its block. */
+		const auto spilled = spill_before_branch();
+		begin_branch_region();
+		const bool truthy_next =
+			this->analyzer.block_idx(successors[0])
+				== this->next_block();
+		const size_t cold_tail = truthy_next ? 1 : 0;
+		label_place(truthy_next ? tb.falsey : tb.truthy);
+		generate_branch_to_block(
+			Jump::jmp, successors[cold_tail], false, false);
+		cold_end();
+		label_place(truthy_next ? tb.truthy : tb.falsey);
+		generate_branch_to_block(
+			Jump::jmp, successors[1 - cold_tail], false, true);
+		end_branch_region();
+		release_spilled_regs(spilled);
+	};
+	/* The comparison's helper left its boolean in the temporary the
+	 * branch tests: an if/while decides on it without the branch helper. */
+	if (vc.fused && direct_tails && !tb.layout.has_result
+			&& (mir.value_operation.source_opcode == ZEND_JMPZ
+				|| mir.value_operation.source_opcode == ZEND_JMPNZ)) {
+		ASM(CMP8mi,
+			FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+				static_cast<int32_t>(tb.layout.operand_offset
+					+ offsetof(zval, u1.v.type))),
+			IS_TRUE);
+		tb.frame_scratch.reset();
+		generate_raw_jump(Jump::je, tb.truthy);
+		generate_raw_jump(Jump::jmp, tb.falsey);
+		emit_direct_tails();
+		return true;
+	}
 	if (vc.register_condition) {
 		if (vc.publish_boxed_condition) {
 			ASM(MOV64mr,
@@ -20925,27 +20965,7 @@ bool ZendCompilerX64::emit_condition_tails(
 		decision.reset(this);
 		generate_raw_jump(Jump::jne, tb.truthy);
 		generate_raw_jump(Jump::jmp, tb.falsey);
-		/* One tail only forwards (jump threading resolves
-		 * the jumps to it to the block) and stays in the cold
-		 * area; the other follows the inline code, which
-		 * falls into it. The truthy one does when its block
-		 * comes next: the inline code's jump to the falsey
-		 * one then becomes the inverted branch to its block. */
-		const auto spilled = spill_before_branch();
-		begin_branch_region();
-		const bool truthy_next =
-			this->analyzer.block_idx(successors[0])
-				== this->next_block();
-		const size_t cold_tail = truthy_next ? 1 : 0;
-		label_place(truthy_next ? tb.falsey : tb.truthy);
-		generate_branch_to_block(
-			Jump::jmp, successors[cold_tail], false, false);
-		cold_end();
-		label_place(truthy_next ? tb.truthy : tb.falsey);
-		generate_branch_to_block(
-			Jump::jmp, successors[1 - cold_tail], false, true);
-		end_branch_region();
-		release_spilled_regs(spilled);
+		emit_direct_tails();
 		return true;
 	}
 	ScratchReg joined_decision{this};
