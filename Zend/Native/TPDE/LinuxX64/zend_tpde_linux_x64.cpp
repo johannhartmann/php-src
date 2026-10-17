@@ -26180,6 +26180,23 @@ bool ZendCompilerX64::compile_verify_return_type(InstContext &ctx) {
 		}
 		return true;
 	}
+	/* A value in its frame slot is tested there: a reference or an
+	 * undefined CV is no type of a return mask and takes the helper. */
+	const zend_mir_executable_value_ref &verified_operand = mir.value_operation;
+	if (!have_type && inline_check
+			&& is_frame_slot(verified_operand.op1)
+			&& zend_mir_id_is_valid(verified_operand.op1_storage_id)) {
+		const uint64_t slot_offset =
+			frame_slot_offset(verified_operand.op1_storage_id);
+		if (slot_offset <= INT32_MAX - sizeof(zval)) {
+			auto type_reg = verified_type.alloc_gp();
+			ASM(MOVZXr32m8, type_reg,
+				FE_MEM(canonical_frame_register(), 0, FE_NOREG,
+					static_cast<int32_t>(slot_offset
+						+ offsetof(zval, u1.v.type))));
+			have_type = true;
+		}
+	}
 	if (!have_type) {
 		return execute_value_operation(ctx);
 	}
