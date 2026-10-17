@@ -1341,6 +1341,48 @@ static bool machine_cfg_string_key_assignment(
 			|| (source.op2_may_be & (MAY_BE_STRING | MAY_BE_LONG)) != 0);
 }
 
+/* A QM_ASSIGN whose copy cannot fail on Linux x64: the moved temporary, an
+ * uncounted literal, or a CV that by Zend's inference is defined, no
+ * reference and holds nothing counted. Its result is fresh, a temporary or
+ * a CV OPcache's DFA proved dead. copy_slot() emits it without a cold
+ * block. */
+static bool machine_cfg_infallible_qm_assign(
+		const zend_tpde_plan *plan,
+		const zend_tpde_instruction &instruction) {
+	const zend_mir_executable_value_ref &operation =
+		instruction.value_operation;
+	if (!zend_tpde_linux_inline_forms
+			|| (operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.result.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_CV)
+			|| !zend_mir_id_is_valid(operation.result_storage_id)) {
+		return false;
+	}
+	if (operation.op1.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		return plan->source_literals != nullptr
+			&& operation.op1.index < plan->source_literal_count
+			&& !Z_REFCOUNTED(plan->source_literals[operation.op1.index]);
+	}
+	if ((operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& operation.op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| !zend_mir_id_is_valid(operation.op1_storage_id)
+			|| operation.op1_storage_id == operation.result_storage_id) {
+		return false;
+	}
+	if (operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP) {
+		return true;
+	}
+	return operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		&& instruction.source_op1_reference_free
+		&& plan->source_opcodes != nullptr
+		&& operation.source_position_id < plan->source_opcode_count
+		&& (plan->source_opcodes[operation.source_position_id].op1_may_be
+			& (MAY_BE_UNDEF | MAY_BE_REF | MAY_BE_STRING | MAY_BE_ARRAY
+				| MAY_BE_OBJECT | MAY_BE_RESOURCE)) == 0;
+}
+
 void freeze_machine_control_flow(zend_tpde_plan *plan)
 {
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
@@ -1414,6 +1456,12 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 						plan, ZEND_NATIVE_HELPER_ARRAY_FIND_ELEMENT);
 					break;
 				case ZEND_MIR_OPCODE_VALUE_QM_ASSIGN:
+					if (!machine_cfg_infallible_qm_assign(
+							plan, instruction)) {
+						flags |=
+							ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD;
+					}
+					break;
 				case ZEND_MIR_OPCODE_VALUE_FREE:
 				case ZEND_MIR_OPCODE_VALUE_BINARY_OP:
 				case ZEND_MIR_OPCODE_VALUE_ASSIGN_OP:

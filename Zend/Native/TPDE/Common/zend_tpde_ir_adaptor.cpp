@@ -2095,6 +2095,7 @@ private:
 	void add_frame_and_call_operands(InstContext &ctx);
 	void count_operands(InstContext &ctx);
 	void add_boxed_boundary_operands(InstContext &ctx);
+	void drop_frame_assign_source(InstContext &ctx);
 	void emit_instruction_node(InstContext &ctx);
 	void publish_init_array_pointer(InstContext &ctx);
 	void mark_selected_operation(InstContext &ctx);
@@ -5823,6 +5824,7 @@ void ZendIRAdaptor::Builder::build_instruction(uint32_t i) {
 		lower_boxed_cond_branch(ctx);
 		return;
 	}
+	drop_frame_assign_source(ctx);
 	emit_instruction_node(ctx);
 	publish_init_array_pointer(ctx);
 	mark_selected_operation(ctx);
@@ -7389,8 +7391,10 @@ void ZendIRAdaptor::Builder::add_boxed_boundary_operands(InstContext &ctx) {
 			ctx.instruction
 				.source_op2_definition_ssa_variable_id_plus_one);
 	}
+	/* A QM_ASSIGN without a cold block cannot fail and calls no helper. */
 	if (ctx.boxed_cond_cold_block == UINT32_MAX
-			&& ctx.guarded_cold_block == UINT32_MAX) {
+			&& ctx.guarded_cold_block == UINT32_MAX
+			&& ctx.record.opcode != ZEND_MIR_OPCODE_VALUE_QM_ASSIGN) {
 		const uint32_t semantic_count =
 			ctx.materialization_operand_index == UINT32_MAX
 				? ctx.operand_count : ctx.materialization_operand_index;
@@ -7474,6 +7478,37 @@ IRValueRef ZendIRAdaptor::Builder::direct_boxed_source(InstContext &ctx,
 			&& machine_value_is_register_authoritative(produced)
 			&& machine_value_has_register_definition(produced)
 		? produced : INVALID_VALUE_REF;
+}
+
+/*
+ * A QM_ASSIGN without a cold block, which cannot fail: copy_slot() reads a
+ * source that is not a register value from the frame, so it takes no
+ * allocator-visible use, as select_fast_operands() drops it from a guarded
+ * fast node.
+ */
+void ZendIRAdaptor::Builder::drop_frame_assign_source(InstContext &ctx) {
+	if (ctx.record.opcode != ZEND_MIR_OPCODE_VALUE_QM_ASSIGN
+			|| !ctx.instruction.has_value_operation
+			|| ctx.operand_count == 0) {
+		return;
+	}
+	const IRValueRef source = operands_[ctx.operand_offset];
+	if (source == IRValueRef{FRAME_VALUE}
+			|| machine_reference(source, nullptr)
+			|| (machine_value_is_register_authoritative(source)
+				&& machine_value_has_register_definition(source))) {
+		return;
+	}
+	++ctx.operand_offset;
+	--ctx.operand_count;
+	for (uint32_t *index : {&ctx.materialization_operand_index,
+			&ctx.boxed_op1_boundary_operand_index,
+			&ctx.boxed_op2_boundary_operand_index,
+			&ctx.boundary_semantic_operand_count}) {
+		if (*index != UINT32_MAX) {
+			--*index;
+		}
+	}
 }
 
 void ZendIRAdaptor::Builder::emit_instruction_node(InstContext &ctx) {

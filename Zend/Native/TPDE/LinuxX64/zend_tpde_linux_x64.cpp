@@ -12263,6 +12263,8 @@ bool ZendCompilerX64::copy_slot(
 	if (literal_source) {
 		move_source = false;
 	}
+	/* A QM_ASSIGN the plan proved infallible has no cold block. */
+	const bool guarded = node.kind == Adaptor::InstKind::GuardedFast;
 	if ((literal_source
 			? literal_offset > INT32_MAX - sizeof(zval)
 			: source_storage == ZEND_MIR_ID_INVALID)
@@ -12271,7 +12273,7 @@ bool ZendCompilerX64::copy_slot(
 			|| (result_storage != ZEND_MIR_ID_INVALID
 				&& (result_storage == source_storage
 					|| result_storage == target_storage))) {
-		return branch_to_guarded_cold(ctx);
+		return guarded && branch_to_guarded_cold(ctx);
 	}
 	const uint64_t source_offset = literal_source ? 0
 		: frame_slot_offset(source_storage);
@@ -12282,14 +12284,14 @@ bool ZendCompilerX64::copy_slot(
 	if (source_offset > INT32_MAX - sizeof(zval)
 			|| target_offset > INT32_MAX - sizeof(zval)
 			|| result_offset > INT32_MAX - sizeof(zval)) {
-		return branch_to_guarded_cold(ctx);
+		return guarded && branch_to_guarded_cold(ctx);
 	}
-	if (node.kind != Adaptor::InstKind::GuardedFast
-			|| node.control_block == UINT32_MAX
-			|| node.continuation_block == UINT32_MAX) {
+	if (guarded
+			? node.control_block == UINT32_MAX
+				|| node.continuation_block == UINT32_MAX
+			: !fresh_target || result_storage != ZEND_MIR_ID_INVALID) {
 		return false;
 	}
-	const auto successors = adaptor->guarded_successors_of(node);
 
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
@@ -12348,6 +12350,47 @@ bool ZendCompilerX64::copy_slot(
 		&& target_facts != nullptr
 		&& (target_facts->op1_may_be & (MAY_BE_STRING | MAY_BE_ARRAY
 			| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF)) == 0;
+	/* A CV source is tested for what Zend's type inference allows:
+	 * the value of ASSIGN is its op2, that of QM_ASSIGN its op1. */
+	const zend_tpde_source_opcode *source_facts =
+		fused_source_opcode(ctx.mir);
+	const uint32_t source_may_be = source_facts == nullptr
+		? UINT32_MAX
+		: &source_operand == &ctx.mir->value_operation.op2
+		? source_facts->op2_may_be
+		: &source_operand == &ctx.mir->value_operation.op1
+		? source_facts->op1_may_be : UINT32_MAX;
+	const bool cv_source =
+		source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV;
+	/* A CV that holds nothing counted takes no reference. */
+	const bool uncounted_source = !literal_source && cv_source
+		&& (source_may_be & (MAY_BE_STRING | MAY_BE_ARRAY
+			| MAY_BE_OBJECT | MAY_BE_RESOURCE | MAY_BE_REF)) == 0;
+	const bool undefined_test = !literal_source && !scalar_source
+		&& cv_source && (source_may_be & MAY_BE_UNDEF) != 0;
+	const bool reference_deref = !literal_source && !register_source
+		&& !move_source && cv_source
+		&& (source_may_be & MAY_BE_REF) != 0;
+	const bool reference_test = !reference_deref && !literal_source
+		&& !scalar_source
+		&& ((cv_source && (source_may_be & MAY_BE_REF) != 0)
+			|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR);
+	/*
+	 * An immutable counted value must not get a refcount write and is
+	 * duplicated as the VM does it: the cold path copies it. A move
+	 * without a used result writes no refcount.
+	 */
+	const uint32_t source_refcount_increments =
+		(!move_source ? 1 : 0)
+		+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
+	const bool counted_source = !scalar_source && !uncounted_literal
+		&& !uncounted_source;
+	const bool immutable_test = counted_source
+		&& source_refcount_increments != 0;
+	if (!guarded && (undefined_test || reference_deref || reference_test
+			|| immutable_test)) {
+		return false;
+	}
 
 	if (register_source) {
 		const zend_tpde_machine_value_kind source_kind =
@@ -12424,28 +12467,11 @@ bool ZendCompilerX64::copy_slot(
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(source_offset)));
 	}
-	/* A CV source is tested for what Zend's type inference allows:
-	 * the value of ASSIGN is its op2, that of QM_ASSIGN its op1. */
-	const zend_tpde_source_opcode *source_facts =
-		fused_source_opcode(ctx.mir);
-	const uint32_t source_may_be = source_facts == nullptr
-		? UINT32_MAX
-		: &source_operand == &ctx.mir->value_operation.op2
-		? source_facts->op2_may_be
-		: &source_operand == &ctx.mir->value_operation.op1
-		? source_facts->op1_may_be : UINT32_MAX;
-	if (!literal_source && !scalar_source
-			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-			&& (source_may_be & MAY_BE_UNDEF) != 0) {
+	if (undefined_test) {
 		ASM(CMP32ri, source_type_reg, IS_UNDEF);
 		generate_raw_jump(Jump::je, slow);
 	}
-	if (!literal_source && !register_source && !move_source
-			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-			&& (source_may_be & MAY_BE_REF) == 0) {
-		/* Inference rules out a reference. */
-	} else if (!literal_source && !register_source && !move_source
-			&& source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV) {
+	if (reference_deref) {
 		/* A CV bound by global, static or & is read through its
 		 * reference and copied, as ZEND_ASSIGN dereferences it. */
 		ASM(CMP8ri, source_type_reg, IS_REFERENCE);
@@ -12462,22 +12488,11 @@ bool ZendCompilerX64::copy_slot(
 				generate_raw_jump(Jump::je, slow);
 			}
 		});
-	} else if (!literal_source && !scalar_source
-			&& (source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-				|| source_operand.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)) {
+	} else if (reference_test) {
 		ASM(CMP8ri, source_type_reg, IS_REFERENCE);
 		generate_raw_jump(Jump::je, slow);
 	}
-	/*
-	 * An immutable counted value must not get a refcount write and is
-	 * duplicated as the VM does it: the cold path copies it. A move
-	 * without a used result writes no refcount.
-	 */
-	const uint32_t source_refcount_increments =
-		(!move_source ? 1 : 0)
-		+ (result_storage != ZEND_MIR_ID_INVALID ? 1 : 0);
-	if (!scalar_source && !uncounted_literal
-			&& source_refcount_increments != 0) {
+	if (immutable_test) {
 		ASM(TEST32ri, source_type_reg,
 			IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		auto source_mutable = text_writer.label_create();
@@ -12604,8 +12619,7 @@ bool ZendCompilerX64::copy_slot(
 			1);
 	}
 	label_place(target_released);
-	if (source_refcount_increments != 0 && !scalar_source
-			&& !uncounted_literal) {
+	if (source_refcount_increments != 0 && counted_source) {
 		emit_try_addref(source_type_reg, source_payload_reg,
 			static_cast<int32_t>(source_refcount_increments));
 	}
@@ -12634,6 +12648,31 @@ bool ZendCompilerX64::copy_slot(
 				source_offset + offsetof(zval, u1.type_info))),
 			IS_UNDEF);
 	}
+	if (!guarded) {
+		if (node.has_result) {
+			if (ir().machine_kind(node.result)
+						!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					|| val_parts(node.result).count() != 2) {
+				return false;
+			}
+			auto result = result_ref(node.result);
+			const ValueParts parts = val_parts(node.result);
+			for (uint32_t part = 0; part < parts.count(); ++part) {
+				auto result_part = result.part(part);
+				mov(result_part.alloc_reg(),
+					parts.representation.parts[part].semantic_role
+							== ZEND_TPDE_MACHINE_PART_TYPE_INFO
+						? source_type_reg : source_payload_reg, 8);
+				result_part.set_modified();
+			}
+		}
+		source_type.reset();
+		source_payload.reset();
+		decision.reset();
+		frame_scratch.reset();
+		return true;
+	}
+	const auto successors = adaptor->guarded_successors_of(node);
 	/*
 	 * The helper consumes canonical Zend slots.  Keep a register source
 	 * register-authoritative on the hot edge and materialize it only when
