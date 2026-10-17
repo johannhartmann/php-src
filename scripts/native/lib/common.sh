@@ -129,7 +129,7 @@ native_load_profile() {
     unset PROFILE_NAME PROFILE_BUILD_TYPE PROFILE_THREAD_SAFETY PROFILE_SANITIZER
     unset PROFILE_TARGET_ID PROFILE_TARGET_TRIPLE PROFILE_HOST_SYSTEM PROFILE_HOST_ARCH
     unset PROFILE_CONFIGURE_FLAGS PROFILE_CC PROFILE_CXX PROFILE_EXTRA_CFLAGS
-    unset PROFILE_FUNCTION_ORDER
+    unset PROFILE_FUNCTION_ORDER PROFILE_PGO_PROFILE
     # Profile files are repository-owned declarative shell data.
     # shellcheck source=/dev/null
     source "$profile_file"
@@ -316,6 +316,12 @@ native_release_lock() {
 # runtime functions first in .text through ld --section-ordering-file
 # (binutils 2.43+), so that edits to other objects do not shift them.
 # NATIVE_FUNCTION_ORDER_DIGEST lets the caller rebuild when the order changes.
+#
+# PROFILE_PGO_PROFILE (relative to the repository root) is an xz-compressed
+# llvm-profdata profile of warm application requests: clang optimizes the C
+# runtime with -fprofile-instr-use. The profile is unpacked into the profile
+# root under its digest, so a new profile changes the flags and rebuilds.
+# NATIVE_PGO=off builds without it, as the training build does.
 native_export_build_flags() {
     local flags=${PROFILE_EXTRA_CFLAGS:-}
     unset NATIVE_FUNCTION_ORDER_DIGEST
@@ -331,6 +337,23 @@ native_export_build_flags() {
             export NATIVE_FUNCTION_ORDER_DIGEST
         else
             native_error "warning: linker lacks --section-ordering-file; keeping the default function layout"
+        fi
+    fi
+    if [[ -n ${PROFILE_PGO_PROFILE:-} && ${NATIVE_PGO:-on} != off ]]; then
+        local pgo_source="$NATIVE_REPO_ROOT/$PROFILE_PGO_PROFILE"
+        [[ -f $pgo_source ]] || native_die "PGO profile is missing: $pgo_source"
+        local pgo_digest pgo_file
+        pgo_digest=$(native_sha256_file "$pgo_source")
+        pgo_file="$NATIVE_PROFILE_ROOT/pgo-${pgo_digest:0:16}.profdata"
+        if [[ ! -f $pgo_file ]] && command -v xz >/dev/null 2>&1; then
+            xz -dc -- "$pgo_source" >"$pgo_file.tmp" && mv -- "$pgo_file.tmp" "$pgo_file"
+        fi
+        if [[ -f $pgo_file ]] && printf 'int main(void) { return 0; }\n' \
+                | "${CC:-cc}" -x c - -c -o /dev/null \
+                    "-fprofile-instr-use=$pgo_file" >/dev/null 2>&1; then
+            flags="${flags:+$flags }-fprofile-instr-use=$pgo_file -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
+        else
+            native_error "warning: cannot use the PGO profile $PROFILE_PGO_PROFILE (xz, clang); building without it"
         fi
     fi
     [[ -n $flags ]] || return 0

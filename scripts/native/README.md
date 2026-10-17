@@ -23,7 +23,8 @@ The native engine is developed with the `linux-amd64-native-*` profiles
 `product-release-nts` and the `app-*` variants). They build with clang
 (`PROFILE_CC`), compile debug builds at `-Og` and sanitizer builds at `-O1`
 (`PROFILE_EXTRA_CFLAGS`), and link with the function order in `layout/`
-(`PROFILE_FUNCTION_ORDER`). The plain `debug-nts`, `release-nts`, `debug-zts`,
+(`PROFILE_FUNCTION_ORDER`); the release profiles also compile with the clang
+profile in `layout/` (`PROFILE_PGO_PROFILE`). The plain `debug-nts`, `release-nts`, `debug-zts`,
 `release-zts`, `asan-nts` and `ubsan-nts` profiles build stock php-src.
 Profile definitions live in `profiles/*.env`.
 
