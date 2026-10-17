@@ -20906,20 +20906,49 @@ bool ZendCompilerX64::emit_condition_tails(
 		end_branch_region();
 		release_spilled_regs(spilled);
 	};
+	/* Joins the decision (RAX, or the decision slot) at the branch. */
+	const auto emit_joined_tail = [&](ScratchReg &joined_decision) {
+		generate_raw_jump(Jump::jmp, tb.branch);
+		cold_end();
+		label_place(tb.branch);
+		if (tb.carry_decision) {
+			ASM(TEST32rr, joined_decision.cur_reg(),
+				joined_decision.cur_reg());
+			generate_cond_branch(
+				Jump::jne, successors[0], successors[1]);
+		} else {
+			branch_on_decision_slot(tb.decision_slot, successors);
+		}
+	};
 	/* The comparison's helper left its boolean in the temporary the
 	 * branch tests: an if/while decides on it without the branch helper. */
-	if (vc.fused && direct_tails && !tb.layout.has_result
+	if (vc.fused && !tb.layout.has_result
 			&& (mir.value_operation.source_opcode == ZEND_JMPZ
 				|| mir.value_operation.source_opcode == ZEND_JMPNZ)) {
-		ASM(CMP8mi,
-			FE_MEM(canonical_frame_register(), 0, FE_NOREG,
-				static_cast<int32_t>(tb.layout.operand_offset
-					+ offsetof(zval, u1.v.type))),
-			IS_TRUE);
+		const auto boolean_type = FE_MEM(canonical_frame_register(), 0,
+			FE_NOREG, static_cast<int32_t>(tb.layout.operand_offset
+				+ offsetof(zval, u1.v.type)));
 		tb.frame_scratch.reset();
-		generate_raw_jump(Jump::je, tb.truthy);
-		generate_raw_jump(Jump::jmp, tb.falsey);
-		emit_direct_tails();
+		if (direct_tails) {
+			ASM(CMP8mi, boolean_type, IS_TRUE);
+			generate_raw_jump(Jump::je, tb.truthy);
+			generate_raw_jump(Jump::jmp, tb.falsey);
+			emit_direct_tails();
+			return true;
+		}
+		ScratchReg joined_decision{this};
+		const AsmReg decision_reg = tb.carry_decision
+			? joined_decision.alloc_specific(AsmReg{AsmReg::AX})
+			: joined_decision.alloc_gp();
+		ASM(XOR32rr, decision_reg, decision_reg);
+		ASM(CMP8mi, boolean_type, IS_TRUE);
+		ASM(SETZ8r, decision_reg);
+		if (!tb.carry_decision) {
+			ASM(MOV32mr, FE_MEM(FE_BP, 0, FE_NOREG, tb.decision_slot),
+				decision_reg);
+			joined_decision.reset();
+		}
+		emit_joined_tail(joined_decision);
 		return true;
 	}
 	if (vc.register_condition) {
@@ -20979,17 +21008,7 @@ bool ZendCompilerX64::emit_condition_tails(
 			decision_reg);
 		decision.reset(this);
 	}
-	generate_raw_jump(Jump::jmp, tb.branch);
-	cold_end();
-	label_place(tb.branch);
-	if (tb.carry_decision) {
-		ASM(TEST32rr, joined_decision.cur_reg(),
-			joined_decision.cur_reg());
-		generate_cond_branch(
-			Jump::jne, successors[0], successors[1]);
-	} else {
-		branch_on_decision_slot(tb.decision_slot, successors);
-	}
+	emit_joined_tail(joined_decision);
 	return true;
 }
 

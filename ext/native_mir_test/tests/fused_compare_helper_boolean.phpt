@@ -23,6 +23,8 @@ function isset_branch($bag, $k) { if (isset($bag[$k])) { return 'set'; } return 
 function equal_branch($a, $b) { if ($a == $b) { return 'eq'; } return 'ne'; }
 function identical_branch($a, $b) { if ($a === $b) { return 'same'; } return 'other'; }
 function not_identical_loop(array $list, $stop) { $n = 0; while ($list[$n] !== $stop) { $n++; } return $n; }
+function chain($bag, $v, $k) { $r = 'no'; if (is_int($v) && isset($bag[$k]) && $bag[$k] === 1) { $r = 'yes'; } return $r . $v; }
+function chain_loop($bag, array $keys) { $n = 0; foreach ($keys as $k) { if ($k !== '' && isset($bag[$k])) { $n++; } } return $n; }
 function empty_branch($bag, $k) { if (empty($bag[$k])) { return 'empty'; } return 'full'; }
 $bag = new Bag(['a' => 1, 'z' => 0]);
 $o = new stdClass();
@@ -31,6 +33,7 @@ for ($i = 0; $i < 3; $i++) {
     echo equal_branch("1e3", "1000"), ' ', equal_branch("abc", "abd"), ' ', equal_branch([1, 2], [1, 2]), ' ', equal_branch(null, false), "\n";
     echo identical_branch([1, 'x'], [1, 'x']), ' ', identical_branch($o, $o), ' ', identical_branch($o, new stdClass()), ' ', identical_branch("a$i", "a$i"), "\n";
     echo not_identical_loop(['x', [1], 'y', $o], $o), ' ', not_identical_loop([1.5, 'q', [2]], [2]), "\n";
+    echo chain($bag, $i, 'a'), ' ', chain($bag, "s$i", 'a'), ' ', chain($bag, $i, 'b'), ' ', chain_loop($bag, ['a', '', 'b', 'z', 'a']), "\n";
     try { isset_branch(new Bag([], true), 'k'); } catch (RuntimeException $e) { echo get_class($e), ': ', $e->getMessage(), ' line ', $e->getLine(), "\n"; }
 }
 --EXPECT--
@@ -38,14 +41,17 @@ set unset empty full
 eq ne eq eq
 same same other same
 3 2
+yes0 nos0 no0 3
 RuntimeException: no k line 5
 set unset empty full
 eq ne eq eq
 same same other same
 3 2
+yes1 nos1 no1 3
 RuntimeException: no k line 5
 set unset empty full
 eq ne eq eq
 same same other same
 3 2
+yes2 nos2 no2 3
 RuntimeException: no k line 5
