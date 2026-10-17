@@ -189,7 +189,8 @@ static bool zend_native_execute_verify_return(zend_execute_data *execute_data)
 }
 
 zend_native_status zend_native_execution_finish_direct_frame(
-	zend_execute_data *execute_data, zend_native_status status)
+	zend_execute_data *execute_data, zend_native_status status,
+	zval *discarded_return)
 {
 	bool frame_returned = status == ZEND_NATIVE_RETURNED
 		&& EG(exception) == NULL;
@@ -216,6 +217,9 @@ zend_native_status zend_native_execution_finish_direct_frame(
 			&& !zend_native_execute_verify_return(execute_data)) {
 		status = ZEND_NATIVE_EXCEPTION;
 	}
+	if (discarded_return != NULL) {
+		zend_native_release_discarded_return(discarded_return);
+	}
 	if (UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_fcall_interrupt(execute_data);
 		if (EG(exception) != NULL) {
@@ -237,6 +241,10 @@ static void zend_native_execute_frame_release(
 	bool frame_returned, bool observer_already_started)
 {
 	zend_try {
+		if (state->original_return_value == NULL
+				&& state->status != ZEND_NATIVE_BAILOUT) {
+			zend_native_release_discarded_return(&state->discarded_return);
+		}
 		if (state->status != ZEND_NATIVE_BAILOUT) {
 			zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
 		}
@@ -249,11 +257,6 @@ static void zend_native_execute_frame_release(
 			} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
 				OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
 			}
-		}
-		if (state->original_return_value == NULL
-				&& state->status != ZEND_NATIVE_BAILOUT
-				&& !Z_ISUNDEF(state->discarded_return)) {
-			zval_ptr_dtor(&state->discarded_return);
 		}
 	} zend_catch {
 		state->status = ZEND_NATIVE_BAILOUT;
@@ -427,6 +430,10 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 				execute_data, state->status))) {
 			/* What the general processing below does for it. */
 			phase = 3;
+			if (state->original_return_value == NULL) {
+				zend_native_release_discarded_return(
+					&state->discarded_return);
+			}
 			zend_native_execute_frame_release_plain(execute_data);
 			if (observer_already_started) {
 				uint32_t call_info = ZEND_CALL_INFO(execute_data);
@@ -437,10 +444,6 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 					OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
 				}
 			}
-			if (state->original_return_value == NULL
-					&& !Z_ISUNDEF(state->discarded_return)) {
-				zval_ptr_dtor(&state->discarded_return);
-			}
 			phase = 4;
 			goto done;
 		}
@@ -448,6 +451,10 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 		frame_returned =
 			zend_native_execute_frame_returned(execute_data, state);
 		phase = 2;
+		if (state->original_return_value == NULL
+				&& state->status != ZEND_NATIVE_BAILOUT) {
+			zend_native_release_discarded_return(&state->discarded_return);
+		}
 		if (state->status != ZEND_NATIVE_BAILOUT
 				&& UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 			zend_fcall_interrupt(execute_data);
@@ -466,10 +473,6 @@ static zend_never_inline zend_native_status zend_native_execute_frame_lean(
 				} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
 					OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
 				}
-			}
-			if (state->original_return_value == NULL
-					&& !Z_ISUNDEF(state->discarded_return)) {
-				zval_ptr_dtor(&state->discarded_return);
 			}
 		}
 		phase = 4;
@@ -638,6 +641,16 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 		/* An observer may itself have bailed out after creating native calls. */
 		zend_native_call_direct_abandon(execute_data);
 	}
+	/* The VM's observed RETURN frees a discarded value after the end
+	 * notification. */
+	if (state->original_return_value == NULL
+			&& state->status != ZEND_NATIVE_BAILOUT) {
+		zend_try {
+			zend_native_release_discarded_return(&state->discarded_return);
+		} zend_catch {
+			state->status = ZEND_NATIVE_BAILOUT;
+		} zend_end_try();
+	}
 	if (state->status != ZEND_NATIVE_BAILOUT
 			&& UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 		zend_try {
@@ -670,12 +683,6 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 			} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
 				OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
 			}
-		}
-
-		if (state->original_return_value == NULL
-				&& state->status != ZEND_NATIVE_BAILOUT
-				&& !Z_ISUNDEF(state->discarded_return)) {
-			zval_ptr_dtor(&state->discarded_return);
 		}
 	} zend_catch {
 		state->status = ZEND_NATIVE_BAILOUT;
@@ -832,12 +839,19 @@ zend_native_status zend_native_execute_frame_entered(
 	if (EXPECTED(zend_native_execute_frame_plain_return(
 			execute_data, state.status))) {
 		frame.phase = 3;
+		if (state.original_return_value == NULL) {
+			zend_native_release_discarded_return(&state.discarded_return);
+		}
 		zend_native_execute_frame_release_plain(execute_data);
 	} else {
 		frame.phase = 1;
 		frame.frame_returned =
 			zend_native_execute_frame_returned(execute_data, &state);
 		frame.phase = 2;
+		if (state.original_return_value == NULL
+				&& state.status != ZEND_NATIVE_BAILOUT) {
+			zend_native_release_discarded_return(&state.discarded_return);
+		}
 		if (state.status != ZEND_NATIVE_BAILOUT
 				&& UNEXPECTED(atomic_load(&EG(vm_interrupt)))) {
 			zend_fcall_interrupt(execute_data);
@@ -858,10 +872,6 @@ zend_native_status zend_native_execute_frame_entered(
 			OBJ_RELEASE(Z_OBJ(execute_data->This));
 		} else if ((call_info & ZEND_CALL_CLOSURE) != 0) {
 			OBJ_RELEASE(ZEND_CLOSURE_OBJECT(execute_data->func));
-		}
-		if (state.original_return_value == NULL
-				&& !Z_ISUNDEF(state.discarded_return)) {
-			zval_ptr_dtor(&state.discarded_return);
 		}
 	}
 	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&frame.record);

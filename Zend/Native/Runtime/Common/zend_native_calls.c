@@ -2035,7 +2035,9 @@ zend_native_status zend_native_frame_finalize(
 		return ZEND_NATIVE_EXCEPTION;
 	}
 	status = zend_native_execution_finish_direct_frame(
-		activation->callee, status);
+		activation->callee, status,
+		activation->uses_discarded_return
+			? &activation->discarded_return : NULL);
 	activation->frame_requires_finish = false;
 	activation->frame_initialized = false;
 	activation->status = status;
@@ -2079,15 +2081,17 @@ static void zend_native_call_fast_complete(
 	/* A universal setup record holds no entry cell of its own. */
 	ZEND_ASSERT(activation->setup_record && !activation->cell_active
 		&& !activation->raw_arguments_owned);
+	if (activation->uses_discarded_return) {
+		zend_native_release_discarded_return(&activation->discarded_return);
+	}
+	/* As zend_leave_helper(): a variable destructor may inspect the
+	 * backtrace, so the dying frame is no longer current. */
+	caller->call = activation->pending_call;
+	EG(current_execute_data) = caller;
 	zend_free_compiled_variables(callee);
 	zend_vm_stack_free_extra_args(callee);
 	activation->frame_requires_finish = false;
 	activation->frame_initialized = false;
-	if (activation->uses_discarded_return
-			&& !Z_ISUNDEF(activation->discarded_return)) {
-		zval_ptr_dtor(&activation->discarded_return);
-		ZVAL_UNDEF(&activation->discarded_return);
-	}
 	/* The callee's RELEASE_THIS or CLOSURE flag owns the retained receiver
 	 * or closure. */
 	resolution->owned_target = NULL;
@@ -2100,8 +2104,6 @@ static void zend_native_call_fast_complete(
 		: (ZEND_CALL_INFO(callee) & ZEND_CALL_CLOSURE) != 0
 			? ZEND_CLOSURE_OBJECT(callee->func) : NULL;
 	activation->callee = NULL;
-	caller->call = activation->pending_call;
-	EG(current_execute_data) = caller;
 	zend_native_active_direct_call = activation->previous;
 	zend_vm_stack_free_call_frame(callee);
 	zend_native_frame_activation_pop_record(activation);
@@ -2326,15 +2328,12 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 		}
 		zend_vm_stack_free_extra_args_ex(call_info, callee);
 	} else {
-		status = zend_native_execution_finish_direct_frame(callee, status);
+		status = zend_native_execution_finish_direct_frame(callee, status,
+			discard_result ? callee->return_value : NULL);
 		if (status == ZEND_NATIVE_BAILOUT) {
 			return status;
 		}
 		EG(current_execute_data) = caller;
-		if (discard_result && !Z_ISUNDEF_P(callee->return_value)) {
-			zval_ptr_dtor(callee->return_value);
-			ZVAL_UNDEF(callee->return_value);
-		}
 		if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
 			status = ZEND_NATIVE_EXCEPTION;
 		}
@@ -6101,6 +6100,9 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	}
 	void **run_time_cache = zend_native_call_target_run_time_cache(function);
 
+	if (descriptor->do_result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
+		call_info |= ZEND_NATIVE_CALL_DISCARDED_RESULT;
+	}
 	call = zend_vm_stack_push_call_frame(call_info, function,
 		descriptor->initial_argument_count, object_or_called_scope);
 	/* The call references the closure or receiver; a temporary callable is
@@ -8554,6 +8556,7 @@ zend_native_direct_call_entry zend_native_call_direct_enter(
 	if (descriptor->result_operand.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED) {
 		activation->uses_discarded_return = true;
 		return_value = &activation->discarded_return;
+		ZEND_ADD_CALL_FLAG(call, ZEND_NATIVE_CALL_DISCARDED_RESULT);
 	} else {
 		return_value = zend_native_direct_operand(
 			caller, &descriptor->result_operand, false);
@@ -8643,7 +8646,9 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 	}
 	if (activation->frame_requires_finish) {
 		status = zend_native_execution_finish_direct_frame(
-			activation->callee, status);
+			activation->callee, status,
+			activation->uses_discarded_return
+				? &activation->discarded_return : NULL);
 		activation->frame_requires_finish = false;
 		activation->frame_initialized = false;
 	}
@@ -9056,6 +9061,10 @@ static zend_native_status zend_native_call_invoke_finish_source(
 	if (result_operand_type == IS_UNUSED) {
 		ZVAL_UNDEF(&temporary);
 		return_value = &temporary;
+		if (caller->call != NULL) {
+			ZEND_ADD_CALL_FLAG(
+				caller->call, ZEND_NATIVE_CALL_DISCARDED_RESULT);
+		}
 	} else if (return_value != NULL) {
 		ZVAL_UNDEF(return_value);
 	} else {
@@ -9431,6 +9440,9 @@ uint32_t zend_native_call_universal_init(
 	if (allocated) {
 		call_info |= ZEND_CALL_ALLOCATED;
 	}
+	if (result_offset == UINT32_MAX) {
+		call_info |= ZEND_NATIVE_CALL_DISCARDED_RESULT;
+	}
 	ZEND_CALL_INFO(callee) = call_info;
 	ZEND_CALL_NUM_ARGS(callee) = activation->resolution.argument_count;
 	callee->func = activation->resolution.function;
@@ -9582,7 +9594,9 @@ bool zend_native_call_fast_new(
 	}
 	object = Z_OBJ_P(result);
 	ZEND_ASSERT(object->handlers->get_constructor == zend_std_get_constructor);
-	call = zend_vm_stack_push_call_frame(header->fast_call_info,
+	call = zend_vm_stack_push_call_frame(header->fast_call_info
+			| (descriptor->do_result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				? ZEND_NATIVE_CALL_DISCARDED_RESULT : 0),
 		header->fast_function, descriptor->argument_count, object);
 	GC_ADDREF(object);
 	call->prev_execute_data = caller->call;
@@ -9894,6 +9908,9 @@ uint32_t zend_native_call_fast_do(
 	caller->call = callee->prev_execute_data;
 	callee->return_value = discard
 		? &discarded : (zval *) ((char *) caller + result_offset);
+	if (discard) {
+		ZEND_ADD_CALL_FLAG(callee, ZEND_NATIVE_CALL_DISCARDED_RESULT);
+	}
 	ZVAL_UNDEF(callee->return_value);
 	callee->prev_execute_data = caller;
 	callee->call = NULL;

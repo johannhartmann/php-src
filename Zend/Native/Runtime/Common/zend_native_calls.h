@@ -5,6 +5,7 @@
 
 #include "Zend/Native/Lowering/zend_mir_lowering_source.h"
 #include "Zend/Native/TPDE/Common/zend_tpde_backend.h"
+#include "Zend/zend_variables.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -1160,12 +1161,37 @@ void zend_native_cleanup_unfinished_exception(
 	uint32_t catch_op_num);
 void zend_native_execution_cleanup_frame(zend_execute_data *execute_data);
 /*
- * Finalize a returned dynamic frame: verify its return type, service the
- * interrupt and release CVs, arguments and the symbol table. The frame is
- * neither unlinked nor popped.
+ * Finalize a returned dynamic frame: verify its return type, release a
+ * discarded return value, service the interrupt and release CVs, arguments
+ * and the symbol table. The frame is neither unlinked nor popped.
  */
 zend_native_status zend_native_execution_finish_direct_frame(
-	zend_execute_data *execute_data, zend_native_status status);
+	zend_execute_data *execute_data, zend_native_status status,
+	zval *discarded_return);
+
+/*
+ * A frame whose caller discards its result, in the call info bit the tracing
+ * JIT reserves (native execution excludes it). The VM's RETURN without a
+ * return value leaves a CV to the leave, which releases it in CV order with
+ * the caller current; a RETURN of a CV into such a frame's discarded return
+ * value copies it instead of moving it.
+ */
+#define ZEND_NATIVE_CALL_DISCARDED_RESULT ZEND_CALL_JIT_RESERVED
+
+/*
+ * The return value of a user frame whose caller discards it, released as the
+ * VM's RETURN without a return value releases its operand, before the leave:
+ * a temporary dies while the callee is still current, without a GC root
+ * check; a CV's copy only drops its reference, so the CV dies in CV order.
+ */
+static zend_always_inline void zend_native_release_discarded_return(
+	zval *value)
+{
+	if (!Z_ISUNDEF_P(value)) {
+		zval_ptr_dtor_nogc(value);
+		ZVAL_UNDEF(value);
+	}
+}
 zend_native_status zend_native_frame_finalize(
 	zend_native_direct_activation *activation, zend_native_status status);
 

@@ -5191,7 +5191,10 @@ public:
 	 * becomes null, so the leave has nothing to release. A value that
 	 * may leak is buffered as a possible GC root first, out of line, with
 	 * the opline published (through scratch_reg) for the destructors a
-	 * collection may run.
+	 * collection may run. Into a discarded return value
+	 * (ZEND_NATIVE_CALL_DISCARDED_RESULT) the value is copied, out of
+	 * line, and the CV keeps it for the leave, as with the VM's RETURN
+	 * without a return value.
 	 */
 	void emit_return_cv_move(AsmReg frame_reg, int32_t type_offset,
 			AsmReg type_reg, AsmReg payload_reg, AsmReg scratch_reg,
@@ -5199,8 +5202,14 @@ public:
 		auto uncounted = text_writer.label_create();
 		auto possible_root = text_writer.label_create();
 		auto moved = text_writer.label_create();
+		auto discarded = text_writer.label_create();
 		ASM(TEST32ri, type_reg, IS_TYPE_REFCOUNTED << Z_TYPE_FLAGS_SHIFT);
 		generate_raw_jump(Jump::je, uncounted);
+		ASM(TEST32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(zend_execute_data, This)
+					+ offsetof(zval, u1.type_info))),
+			static_cast<int32_t>(ZEND_NATIVE_CALL_DISCARDED_RESULT));
+		generate_raw_jump(Jump::jne, discarded);
 		ASM(TEST32mi,
 			FE_MEM(payload_reg, 0, FE_NOREG,
 				static_cast<int32_t>(offsetof(zend_refcounted_h, u.type_info))),
@@ -5211,6 +5220,10 @@ public:
 		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG, type_offset), IS_NULL);
 		label_place(uncounted);
 		cold_begin();
+		label_place(discarded);
+		ASM(ADD32mi, FE_MEM(payload_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_refcounted_h, refcount))), 1);
+		generate_raw_jump(Jump::jmp, uncounted);
 		label_place(possible_root);
 		emit_publish_opline(frame_reg, scratch_reg,
 			static_cast<int32_t>(uint64_t{source_position} * sizeof(zend_op)));
@@ -8535,10 +8548,17 @@ bool ZendCompilerX64::emit_published_site_init(
 					static_cast<int32_t>(
 						offsetof(zend_execute_data, This))), 0);
 		}
+		const uint32_t discarded_result =
+			descriptor->do_result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				? ZEND_NATIVE_CALL_DISCARDED_RESULT : 0;
 		if (method || static_call) {
 			ASM(MOV32rm, value_reg, header_field(descriptor_reg,
 				offsetof(zend_native_user_call_site_header,
 					fast_call_info)));
+			if (discarded_result != 0) {
+				ASM(OR32ri, value_reg,
+					static_cast<int32_t>(discarded_result));
+			}
 			ASM(MOV32mr,
 				FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
 					offsetof(zend_execute_data, This)
@@ -8553,7 +8573,8 @@ bool ZendCompilerX64::emit_published_site_init(
 				FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
 					offsetof(zend_execute_data, This)
 					+ offsetof(zval, u1.type_info))),
-				ZEND_CALL_NESTED_FUNCTION);
+				static_cast<int32_t>(
+					ZEND_CALL_NESTED_FUNCTION | discarded_result));
 		}
 		ASM(MOV32mi,
 			FE_MEM(callee_reg, 0, FE_NOREG, static_cast<int32_t>(
@@ -22850,7 +22871,9 @@ bool ZendCompilerX64::reserve_direct_user_frame(DirectUserCallContext &du,
 					== ZEND_NATIVE_INTERNAL_RECEIVER_SOURCE_OBJECT
 				? ZEND_CALL_RELEASE_THIS : 0)
 			| (du.release_extra_arguments
-				? ZEND_CALL_FREE_EXTRA_ARGS : 0),
+				? ZEND_CALL_FREE_EXTRA_ARGS : 0)
+			| (du.result_unused
+				? ZEND_NATIVE_CALL_DISCARDED_RESULT : 0),
 		call.direct_call->frame_argument_count);
 
 	/* Publish the caller source position used by stack traces. */
