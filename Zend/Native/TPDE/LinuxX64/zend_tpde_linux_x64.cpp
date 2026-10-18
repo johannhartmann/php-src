@@ -8072,8 +8072,15 @@ bool ZendCompilerX64::compile_user_call_init(UserCallContext &uc) {
 	 * records the universal mode and runs the universal setup below.
 	 */
 	const bool fast_site = source_call_fast_eligible(call);
-	const bool fast_new_site = fast_site
-		&& call.user_call->init_opcode == ZEND_NEW;
+	/* A fast new C(...) or C::m() site may run its fast Init after
+	 * loading C (ZEND_NATIVE_USER_CALL_RESOLUTION_FAST). */
+	const bool fast_loaded_site = fast_site
+		&& (call.user_call->init_opcode == ZEND_NEW
+			|| (call.user_call->init_opcode
+					== ZEND_INIT_STATIC_METHOD_CALL
+				&& call.user_call->init_op1.kind
+					== ZEND_MIR_SOURCE_OPERAND_LITERAL
+				&& !source_call_fast_dynamic(call)));
 	/* After a chained Init no phase tests the mode: only a method
 	 * site's Do reads it, for its second level (mode 2). */
 	const bool chained = fast_site
@@ -8112,10 +8119,8 @@ bool ZendCompilerX64::compile_user_call_init(UserCallContext &uc) {
 			ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
 			call.call_site->target_id, &assigner), tpde::CCAssignment{});
 		add_const_arg(builder, setup_size, 4);
-		/* A fast new site may run its fast Init after loading its
-		 * class (ZEND_NATIVE_USER_CALL_RESOLUTION_FAST). */
 		add_const_arg(builder, argument_count
-			| (fast_new_site ? uint64_t{
+			| (fast_loaded_site ? uint64_t{
 				ZEND_NATIVE_USER_CALL_UNIVERSAL_FAST_SITE} : 0), 4);
 		builder.add_arg(ValuePart{uses_discarded_return
 				? uint64_t{UINT32_MAX} : result_offset, 4,
@@ -8132,7 +8137,7 @@ bool ZendCompilerX64::compile_user_call_init(UserCallContext &uc) {
 	/* A chained universal Init continues in the universal path of
 	 * the next phase. */
 	generate_raw_jump(Jump::je, chained ? chained_universal_ : resolved);
-	if (fast_new_site) {
+	if (fast_loaded_site) {
 		auto failed = text_writer.label_create();
 		ASM(CMP32ri, status_reg,
 			ZEND_NATIVE_USER_CALL_RESOLUTION_FAST);
