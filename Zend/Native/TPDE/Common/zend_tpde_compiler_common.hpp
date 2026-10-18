@@ -791,11 +791,18 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 							== ZEND_MIR_SOURCE_SLOT_TMP
 						|| descriptor->init_op1.slot_kind
 							== ZEND_MIR_SOURCE_SLOT_VAR)));
+		/* $class::m(...): a literal method of a fetched class. */
+		const bool variable_class = descriptor != nullptr
+			&& descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL
+			&& (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
+				|| descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
+			&& descriptor->init_op1.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+			&& descriptor->init_op2.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL;
 		if (!this->ir().generator_resume_targets().empty()
 				|| descriptor == nullptr || descriptor->flags != 0
 				|| (descriptor->init_opcode != ZEND_INIT_USER_CALL
 					&& descriptor->init_opcode != ZEND_INIT_DYNAMIC_CALL
-					&& !variable_method)
+					&& !variable_method && !variable_class)
 				|| (descriptor->do_opcode != ZEND_DO_UCALL
 					&& descriptor->do_opcode != ZEND_DO_FCALL
 					&& descriptor->do_opcode != ZEND_DO_FCALL_BY_NAME)
@@ -804,7 +811,7 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 		}
 		/* The callable is a literal, a CV or a temporary, whose location
 		 * the Init takes (source_call_fast_callable_location()). */
-		if (!variable_method
+		if (!variable_method && !variable_class
 				&& descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 				&& ((descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
 						&& descriptor->init_op2.kind
@@ -859,12 +866,13 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 	/*
 	 * The callable location zend_native_call_fast_dynamic_init() takes for
 	 * a call_user_func*() or $f(...) site (ZEND_NATIVE_CALL_DYNAMIC_CALLABLE_*),
-	 * 0 for a variable method site.
+	 * 0 for a variable method or class site.
 	 */
 	uint64_t source_call_fast_callable_location(
 			const zend_native_user_call_descriptor *descriptor) const {
 		const zend_mir_source_operand_ref &callable = descriptor->init_op2;
-		if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
+		if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL
+				|| descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL) {
 			return 0;
 		}
 		if (callable.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {

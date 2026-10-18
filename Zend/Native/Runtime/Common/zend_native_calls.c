@@ -4608,6 +4608,14 @@ static zend_native_call_dynamic_init_result
 zend_native_call_fast_dynamic_method_init(
 	zend_execute_data *caller,
 	const zend_native_user_call_descriptor *descriptor);
+static void zend_native_call_recorded_static_class_record(
+	const zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_user_call_resolution *resolution);
+static zend_native_call_dynamic_init_result
+zend_native_call_fast_dynamic_static_init(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor);
 
 /* A hit on any entry of the call site; every miss leaves all unchanged. */
 static zend_always_inline bool zend_native_call_resolve_cached(
@@ -4641,6 +4649,10 @@ static zend_always_inline bool zend_native_call_resolve_cached(
 			 * site's second level. */
 			if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
 				zend_native_call_recorded_method_record(
+					caller, descriptor, &activation->resolution);
+			} else if (descriptor->init_opcode
+					== ZEND_INIT_STATIC_METHOD_CALL) {
+				zend_native_call_recorded_static_class_record(
 					caller, descriptor, &activation->resolution);
 			}
 			return true;
@@ -5618,6 +5630,8 @@ typedef enum _zend_native_call_recorded_kind {
 	ZEND_NATIVE_CALL_RECORDED_CLOSURE,
 	ZEND_NATIVE_CALL_RECORDED_METHOD,
 	ZEND_NATIVE_CALL_RECORDED_STATIC,
+	/* $class::m(): a static method of the class a FETCH_CLASS fetched. */
+	ZEND_NATIVE_CALL_RECORDED_STATIC_CLASS,
 } zend_native_call_recorded_kind;
 
 typedef struct _zend_native_call_recorded_target {
@@ -5870,11 +5884,13 @@ static void zend_native_call_recorded_target_store(
 		: function != NULL
 		&& (function->op_array.fn_flags & ZEND_ACC_IMMUTABLE) != 0
 		&& (kind == ZEND_NATIVE_CALL_RECORDED_METHOD
+				|| kind == ZEND_NATIVE_CALL_RECORDED_STATIC_CLASS
 			? (((const zend_class_entry *) key)->ce_flags
 				& ZEND_ACC_IMMUTABLE) != 0
 			: kind == ZEND_NATIVE_CALL_RECORDED_FUNCTION
 				|| kind == ZEND_NATIVE_CALL_RECORDED_STATIC)
 		&& (kind == ZEND_NATIVE_CALL_RECORDED_METHOD
+			|| kind == ZEND_NATIVE_CALL_RECORDED_STATIC_CLASS
 			|| (GC_FLAGS((const zend_string *) key) & IS_STR_PERMANENT) != 0)
 		&& (method == NULL || (GC_FLAGS(method) & IS_STR_PERMANENT) != 0)
 		&& (scope == NULL || (scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0)
@@ -6036,6 +6052,9 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 	}
 	if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
 		return zend_native_call_fast_dynamic_method_init(caller, descriptor);
+	}
+	if (descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL) {
+		return zend_native_call_fast_dynamic_static_init(caller, descriptor);
 	}
 #if ZEND_DEBUG
 	{
@@ -6374,6 +6393,97 @@ zend_native_call_fast_dynamic_method_init(
 }
 
 /*
+ * $class::m(...): a literal static method of the class a FETCH_CLASS
+ * fetched, as Symfony's container calls each service factory. The general
+ * resolver records the static user method it resolved under the class,
+ * the interned lowercased name and the calling scope;
+ * zend_native_call_fast_dynamic_static_init() finds it again and the sends
+ * go to the frame as the VM sends.
+ */
+static void zend_native_call_recorded_static_class_record(
+	const zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor,
+	const zend_native_user_call_resolution *resolution)
+{
+	const zend_function *function = resolution->function;
+	const zend_op_array *op_array = &caller->func->op_array;
+	const uint32_t name_index = descriptor->init_op2.index + 1;
+	const zend_string *name;
+
+	if ((descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+				&& descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+			|| descriptor->init_op2.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
+			|| name_index >= (uint32_t) op_array->last_literal
+			|| Z_TYPE(op_array->literals[name_index]) != IS_STRING
+			|| resolution->target_kind
+				!= ZEND_NATIVE_USER_CALL_TARGET_NATIVE_USER
+			|| function == NULL || function->type != ZEND_USER_FUNCTION
+			|| resolution->object_or_called_scope == NULL
+			|| resolution->call_info != ZEND_CALL_NESTED_FUNCTION
+			|| resolution->entry_cell == NULL
+			|| !resolution->entry_cell->lease_managed
+			|| resolution->invoke_entry == NULL
+			|| (function->common.fn_flags
+				& (ZEND_ACC_STATIC | ZEND_ACC_GENERATOR
+					| ZEND_ACC_DEPRECATED | ZEND_ACC_NODISCARD
+					| ZEND_ACC_CALL_VIA_TRAMPOLINE)) != ZEND_ACC_STATIC) {
+		return;
+	}
+	name = Z_STR(op_array->literals[name_index]);
+	if (!ZSTR_IS_INTERNED(name)) {
+		return;
+	}
+	zend_native_call_recorded_target_store(
+		resolution->object_or_called_scope, name, caller->func->common.scope,
+		ZEND_NATIVE_CALL_RECORDED_STATIC_CLASS, function, resolution);
+}
+
+/*
+ * The fast Init of $class::m(...) (source_call_fast_dynamic()): push the
+ * frame of the static method recorded for the fetched class, as
+ * ZEND_INIT_STATIC_METHOD_CALL does, its called scope the class.
+ */
+static zend_native_call_dynamic_init_result
+zend_native_call_fast_dynamic_static_init(
+	zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor)
+{
+	const zend_native_call_dynamic_init_result miss = {NULL, NULL};
+	const uint32_t name_index = descriptor->init_op2.index + 1;
+	zend_native_call_recorded_target *target;
+	const zend_string *name;
+	zend_class_entry *ce;
+	void **run_time_cache;
+	zend_execute_data *call;
+
+	/* The emitter takes this path for a literal method of a fetched class
+	 * (source_call_fast_dynamic()). */
+	ZEND_ASSERT(name_index < (uint32_t) caller->func->op_array.last_literal
+		&& Z_TYPE(caller->func->op_array.literals[name_index]) == IS_STRING);
+	ce = zend_native_call_source_class(caller, &descriptor->init_op1,
+		descriptor->init_op1_payload);
+	if (ce == NULL) {
+		return miss;
+	}
+	name = Z_STR(caller->func->op_array.literals[name_index]);
+	target = zend_native_call_recorded_target_slot(
+		ce, name, caller->func->common.scope);
+	if (target->key != ce || target->method != name
+			|| target->scope != caller->func->common.scope
+			|| target->kind != ZEND_NATIVE_CALL_RECORDED_STATIC_CLASS
+			|| !zend_native_call_recorded_target_current(target)) {
+		return miss;
+	}
+	run_time_cache = zend_native_call_target_run_time_cache(target->function);
+	call = zend_vm_stack_push_call_frame(ZEND_CALL_NESTED_FUNCTION
+			| (descriptor->do_result.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+				? ZEND_NATIVE_CALL_DISCARDED_RESULT : 0),
+		target->function, descriptor->initial_argument_count, ce);
+	return zend_native_call_recorded_frame_link(
+		caller, call, target, run_time_cache);
+}
+
+/*
  * ZEND_SEND_ARRAY of a packed array without holes to a target taking every
  * sent element by value: each element, dereferenced, is copied into the
  * next argument as the VM copies it. The array_slice() form (an integer or
@@ -6588,6 +6698,9 @@ static void zend_native_call_resolution_cache_store(
 			caller, descriptor, resolution);
 	} else if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
 		zend_native_call_recorded_method_record(
+			caller, descriptor, resolution);
+	} else if (descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL) {
+		zend_native_call_recorded_static_class_record(
 			caller, descriptor, resolution);
 	}
 	if (dynamic && !zend_native_call_callable_identity(caller, resolution,
@@ -6967,6 +7080,9 @@ zend_native_call_resolve_user_linked(
 		 * site's second level. */
 		if (descriptor->init_opcode == ZEND_INIT_METHOD_CALL) {
 			zend_native_call_recorded_method_record(
+				caller, descriptor, resolution);
+		} else if (descriptor->init_opcode == ZEND_INIT_STATIC_METHOD_CALL) {
+			zend_native_call_recorded_static_class_record(
 				caller, descriptor, resolution);
 		}
 	} else {
