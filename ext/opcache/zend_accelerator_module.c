@@ -288,6 +288,14 @@ static ZEND_INI_MH(OnUpdateMaxTraceLength)
 }
 #endif
 
+/* The native engine compiles a script from the optimizer's form: the CLI
+ * runs it with OPcache unless disabled. */
+#ifdef HAVE_NATIVE_ENGINE
+# define ZEND_ACCEL_ENABLE_CLI_DEFAULT "1"
+#else
+# define ZEND_ACCEL_ENABLE_CLI_DEFAULT "0"
+#endif
+
 ZEND_INI_BEGIN()
 	STD_PHP_INI_BOOLEAN("opcache.enable"             , "1", PHP_INI_ALL,    OnEnable,     enabled                             , zend_accel_globals, accel_globals)
 	STD_PHP_INI_BOOLEAN("opcache.use_cwd"            , "1", PHP_INI_SYSTEM, OnUpdateBool, accel_directives.use_cwd            , zend_accel_globals, accel_globals)
@@ -318,7 +326,7 @@ ZEND_INI_BEGIN()
 	STD_PHP_INI_ENTRY("opcache.optimization_level"    , DEFAULT_OPTIMIZATION_LEVEL , PHP_INI_SYSTEM, OnUpdateLong, accel_directives.optimization_level,   zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.opt_debug_level"       , "0"      , PHP_INI_SYSTEM, OnUpdateLong,             accel_directives.opt_debug_level,            zend_accel_globals, accel_globals)
 	STD_PHP_INI_BOOLEAN("opcache.enable_file_override"	, "0"   , PHP_INI_SYSTEM, OnUpdateBool,              accel_directives.file_override_enabled,     zend_accel_globals, accel_globals)
-	STD_PHP_INI_BOOLEAN("opcache.enable_cli"             , "0"   , PHP_INI_SYSTEM, OnUpdateBool,              accel_directives.enable_cli,                zend_accel_globals, accel_globals)
+	STD_PHP_INI_BOOLEAN("opcache.enable_cli"             , ZEND_ACCEL_ENABLE_CLI_DEFAULT, PHP_INI_SYSTEM, OnUpdateBool, accel_directives.enable_cli, zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.error_log"                , ""    , PHP_INI_SYSTEM, OnUpdateString,	         accel_directives.error_log,                 zend_accel_globals, accel_globals)
 	STD_PHP_INI_ENTRY("opcache.restrict_api"             , ""    , PHP_INI_SYSTEM, OnUpdateString,	         accel_directives.restrict_api,              zend_accel_globals, accel_globals)
 

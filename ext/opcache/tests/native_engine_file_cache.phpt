@@ -3,6 +3,7 @@ Native Engine target images survive an OPcache file-cache process boundary
 --EXTENSIONS--
 opcache
 --INI--
+opcache.enable_cli=0
 opcache.file_cache="{TMP}/native-engine-file-cache"
 --FILE--
 <?php

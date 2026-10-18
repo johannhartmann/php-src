@@ -19,7 +19,9 @@ Tiers:
   quick   (default) debug profile: ext/native_mir_test/tests plus PATHs.
           Seconds; run it after every change.
   commit  debug profile: the native, Zend, OPcache, array, math, string,
-          SPL and reflection suites plus PATHs. Run it before a commit.
+          SPL and reflection suites plus PATHs, as the CLI runs them by
+          default (compiled from OPcache's optimized form), then again with
+          opcache.enable_cli=0 (unoptimized). Run it before a commit.
   full    commit, the commit suites under deoptimization stress (period 1)
           and layout stress, then ASan and UBSan, built concurrently and
           run one after the other. Run it before a push.
@@ -44,7 +46,8 @@ Environment:
                        native CLI cannot run it yet).
 
 Every profile run writes phpt-<tier>.log, phpt-<tier>-failures.txt and
-phpt-<tier>-slow.txt below its NATIVE_WORK_ROOT log directory. Exit status:
+phpt-<tier>-slow.txt below its NATIVE_WORK_ROOT log directory; the
+unoptimized run is named phpt-<tier>-unoptimized*. Exit status:
 0 when every run passed, 1 on test failures, 2 on usage errors, 3 on missing
 prerequisites.
 EOF
@@ -151,13 +154,16 @@ build_profile() {
 }
 
 # Runs PHPT paths against one profile; returns run-tests' failure state.
-# A non-empty run_stress names the deoptimization stress period of the run.
+# A non-empty run_stress names the deoptimization stress period of the run;
+# a non-empty run_unoptimized runs the tests without OPcache.
 run_stress=
+run_unoptimized=
 run_profile() {
     local profile=$1 binary=$2 profile_jobs=$3
     shift 3
     local log failures slow label=$tier args=()
     [[ -n $run_stress ]] && label=$tier-deopt
+    [[ -n $run_unoptimized ]] && label=$tier-unoptimized
     (
         native_load_profile "$profile"
         native_prepare_profile_paths "$profile"
@@ -171,6 +177,7 @@ run_profile() {
         slow="$NATIVE_LOG_DIR/phpt-$label-slow.txt"
         args=(-n "$NATIVE_REPO_ROOT/run-tests.php" -q -j"$profile_jobs"
             --no-progress --set-timeout 300 --show-slow "$show_slow")
+        [[ -n $run_unoptimized ]] && args+=(-d opcache.enable_cli=0)
         [[ $PROFILE_SANITIZER == address ]] && args+=(--asan)
         cd "$NATIVE_REPO_ROOT"
         env -u PHP_INI_SCAN_DIR -u PHPRC \
@@ -181,8 +188,9 @@ run_profile() {
             | LC_ALL=C sort -u >"$failures"
         sed 's/\x1b\[[0-9;]*m//g' "$log" \
             | sed -n '/^SLOW TEST SUMMARY/,/^=*$/p' >"$slow"
-        printf '== %s%s: %s\n' "$profile" \
+        printf '== %s%s%s: %s\n' "$profile" \
             "${run_stress:+ (deoptimization stress $run_stress, layout stress)}" \
+            "${run_unoptimized:+ (unoptimized)}" \
             "$(sed 's/\x1b\[[0-9;]*m//g' "$log" \
             | grep -E '^(Tests failed|Tests passed|Time taken)' | tr -s ' ' \
             | paste -sd ';' -)"
@@ -207,6 +215,12 @@ debug_profile="$prefix-debug-nts"
 debug_binary=$(build_profile "$debug_profile" "$jobs")
 run_stress=$deopt_stress
 run_profile "$debug_profile" "$debug_binary" "$jobs" "${debug_paths[@]}" || status=1
+if [[ $tier != quick && -z $deopt_stress ]]; then
+    run_unoptimized=1
+    run_profile "$debug_profile" "$debug_binary" "$jobs" "${debug_paths[@]}" \
+        || status=1
+    run_unoptimized=
+fi
 if [[ $tier == full && -z $deopt_stress ]]; then
     run_stress=1
     run_profile "$debug_profile" "$debug_binary" "$jobs" "${debug_paths[@]}" \

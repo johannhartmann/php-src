@@ -67,7 +67,8 @@ See `docs/native-engine/test-command-contract.md` for exit semantics.
   the toolchain change; source edits rebuild incrementally.
 - Test in tiers with `scripts/native/test-phpt.sh`: `--tier quick` (native
   PHPTs plus given paths, seconds) after every change, `--tier commit` (full
-  debug suites) before a commit, `--tier full` (commit plus ASan and UBSan,
+  debug suites, with OPcache's optimized form as the CLI default and again
+  with `opcache.enable_cli=0`) before a commit, `--tier full` (commit plus ASan and UBSan,
   built in parallel and run in turn) before a push. It builds incrementally, reports tests slower
   than `--show-slow` ms, and lists failures missing from a `--baseline`.
 - The linux debug profiles compile at `-Og` and the sanitizer profiles at

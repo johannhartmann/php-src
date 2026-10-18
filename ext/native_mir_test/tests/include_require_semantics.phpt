@@ -6,6 +6,8 @@ if (!function_exists('native_mir_test_compile_execute')) {
     die('skip native_mir_test is not available');
 }
 ?>
+--INI--
+opcache.enable_cli=0
 --FILE--
 <?php
 $directory = sys_get_temp_dir() . '/native-includes-' . getmypid();

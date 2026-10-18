@@ -577,18 +577,21 @@ seconds. Use `--force-configure` only when you need it, and never build with
 ## 4. Running
 
 The native executor replaces the VM in every binary built with
-`--enable-native-engine`; no INI setting turns it on. Enable OPcache so that
-scripts are compiled once, stored in OPcache, and their images shared across
-requests and workers:
+`--enable-native-engine`; no INI setting turns it on. The fastest form needs
+no configuration either: OPcache is built in and, unlike in stock PHP,
+`opcache.enable_cli` defaults to 1, so the CLI also compiles scripts from
+OPcache's optimized form and keeps their images. `opcache.enable_cli=0`
+runs the CLI from unoptimized opcodes, which is about 2.6 times slower on
+`Zend/bench.php`.
 
 ```bash
-php -d opcache.enable=1 -d opcache.enable_cli=1 \
-    -d opcache.file_update_protection=0 script.php
+php script.php
+php -d opcache.file_update_protection=0 fresh-script.php
 ```
 
-`opcache.file_update_protection=0` matters for freshly written scripts:
-OPcache does not cache a file modified in the last two seconds, so without it
-new test scripts run without their optimized, cached form.
+`opcache.file_update_protection=0` matters only for freshly written scripts:
+OPcache does not cache a file modified in the last two seconds, so such a
+script runs without its optimized, cached form.
 
 FPM works the same way, for example:
 
