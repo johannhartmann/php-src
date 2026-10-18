@@ -3128,14 +3128,26 @@ static zend_mir_lowering_status zend_mir_frontend_build_call_inventory(
 			}
 		}
 	}
-	if (stack_count != 0) {
-		zend_mir_frontend_set_diagnostic(
-			diagnostic, ZEND_MIR_LOWERING_REJECTED,
-			ZEND_MIRL_MALFORMED_CALL_SEQUENCE, source->op_array_id,
-			inventory->sites[stack[stack_count - 1]].init_opline_index,
-			ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
-		goto rejected;
+	/*
+	 * A call whose DO no reachable opline reaches never runs: an argument
+	 * always throws, as an optimized match without a matching arm does
+	 * (INIT_FCALL; MATCH_ERROR). An INIT_FCALL names a bound function and
+	 * neither throws nor observes anything, so such a call is discarded as
+	 * one an expression throw ends; any other INIT keeps the rejection.
+	 */
+	for (index = 0; index < stack_count; index++) {
+		if (op_array->opcodes[inventory->sites[stack[index]]
+				.init_opline_index].opcode != ZEND_INIT_FCALL) {
+			zend_mir_frontend_set_diagnostic(
+				diagnostic, ZEND_MIR_LOWERING_REJECTED,
+				ZEND_MIRL_MALFORMED_CALL_SEQUENCE, source->op_array_id,
+				inventory->sites[stack[index]].init_opline_index,
+				ZEND_MIR_FRONTEND_OPERAND_NONE, ZEND_MIR_ID_INVALID);
+			goto rejected;
+		}
+		discarded_sites[stack[index]] = 1;
 	}
+	stack_count = 0;
 	if (!zend_mir_frontend_discard_expression_throw_calls(
 			inventory, discarded_sites)) {
 		goto allocation_failed;
