@@ -19476,12 +19476,26 @@ bool ZendCompilerX64::compile_value_multi_branch(InstContext &ctx) {
 		generate_uncond_branch(targets[layout.constant_successor]);
 		return true;
 	}
+	/* One edge per distinct target, as TPDE's generate_switch(): the
+	 * analyzer counts a phi input once per predecessor block, so each
+	 * target takes its phi moves once. */
+	std::vector<std::pair<tpde::Label, IRBlockRef>> edges;
+	const auto edge_label = [&](IRBlockRef target) {
+		for (const auto &[label, edge_target] : edges) {
+			if (edge_target == target) {
+				return label;
+			}
+		}
+		edges.emplace_back(text_writer.label_create(), target);
+		return edges.back().first;
+	};
 	for (uint32_t i = 0; i < layout.case_count; ++i) {
-		case_labels.push_back(text_writer.label_create());
+		case_labels.push_back(edge_label(targets[i]));
 	}
-	auto default_label = text_writer.label_create();
+	auto default_label = edge_label(targets[layout.successor_count
+		- (layout.source_opcode == ZEND_MATCH ? 1 : 2)]);
 	auto fallback_label = layout.source_opcode == ZEND_MATCH
-		? default_label : text_writer.label_create();
+		? default_label : edge_label(targets.back());
 	/* MATCH warns about an undefined CV; type inference often
 	 * proves it defined. */
 	const uint32_t match_position =
@@ -19536,20 +19550,9 @@ bool ZendCompilerX64::compile_value_multi_branch(InstContext &ctx) {
 		return false;
 	}
 
-	for (uint32_t i = 0; i < case_labels.size(); ++i) {
-		label_place(case_labels[i]);
-		generate_branch_to_block(
-			Jump::jmp, targets[i], false, false);
-	}
-	label_place(default_label);
-	generate_branch_to_block(Jump::jmp,
-		targets[layout.successor_count
-			- (layout.source_opcode == ZEND_MATCH ? 1 : 2)],
-		false, false);
-	if (layout.source_opcode != ZEND_MATCH) {
-		label_place(fallback_label);
-		generate_branch_to_block(
-			Jump::jmp, targets.back(), false, false);
+	for (const auto &[label, target] : edges) {
+		label_place(label);
+		generate_branch_to_block(Jump::jmp, target, false, false);
 	}
 	end_branch_region();
 	release_spilled_regs(spilled);
