@@ -227,6 +227,16 @@ zend_native_status zend_native_execution_finish_direct_frame(
 		}
 	}
 	zend_native_execution_cleanup_frame_ex(execute_data, !frame_returned);
+	/* A throwing destructor of a CV or an extra argument fails the call:
+	 * its result dies, as ZEND_HANDLE_EXCEPTION frees the throwing opline's
+	 * result. A discarded result is already released. */
+	if (status == ZEND_NATIVE_RETURNED && EG(exception) != NULL) {
+		status = ZEND_NATIVE_EXCEPTION;
+		if (execute_data->return_value != NULL) {
+			zval_ptr_dtor_nogc(execute_data->return_value);
+			ZVAL_UNDEF(execute_data->return_value);
+		}
+	}
 	return status;
 }
 

@@ -2087,8 +2087,18 @@ static uint32_t zend_native_call_invoke_user(
 				&& !atomic_load(&EG(vm_interrupt))
 				&& (ZEND_CALL_INFO(callee) & (ZEND_CALL_HAS_SYMBOL_TABLE
 					| ZEND_CALL_HAS_EXTRA_NAMED_PARAMS)) == 0)) {
+			zval *result = activation->uses_discarded_return
+				? NULL : callee->return_value;
+
 			zend_native_call_fast_return_normalize(callee);
 			zend_native_call_fast_complete(activation, callee);
+			/* A throwing destructor of a CV, an extra argument, $this or
+			 * the closure fails the call: its result dies, as
+			 * ZEND_HANDLE_EXCEPTION frees the throwing opline's result. */
+			if (UNEXPECTED(EG(exception) != NULL) && result != NULL) {
+				zval_ptr_dtor_nogc(result);
+				ZVAL_UNDEF(result);
+			}
 			return 0;
 		}
 		goto finalize;
@@ -2109,7 +2119,19 @@ finalize:
 			&& status != ZEND_NATIVE_GENERATOR_CREATED) {
 		return 1;
 	}
-	zend_native_frame_activation_release(activation);
+	{
+		/* Releasing $this or the closure may throw: the returned result
+		 * then dies, as ZEND_HANDLE_EXCEPTION frees the throwing opline's
+		 * result. A discarded result lives in the activation. */
+		zval *result = activation->uses_discarded_return
+			? NULL : activation->callee->return_value;
+
+		zend_native_frame_activation_release(activation);
+		if (UNEXPECTED(EG(exception) != NULL) && result != NULL) {
+			zval_ptr_dtor_nogc(result);
+			ZVAL_UNDEF(result);
+		}
+	}
 	return 0;
 }
 
@@ -2123,17 +2145,57 @@ finalize:
 static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 	zend_execute_data *callee, uint32_t status, bool discard_result);
 
-void zend_native_call_fast_release_cv(zval *variable)
+uint32_t zend_native_call_fast_release_cv(
+	zval *variable, zend_execute_data *callee, bool discard_result)
 {
 	zend_refcounted *counted = Z_COUNTED_P(variable);
 
 	/* The fast-call leave already dropped the CV's reference. */
-	if (GC_REFCOUNT(counted) == 0) {
-		ZVAL_NULL(variable);
-		rc_dtor_func(counted);
-	} else {
+	if (GC_REFCOUNT(counted) != 0) {
 		gc_check_possible_root(counted);
+		return ZEND_NATIVE_RETURNED;
 	}
+	ZVAL_NULL(variable);
+	rc_dtor_func(counted);
+	if (EXPECTED(EG(exception) == NULL)) {
+		return ZEND_NATIVE_RETURNED;
+	}
+	/* The rest of the VM's leave: the later CVs, the frame, then $this or
+	 * the closure; the call's result dies last, as ZEND_HANDLE_EXCEPTION
+	 * frees the throwing opline's result. The frame stays intact until it
+	 * is freed. */
+	{
+		zval *end = ZEND_CALL_VAR_NUM(
+			callee, callee->func->op_array.last_var);
+		zval *result = discard_result ? NULL : callee->return_value;
+		uint32_t call_info = ZEND_CALL_INFO(callee);
+		zend_object *release_object =
+			(call_info & ZEND_CALL_RELEASE_THIS) != 0
+				? Z_OBJ(callee->This)
+				: (call_info & ZEND_CALL_CLOSURE) != 0
+					? ZEND_CLOSURE_OBJECT(callee->func) : NULL;
+
+		for (zval *cv = variable + 1; cv < end; cv++) {
+			if (Z_REFCOUNTED_P(cv)) {
+				counted = Z_COUNTED_P(cv);
+				if (!GC_DELREF(counted)) {
+					ZVAL_NULL(cv);
+					rc_dtor_func(counted);
+				} else {
+					gc_check_possible_root(counted);
+				}
+			}
+		}
+		zend_vm_stack_free_call_frame_ex(call_info, callee);
+		if (release_object != NULL) {
+			OBJ_RELEASE(release_object);
+		}
+		if (result != NULL) {
+			zval_ptr_dtor_nogc(result);
+			ZVAL_UNDEF(result);
+		}
+	}
+	return ZEND_NATIVE_EXCEPTION;
 }
 
 zend_native_status zend_native_private_frame_retry(
@@ -2216,6 +2278,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 		 * i_free_compiled_variables() releases them, then the extra
 		 * arguments, in the VM's leave order. */
 		EG(current_execute_data) = caller;
+		bool destroyed = false;
 		{
 			zval *cv = ZEND_CALL_VAR_NUM(callee, 0);
 			zval *end = cv + callee->func->op_array.last_var;
@@ -2227,6 +2290,7 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 					if (!GC_DELREF(counted)) {
 						ZVAL_NULL(cv);
 						rc_dtor_func(counted);
+						destroyed = true;
 					} else {
 						gc_check_possible_root(counted);
 					}
@@ -2234,6 +2298,18 @@ static zend_always_inline uint32_t zend_native_call_fast_leave_inline(
 			}
 		}
 		zend_vm_stack_free_extra_args_ex(call_info, callee);
+		/* A throwing destructor of a CV or an extra argument fails the
+		 * call: its result dies, as ZEND_HANDLE_EXCEPTION frees the
+		 * throwing opline's result. */
+		if (UNEXPECTED((destroyed
+					|| (call_info & ZEND_CALL_FREE_EXTRA_ARGS) != 0)
+				&& EG(exception) != NULL)) {
+			status = ZEND_NATIVE_EXCEPTION;
+			if (!discard_result) {
+				zval_ptr_dtor_nogc(callee->return_value);
+				ZVAL_UNDEF(callee->return_value);
+			}
+		}
 	} else {
 		status = zend_native_execution_finish_direct_frame(callee, status,
 			discard_result ? callee->return_value : NULL);

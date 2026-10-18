@@ -4809,8 +4809,17 @@ public:
 			patch(candidate, text_writer.offset());
 			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_save_first), FE_R10);
 			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_save_second), FE_R11);
+			/* zend_native_call_fast_release_cv(variable, frame,
+			 * discarded): a throwing destructor finishes the leave there,
+			 * and the entry returns its status. */
 			ASM(MOV64rr, FE_DI, FE_R10);
+			ASM(MOV64rm, FE_SI, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_frame));
+			ASM(XOR32rr, FE_DX, FE_DX);
+			ASM(CMP32mi, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_result_offset), -1);
+			ASM(SETZ8r, FE_DX);
 			emit_symbol_call(fe.release_symbol);
+			ASM(TEST32rr, FE_AX, FE_AX);
+			branch_back(true, fe.epilogue);
 			ASM(MOV64rm, FE_R10, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_save_first));
 			ASM(MOV64rm, FE_R11, FE_MEM(FE_SP, 0, FE_NOREG, fe.area_save_second));
 			/* The straight tests address the frame, the leave the

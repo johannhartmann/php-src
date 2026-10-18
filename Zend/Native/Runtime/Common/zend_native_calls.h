@@ -991,8 +991,12 @@ zend_native_status zend_native_deopt_transfer(zend_execute_data *execute_data,
 	uint32_t position, zend_native_frame_entry_t entry);
 /* A counted CV of a frame a fast-call entry leaves, as
  * zend_native_call_fast_leave() releases it, after the entry dropped its
- * reference: freed at zero, else checked as a possible GC root. */
-void zend_native_call_fast_release_cv(zval *variable);
+ * reference: freed at zero, else checked as a possible GC root. A throwing
+ * destructor fails the call: the rest of the leave runs here, the kept
+ * result dies, and ZEND_NATIVE_EXCEPTION is returned for the entry to
+ * return. */
+uint32_t zend_native_call_fast_release_cv(
+	zval *variable, zend_execute_data *callee, bool discard_result);
 /*
  * A helper reached in a private frame (ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY):
  * the read at op_num failed before any effect. Releases the temporaries
