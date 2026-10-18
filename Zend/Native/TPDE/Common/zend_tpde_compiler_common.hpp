@@ -838,10 +838,10 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 						&& argument.source_opcode != ZEND_SEND_VAL_EX
 						&& argument.source_opcode != ZEND_SEND_VAR
 						&& argument.source_opcode != ZEND_SEND_VAR_EX
+						&& argument.source_opcode != ZEND_SEND_VAR_NO_REF_EX
 						&& argument.source_opcode != ZEND_SEND_USER
 						&& argument.source_opcode != ZEND_SEND_ARRAY
-						&& (argument.source_opcode != ZEND_SEND_UNPACK
-							|| !variable_method))
+						&& argument.source_opcode != ZEND_SEND_UNPACK)
 					|| (argument.source_opcode != ZEND_SEND_ARRAY
 						&& argument.auxiliary_operand.kind
 							!= ZEND_MIR_SOURCE_OPERAND_UNUSED)

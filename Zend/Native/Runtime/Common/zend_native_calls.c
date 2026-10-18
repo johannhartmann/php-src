@@ -5696,12 +5696,10 @@ static void zend_native_call_recorded_target_record(
 		kind = ZEND_NATIVE_CALL_RECORDED_FUNCTION;
 		key = Z_STR_P(callable);
 	} else if (Z_TYPE_P(callable) == IS_OBJECT) {
-		/* A genuine closure, matched by its code. */
+		/* A closure, matched by its code: a fake closure ($o->m(...))
+		 * by the code of the function it was made from. */
 		if (Z_OBJCE_P(callable) != zend_ce_closure
-				|| (function->common.fn_flags
-					& (ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE))
-					!= ZEND_ACC_CLOSURE
-				|| (resolution->call_info & ZEND_CALL_FAKE_CLOSURE) != 0) {
+				|| (function->common.fn_flags & ZEND_ACC_CLOSURE) == 0) {
 			return;
 		}
 		kind = ZEND_NATIVE_CALL_RECORDED_CLOSURE;
@@ -6032,9 +6030,7 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 				|| Z_OBJ_HT_P(callable)->get_closure(Z_OBJ_P(callable),
 					&called_scope, &function, &bound, false) != SUCCESS
 				|| function == NULL || function->type != ZEND_USER_FUNCTION
-				|| (function->common.fn_flags
-					& (ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE))
-					!= ZEND_ACC_CLOSURE
+				|| (function->common.fn_flags & ZEND_ACC_CLOSURE) == 0
 				|| RUN_TIME_CACHE(&function->op_array) == NULL) {
 			return miss;
 		}
@@ -6046,6 +6042,9 @@ zend_native_call_dynamic_init_result zend_native_call_fast_dynamic_init(
 			return miss;
 		}
 		call_info |= ZEND_CALL_CLOSURE;
+		if ((function->common.fn_flags & ZEND_ACC_FAKE_CLOSURE) != 0) {
+			call_info |= ZEND_CALL_FAKE_CLOSURE;
+		}
 		if (bound != NULL) {
 			call_info |= ZEND_CALL_HAS_THIS;
 		}

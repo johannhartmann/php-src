@@ -9209,8 +9209,8 @@ bool ZendCompilerX64::compile_dynamic_fast_send(UserCallContext &uc) {
 		generate_raw_jump(Jump::jmp, sent);
 		label_place(helper);
 	}
-	/* A positional by-value send of a CV, a temporary or an
-	 * uncounted literal into a slot the frame has, for a target
+	/* A positional by-value send of a CV, a temporary, a call result
+	 * or an uncounted literal into a slot the frame has, for a target
 	 * that takes the parameter by value: the fast path of
 	 * zend_native_call_set_explicit_argument(). */
 	const uint32_t send_number =
@@ -9223,7 +9223,8 @@ bool ZendCompilerX64::compile_dynamic_fast_send(UserCallContext &uc) {
 				== ZEND_MIR_SOURCE_OPERAND_SLOT
 			|| send_source.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 		&& (send_source.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-			|| send_source.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP);
+			|| send_source.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			|| send_source.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR);
 	const zval *send_literal = send_source.kind
 			== ZEND_MIR_SOURCE_OPERAND_LITERAL
 			&& ir().plan()->source_literals != nullptr
@@ -9231,19 +9232,21 @@ bool ZendCompilerX64::compile_dynamic_fast_send(UserCallContext &uc) {
 		: nullptr;
 	const uint64_t send_offset = send_slot
 		? (uint64_t{ZEND_CALL_FRAME_SLOT} + send_source.index
-			+ (send_source.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
+			+ (send_source.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
 				? ir().plan()->source_frame_variable_count : 0))
 			* sizeof(zval)
 		: 0;
 	if (send_argument.mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 			&& send_argument.auxiliary_operand.kind
 				== ZEND_MIR_SOURCE_OPERAND_UNUSED
-			/* SEND_USER sends by value too; a by-reference
-			 * parameter (a warning) takes the helper. */
+			/* SEND_USER sends by value too, as SEND_VAR_NO_REF_EX does
+			 * to a by-value parameter; a by-reference parameter (a
+			 * warning or a notice) takes the helper. */
 			&& (send_argument.source_opcode == ZEND_SEND_VAL
 				|| send_argument.source_opcode == ZEND_SEND_VAL_EX
 				|| send_argument.source_opcode == ZEND_SEND_VAR
 				|| send_argument.source_opcode == ZEND_SEND_VAR_EX
+				|| send_argument.source_opcode == ZEND_SEND_VAR_NO_REF_EX
 				|| send_argument.source_opcode == ZEND_SEND_USER)
 			&& send_number >= 1 && send_number <= MAX_ARG_FLAG_NUM
 			/* Scalar literals only: a string's address is the

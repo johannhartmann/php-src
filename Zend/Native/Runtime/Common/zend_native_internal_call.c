@@ -834,7 +834,8 @@ zend_result zend_native_call_set_explicit_argument(
 	 * A positional by-value SEND_VAL/SEND_VAR(_EX) of a defined CV, a plain
 	 * temporary or VAR (a call result) or a literal to a parameter that
 	 * takes no reference copies or moves the value, as the general path
-	 * below does, without decoding the operand.
+	 * below does, without decoding the operand. SEND_VAR_NO_REF_EX sends
+	 * so to such a parameter, too.
 	 */
 	if (argument->mode == ZEND_NATIVE_CALL_ARGUMENT_BY_VALUE
 			&& argument->auxiliary_operand.kind
@@ -842,7 +843,8 @@ zend_result zend_native_call_set_explicit_argument(
 			&& (argument->source_opcode == ZEND_SEND_VAL
 				|| argument->source_opcode == ZEND_SEND_VAL_EX
 				|| argument->source_opcode == ZEND_SEND_VAR
-				|| argument->source_opcode == ZEND_SEND_VAR_EX)) {
+				|| argument->source_opcode == ZEND_SEND_VAR_EX
+				|| argument->source_opcode == ZEND_SEND_VAR_NO_REF_EX)) {
 		const zend_op_array *op_array = &caller->func->op_array;
 		const zend_mir_source_operand_ref *source = &argument->source_operand;
 		const uint32_t number = argument->auxiliary_payload != 0
