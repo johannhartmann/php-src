@@ -68,7 +68,6 @@ typedef enum _zend_native_status {
  * TLS lookup on every native-to-native call.
  */
 typedef struct _zend_native_execution_context {
-	struct _zend_vm_stack **vm_stack;
 	zval **vm_stack_top;
 	zval **vm_stack_end;
 	zend_execute_data **current_execute_data;

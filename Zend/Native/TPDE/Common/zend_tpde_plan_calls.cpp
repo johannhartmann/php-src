@@ -261,10 +261,7 @@ zend_native_user_call_descriptor *build_user_call_descriptor(
 	descriptor->init_op1_payload = init->op1.num;
 	descriptor->init_op2_payload = init->op2.num;
 	descriptor->init_result_payload = init->result.num;
-	descriptor->init_extended_value = init->extended_value;
 	descriptor->do_op1_payload = finish->op1.num;
-	descriptor->do_op2_payload = finish->op2.num;
-	descriptor->do_result_payload = finish->result.num;
 	descriptor->do_extended_value = finish->extended_value;
 	if (!source_descriptor_operand(
 				source_op_array, init, init->op1_type,
@@ -275,9 +272,6 @@ zend_native_user_call_descriptor *build_user_call_descriptor(
 			|| !source_descriptor_operand(
 				source_op_array, init, init->result_type,
 				init->result, &descriptor->init_result)
-			|| !source_descriptor_operand(
-				source_op_array, finish, finish->op1_type,
-				finish->op1, &descriptor->do_op1)
 			|| !source_descriptor_operand(
 				source_op_array, finish, finish->op2_type,
 				finish->op2, &descriptor->do_op2)) {

@@ -109,7 +109,6 @@ static void zend_native_execution_context_build(
 				ZSTR_CHAR((zend_uchar) byte));
 		}
 	}
-	context->vm_stack = &EG(vm_stack);
 	context->vm_stack_top = &EG(vm_stack_top);
 	context->vm_stack_end = &EG(vm_stack_end);
 	context->current_execute_data = &EG(current_execute_data);
@@ -1644,7 +1643,6 @@ zend_result zend_native_entry_cell_publish(
 		cell->tier2_countdown = zend_native_tier2_threshold();
 	}
 	cell->generation++;
-	cell->published_epoch = cell->generation;
 	cell->state = ZEND_NATIVE_ENTRY_READY;
 	__atomic_store_n(&cell->code, code, __ATOMIC_RELEASE);
 	return SUCCESS;
@@ -1661,7 +1659,6 @@ void zend_native_entry_cell_fail(zend_native_entry_cell *cell)
 			zend_native_call_persistent_sites_invalidate();
 		}
 		__atomic_store_n(&cell->code, NULL, __ATOMIC_RELEASE);
-		cell->retired_epoch = cell->published_epoch;
 		cell->state = ZEND_NATIVE_ENTRY_FAILED;
 	}
 }
@@ -1683,7 +1680,6 @@ zend_result zend_native_entry_cell_reset(zend_native_entry_cell *cell)
 		zend_native_reentry_forget_cells(&reset, 1);
 	}
 	__atomic_store_n(&cell->code, NULL, __ATOMIC_RELEASE);
-	cell->retired_epoch = cell->published_epoch;
 	cell->state = ZEND_NATIVE_ENTRY_UNCOMPILED;
 	return SUCCESS;
 }
@@ -10897,7 +10893,6 @@ zend_native_status zend_native_call_fragment_explicit(
 		descriptor.init_op1_payload = op1_payload;
 		descriptor.init_op2_payload = op2_payload;
 		descriptor.init_result_payload = result_payload;
-		descriptor.init_extended_value = extended_value;
 		zend_native_call_begin(caller, &seed, &descriptor);
 		if (EG(exception) != NULL) {
 			return zend_native_call_fragment_cleanup(caller, &seed);
@@ -10931,10 +10926,7 @@ zend_native_status zend_native_call_fragment_explicit(
 	descriptor.do_source_position = source_position;
 	descriptor.do_opcode = source_opcode;
 	descriptor.do_op1_payload = op1_payload;
-	descriptor.do_op2_payload = op2_payload;
-	descriptor.do_result_payload = result_payload;
 	descriptor.do_extended_value = extended_value;
-	descriptor.do_op1 = descriptor.init_op1;
 	descriptor.do_op2 = descriptor.init_op2;
 	descriptor.do_result = descriptor.init_result;
 	return zend_native_call_invoke_finish_source(

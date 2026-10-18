@@ -6863,8 +6863,6 @@ bool ZendCompilerX64::compile_typed_call_guard(InstContext &ctx) {
 		guarded_offsets.push_back(static_cast<int32_t>(offset));
 		guarded_values.push_back(std::move(boxed));
 	}
-	ScratchReg masked_type{this};
-	auto masked_type_reg = masked_type.alloc_gp();
 	auto cold_transfer = text_writer.label_create();
 	/*
 	 * A guarded temporary the call consumes needs another owner, so
@@ -12740,10 +12738,8 @@ bool ZendCompilerX64::copy_temporary_slot(InstContext &ctx) {
 	auto frame_reg = frame.load_to_reg();
 	ScratchReg type{this};
 	ScratchReg value{this};
-	ScratchReg probe{this};
 	auto type_reg = type.alloc_gp();
 	auto value_reg = value.alloc_gp();
-	auto probe_reg = probe.alloc_gp();
 
 	ASM(MOV32rm, type_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
@@ -13422,7 +13418,7 @@ int ZendCompilerX64::array_element_isset(
 	if (!tested) {
 		return -1;
 	}
-	auto decision_reg = er.decision.alloc_gp();
+	er.decision.alloc_gp();
 	auto answer_reg = er.answer.alloc_gp();
 	mov(answer_reg, value.cur_reg_or_load(this), 8);
 	value.reset(this);
@@ -19517,12 +19513,10 @@ bool ZendCompilerX64::compile_value_multi_branch(InstContext &ctx) {
 	ScratchReg slot{this};
 	ScratchReg type{this};
 	ScratchReg value{this};
-	ScratchReg probe{this};
 	ScratchReg constant{this};
 	auto slot_reg = slot.alloc_gp();
 	auto type_reg = type.alloc_gp();
 	auto value_reg = value.alloc_gp();
-	auto probe_reg = probe.alloc_gp();
 	auto constant_reg = constant.alloc_gp();
 	ASM(LEA64rm, slot_reg,
 		FE_MEM(check_undefined_cv

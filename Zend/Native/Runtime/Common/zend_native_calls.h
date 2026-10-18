@@ -77,8 +77,6 @@ typedef struct _zend_native_entry_cell {
 	uint64_t generation;
 	uint32_t active_calls;
 	uint32_t suspended_frames;
-	uint64_t published_epoch;
-	uint64_t retired_epoch;
 	zend_native_frame_probe_t frame_probe;
 	void *frame_probe_context;
 	bool lease_managed;
@@ -379,15 +377,11 @@ typedef struct _zend_native_user_call_descriptor {
 	uint32_t init_op1_payload;
 	uint32_t init_op2_payload;
 	uint32_t init_result_payload;
-	uint32_t init_extended_value;
 	uint32_t do_op1_payload;
-	uint32_t do_op2_payload;
-	uint32_t do_result_payload;
 	uint32_t do_extended_value;
 	zend_mir_source_operand_ref init_op1;
 	zend_mir_source_operand_ref init_op2;
 	zend_mir_source_operand_ref init_result;
-	zend_mir_source_operand_ref do_op1;
 	zend_mir_source_operand_ref do_op2;
 	zend_mir_source_operand_ref do_result;
 	zend_mir_scalar_type_mask result_type;
