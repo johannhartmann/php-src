@@ -1981,6 +1981,9 @@ private:
 		bool register_component_call = false;
 		IRValueRef copy_input = INVALID_VALUE_REF;
 		bool machine_result = false;
+		/* select_internal_call_result() gave the source result's
+		 * consumers a register scalar, which the call defines. */
+		bool internal_scalar_result = false;
 		InlinedBody inlined_user_body;
 		uint32_t operand_offset = 0;
 		std::vector<std::pair<IRValueRef, uint32_t>> typed_call_value_guards;
@@ -6451,6 +6454,7 @@ void ZendIRAdaptor::Builder::select_internal_call_result(InstContext &ctx) {
 			if (result_ssa < active_source_ssa_overrides().size()) {
 				active_source_ssa_overrides()[result_ssa] = ctx.result;
 			}
+			ctx.internal_scalar_result = true;
 		}
 	}
 }
@@ -6489,9 +6493,13 @@ bool ZendIRAdaptor::Builder::select_machine_result(InstContext &ctx) {
 			&& !ctx.register_component_call) {
 		const int32_t result_index =
 			zend_tpde_value_index(plan_, ctx.record.result_id);
-		ctx.machine_result = result_index >= 0
-			&& machine_value_used[
-				static_cast<uint32_t>(result_index)] != 0;
+		/* A CV result's consumers read the source SSA variable, not
+		 * the MIR value: the register scalar they were given is used
+		 * although the MIR value is not. */
+		ctx.machine_result = ctx.internal_scalar_result
+			|| (result_index >= 0
+				&& machine_value_used[
+					static_cast<uint32_t>(result_index)] != 0);
 	}
 	if (ctx.record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_USER
 			&& ctx.instruction.direct_call != nullptr) {
