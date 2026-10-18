@@ -932,6 +932,43 @@ static bool zend_mir_lower_blocks(
 				&& condition_representation != ZEND_MIR_REPRESENTATION_ZVAL
 				&& condition_representation != ZEND_MIR_REPRESENTATION_VOID
 				&& condition_representation != ZEND_MIR_REPRESENTATION_CONTROL;
+			if (machine_condition) {
+				const zend_mir_branch_kind kind =
+					zend_mir_branch_kind_for_opcode(
+						terminator_source->zend_opcode_number);
+				const bool boolean_result =
+					kind == ZEND_MIR_BRANCH_IF_FALSE_WITH_RESULT
+					|| kind == ZEND_MIR_BRANCH_IF_TRUE_WITH_RESULT;
+				zend_mir_value_fact_ref input_fact;
+				zend_mir_value_fact_ref result_fact;
+				zend_mir_representation input_representation;
+				zend_mir_representation result_representation;
+
+				/* A result the machine branch copies must keep the
+				 * input's representation (a boolean for the _WITH_RESULT
+				 * jumps), as zend_mir_emit_terminator() requires. Without
+				 * the optimizer's dead-edge removal a result may have no
+				 * possible value (JMP_SET of a value that is always
+				 * false): the source branch writes its zval then. */
+				if ((boolean_result || kind == ZEND_MIR_BRANCH_JMP_SET
+							|| kind == ZEND_MIR_BRANCH_COALESCE
+							|| kind == ZEND_MIR_BRANCH_JMP_NULL)
+						&& (terminator_source->op1.kind
+								!= ZEND_MIR_SOURCE_OPERAND_SSA
+							|| terminator_source->result.kind
+								!= ZEND_MIR_SOURCE_OPERAND_SSA
+							|| !zend_mir_raw_fact_for_ssa(context,
+								terminator_source->op1.ssa_variable_id,
+								&input_fact, &input_representation)
+							|| !zend_mir_raw_fact_for_ssa(context,
+								terminator_source->result.ssa_variable_id,
+								&result_fact, &result_representation)
+							|| result_representation != (boolean_result
+								? ZEND_MIR_REPRESENTATION_I1
+								: input_representation))) {
+					machine_condition = false;
+				}
+			}
 		}
 		if (!zend_mir_emit_terminator(
 				context, mutator, terminator_source, &block,
