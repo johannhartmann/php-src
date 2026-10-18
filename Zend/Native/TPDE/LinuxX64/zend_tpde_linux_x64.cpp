@@ -8448,6 +8448,28 @@ bool ZendCompilerX64::emit_published_site_init(
 					fast_key)));
 			generate_raw_jump(Jump::jne, init.fast_miss);
 		} else if (static_call) {
+			const uint32_t fetch =
+				descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+			if (ir().plan()->source_scope_varies
+					&& descriptor->init_op1.kind
+						== ZEND_MIR_SOURCE_OPERAND_UNUSED
+					&& (fetch == ZEND_FETCH_CLASS_SELF
+						|| fetch == ZEND_FETCH_CLASS_PARENT)) {
+				/* self::/parent:: of code running in more than one
+				 * scope: the caller's scope must be the one the site
+				 * was published for, its key
+				 * (zend_native_call_fast_static_key()). */
+				ASM(MOV64rm, value_reg, FE_MEM(canonical_frame_register(),
+					0, FE_NOREG, static_cast<int32_t>(
+						offsetof(zend_execute_data, func))));
+				ASM(MOV64rm, value_reg, FE_MEM(value_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						offsetof(zend_function, common.scope))));
+				ASM(CMP64rm, value_reg, header_field(descriptor_reg,
+					offsetof(zend_native_user_call_site_header,
+						fast_key)));
+				generate_raw_jump(Jump::jne, init.fast_miss);
+			}
 			/* The callee's This: the caller's object for an
 			 * instance method, the caller's called scope for a
 			 * forwarding static call, else the named class. */

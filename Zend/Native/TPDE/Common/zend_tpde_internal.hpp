@@ -1082,6 +1082,9 @@ struct zend_tpde_plan {
 	uint32_t source_multi_branch_case_count;
 	uint32_t source_frame_variable_count;
 	uint32_t source_temporary_count;
+	/* The code runs in more than one scope: a closure, or a method of a
+	 * trait, which every using class copies with its own scope. */
+	bool source_scope_varies;
 	uint32_t source_block_count;
 	zend_tpde_owned<uint32_t> source_opcode_block_indices;
 	zend_tpde_owned<uint8_t> source_opcode_is_data;

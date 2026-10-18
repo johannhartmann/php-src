@@ -514,6 +514,15 @@ static bool freeze_source_opcodes(plan_builder &builder) {
 		source_op_array != nullptr ? source_op_array->last_var : 0;
 	plan->source_temporary_count =
 		source_op_array != nullptr ? source_op_array->T : 0;
+	/* As zend_native_call_scope_checked() decides for the caller. */
+	plan->source_scope_varies = source_op_array != nullptr
+		&& ((source_op_array->fn_flags
+				& (ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE))
+					== ZEND_ACC_CLOSURE
+			|| (source_op_array->fn_flags & ZEND_ACC_TRAIT_CLONE) != 0
+			|| (source_op_array->scope != nullptr
+				&& (source_op_array->scope->ce_flags & ZEND_ACC_TRAIT)
+					!= 0));
 	if (plan->source_opcode_count != 0) {
 		if (!plan_alloc(plan->source_opcodes, plan->source_opcode_count,
 				diag, "unable to freeze source opcode metadata")) {

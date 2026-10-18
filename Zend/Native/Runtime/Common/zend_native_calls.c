@@ -5021,6 +5021,44 @@ static zend_always_inline bool zend_native_call_fast_new_class_operand(
  * scope; self:: and parent:: name the immutable scope of a caller that is
  * no closure. Function names and literal class names bind per request.
  */
+/*
+ * Whether the self::/parent:: sites of op_array's code compare the caller's
+ * scope with their key (zend_tpde_plan::source_scope_varies): code that
+ * runs in more than one scope, a closure's, or a trait method's, which
+ * every using class copies with its own scope. A fake closure runs in the
+ * scope of the method it was made from, whose code it runs.
+ */
+static zend_always_inline bool zend_native_call_scope_checked(
+	const zend_op_array *op_array)
+{
+	return (op_array->fn_flags & (ZEND_ACC_CLOSURE | ZEND_ACC_FAKE_CLOSURE))
+			== ZEND_ACC_CLOSURE
+		|| (op_array->fn_flags & ZEND_ACC_TRAIT_CLONE) != 0
+		|| (op_array->scope != NULL
+			&& (op_array->scope->ce_flags & ZEND_ACC_TRAIT) != 0);
+}
+
+/*
+ * The key of a static-method site published for the callee's This: a
+ * self::/parent:: site whose code compares the caller's scope keys that
+ * scope instead.
+ */
+static zend_always_inline const void *zend_native_call_fast_static_key(
+	const zend_execute_data *caller,
+	const zend_native_user_call_descriptor *descriptor, const void *called)
+{
+	const uint32_t fetch =
+		descriptor->init_op1_payload & ZEND_FETCH_CLASS_MASK;
+
+	if (descriptor->init_op1.kind == ZEND_MIR_SOURCE_OPERAND_UNUSED
+			&& (fetch == ZEND_FETCH_CLASS_SELF
+				|| fetch == ZEND_FETCH_CLASS_PARENT)
+			&& zend_native_call_scope_checked(&caller->func->op_array)) {
+		return caller->func->common.scope;
+	}
+	return called;
+}
+
 static bool zend_native_call_fast_site_persistent(
 	const zend_op_array *caller,
 	const zend_native_user_call_descriptor *descriptor,
@@ -5061,9 +5099,12 @@ static bool zend_native_call_fast_site_persistent(
 					== ZEND_FETCH_CLASS_STATIC) {
 				return zend_native_call_class_persistent(key);
 			}
-			return (caller->fn_flags & ZEND_ACC_CLOSURE) == 0
-				&& caller->scope != NULL
-				&& (caller->scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0
+			return (zend_native_call_scope_checked(caller)
+					? zend_native_call_class_persistent(key)
+					: (caller->fn_flags & ZEND_ACC_CLOSURE) == 0
+						&& caller->scope != NULL
+						&& (caller->scope->ce_flags
+							& ZEND_ACC_IMMUTABLE) != 0)
 				&& (header->fast_flags & (ZEND_NATIVE_CALL_FAST_STATIC_THIS
 					| ZEND_NATIVE_CALL_FAST_STATIC_FORWARD)) != 0;
 		default:
@@ -5118,8 +5159,9 @@ void **zend_native_call_fast_run_time_cache(zend_execute_data *callee)
  * follows the caller's called scope, which the site compares with the class
  * it was published for; self::/parent:: of an instance method keeps $this.
  * The code of a closure or of a method a trait copied runs in every scope it
- * is bound to or used by, and the fast path does not compare the scope
- * self::/parent:: name, so such callers keep the general path.
+ * is bound to or used by: its self::/parent:: sites compare the caller's
+ * scope with the key (zend_native_call_fast_static_key()); a fake closure
+ * of such code keeps the general path.
  * False for a site the fast path does not take.
  */
 static bool zend_native_call_fast_static_mode(
@@ -5139,7 +5181,8 @@ static bool zend_native_call_fast_static_mode(
 	if ((descriptor->init_op1.kind != ZEND_MIR_SOURCE_OPERAND_LITERAL
 				&& !forwarding && !late)
 			|| (forwarding && (caller->fn_flags
-				& (ZEND_ACC_CLOSURE | ZEND_ACC_TRAIT_CLONE)) != 0)) {
+					& (ZEND_ACC_CLOSURE | ZEND_ACC_TRAIT_CLONE)) != 0
+				&& !zend_native_call_scope_checked(caller))) {
 		return false;
 	}
 	if ((function->common.fn_flags & ZEND_ACC_STATIC) == 0) {
@@ -5274,7 +5317,8 @@ static void zend_native_call_fast_publish_internal(
 						resolution->call_info, &static_mode)) {
 				return;
 			}
-			key = resolution->object_or_called_scope;
+			key = zend_native_call_fast_static_key(caller, descriptor,
+				resolution->object_or_called_scope);
 			break;
 		case ZEND_NEW: {
 			const zend_object *object = resolution->object_or_called_scope;
@@ -5493,8 +5537,9 @@ static void zend_native_call_fast_publish(
 	header->fast_key = entry->lookup == ZEND_NATIVE_CALL_LOOKUP_METHOD
 			|| entry->lookup == ZEND_NATIVE_CALL_LOOKUP_NEW
 		? (const void *) entry->callable_class
-		: entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC
-			? resolution->object_or_called_scope : NULL;
+		: zend_native_call_fast_static_key(caller, descriptor,
+			entry->lookup == ZEND_NATIVE_CALL_LOOKUP_STATIC
+				? resolution->object_or_called_scope : NULL);
 	header->fast_function = (zend_function *) function;
 	header->fast_entry = resolution->invoke_entry;
 	header->fast_frame_size = resolution->frame_size;
@@ -10242,9 +10287,11 @@ static bool zend_native_call_rearm_static_binding(
 			== ZEND_FETCH_CLASS_STATIC) {
 		return zend_native_call_class_persistent(key);
 	}
-	return (op_array->fn_flags & ZEND_ACC_CLOSURE) == 0
-		&& op_array->scope != NULL
-		&& (op_array->scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0
+	return (zend_native_call_scope_checked(op_array)
+			? zend_native_call_class_persistent(key)
+			: (op_array->fn_flags & ZEND_ACC_CLOSURE) == 0
+				&& op_array->scope != NULL
+				&& (op_array->scope->ce_flags & ZEND_ACC_IMMUTABLE) != 0)
 		&& (header->fast_flags & (ZEND_NATIVE_CALL_FAST_STATIC_THIS
 			| ZEND_NATIVE_CALL_FAST_STATIC_FORWARD)) != 0;
 }
