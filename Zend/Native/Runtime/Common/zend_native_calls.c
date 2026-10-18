@@ -530,30 +530,39 @@ void zend_native_generator_cleanup_suspended_arguments(
 	 * SEND (in the VM, cleanup_unfinished_calls() would release them from
 	 * the call frame). A forced finally may leave EX(opline) after a DO_*
 	 * that never ran, so INIT/DO pairs cannot be matched from it. Release
-	 * every initialized SEND temporary outside its live range: completed
-	 * calls consumed their slots, and cleanup_live_vars() owns the active
-	 * ranges. */
-	for (uint32_t i = 0; i < op_array->last; i++) {
+	 * every initialized temporary a SEND before the suspension sent and no
+	 * later opline redefined, outside its live range: completed calls
+	 * consumed their slots, cleanup_live_vars() owns the active ranges, and
+	 * a temporary the optimizer reused holds another owner's value. */
+	uint32_t variable_count = op_array->last_var + op_array->T;
+	ALLOCA_FLAG(use_heap);
+	zend_bitset redefined = ZEND_BITSET_ALLOCA(variable_count, use_heap);
+
+	zend_bitset_clear(redefined, zend_bitset_len(variable_count));
+	for (uint32_t i = source_position; i-- > 0;) {
 		const zend_op *opline = &op_array->opcodes[i];
 		uint32_t temporary;
 		zval *value;
 
-		if (!zend_native_generator_is_send(opline->opcode)
-				|| (opline->op1_type & (IS_TMP_VAR | IS_VAR)) == 0) {
-			continue;
+		if (zend_native_generator_is_send(opline->opcode)
+				&& (opline->op1_type & (IS_TMP_VAR | IS_VAR)) != 0
+				&& !zend_bitset_in(redefined,
+					temporary = EX_VAR_TO_NUM(opline->op1.var))) {
+			value = ZEND_CALL_VAR(execute_data, opline->op1.var);
+			if (!Z_ISUNDEF_P(value)
+					&& !zend_native_generator_temporary_is_live(
+						op_array, temporary, source_position)) {
+				zval detached;
+				ZVAL_COPY_VALUE(&detached, value);
+				ZVAL_UNDEF(value);
+				zval_ptr_dtor(&detached);
+			}
 		}
-		temporary = EX_VAR_TO_NUM(opline->op1.var);
-		value = ZEND_CALL_VAR(execute_data, opline->op1.var);
-		if (Z_ISUNDEF_P(value)
-				|| zend_native_generator_temporary_is_live(
-					op_array, temporary, source_position)) {
-			continue;
+		if ((opline->result_type & (IS_TMP_VAR | IS_VAR)) != 0) {
+			zend_bitset_incl(redefined, EX_VAR_TO_NUM(opline->result.var));
 		}
-		zval detached;
-		ZVAL_COPY_VALUE(&detached, value);
-		ZVAL_UNDEF(value);
-		zval_ptr_dtor(&detached);
 	}
+	free_alloca(redefined, use_heap);
 }
 
 void zend_native_generator_cleanup_call_stack(

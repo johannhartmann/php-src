@@ -2843,10 +2843,14 @@ static uint32_t zend_native_finally_complete_forced_generator(
 	}
 	ZEND_OBSERVER_FCALL_END(execute_data, NULL);
 	EG(current_execute_data) = execute_data->prev_execute_data;
-	/* A forced finally exits before the generator's return: as on the VM's
-	 * destructor path, the unfinished close releases the live loop and
-	 * temporary ranges. */
-	zend_generator_close(generator, false);
+	/* A forced finally exits before the generator's return. As the VM's
+	 * zend_dispatch_try_catch_finally_helper(), the loop and temporary
+	 * ranges live at the FAST_RET die first, then the generator closes as
+	 * finished: releasing its CVs may destroy the generator itself. */
+	zend_cleanup_unfinished_execution(execute_data,
+		(uint32_t) (execute_data->opline
+			- execute_data->func->op_array.opcodes), 0);
+	zend_generator_close(generator, true);
 	return ZEND_NATIVE_FINALLY_GENERATOR_RETURNED;
 }
 
