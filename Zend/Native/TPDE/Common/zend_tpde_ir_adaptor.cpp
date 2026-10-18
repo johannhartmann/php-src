@@ -4251,7 +4251,9 @@ bool ZendIRAdaptor::Builder::phi_uses_runtime_short_circuit_slot(
 				&& (producer.value_operation.source_opcode
 						== ZEND_COALESCE
 					|| producer.value_operation.source_opcode
-						== ZEND_JMP_SET);
+						== ZEND_JMP_SET
+					|| producer.value_operation.source_opcode
+						== ZEND_JMP_NULL);
 		}
 		if (!runtime_short_circuit_input) {
 			runtime_short_circuit_input =
@@ -4283,7 +4285,9 @@ void ZendIRAdaptor::Builder::select_phi_results() {
 				&& (producer.value_operation.source_opcode
 						== ZEND_COALESCE
 					|| producer.value_operation.source_opcode
-						== ZEND_JMP_SET)) {
+						== ZEND_JMP_SET
+					|| producer.value_operation.source_opcode
+						== ZEND_JMP_NULL)) {
 			runtime_short_circuit_result_values[
 				static_cast<uint32_t>(result_index)] = 1;
 		}
