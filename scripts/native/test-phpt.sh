@@ -24,7 +24,8 @@ Tiers:
           opcache.enable_cli=0 (unoptimized). Run it before a commit.
   full    commit, the commit suites under deoptimization stress (period 1)
           and layout stress, then ASan and UBSan, built concurrently and
-          run one after the other. Run it before a push.
+          run one after the other, each also unoptimized. Run it before a
+          push.
 
 Options:
   --jobs N         Worker count (default: NATIVE_JOBS or CPU count).
@@ -249,10 +250,13 @@ if [[ $tier == full ]]; then
     ubsan_status=0
     # Tests share the source tree (some write fixed files next to
     # themselves), so the two suites run one after the other.
-    run_profile "$prefix-asan-nts" "$asan_binary" "$jobs" \
-        "${sanitizer_paths[@]}" || asan_status=1
-    run_profile "$prefix-ubsan-nts" "$ubsan_binary" "$jobs" \
-        "${sanitizer_paths[@]}" || ubsan_status=1
+    for run_unoptimized in '' 1; do
+        run_profile "$prefix-asan-nts" "$asan_binary" "$jobs" \
+            "${sanitizer_paths[@]}" || asan_status=1
+        run_profile "$prefix-ubsan-nts" "$ubsan_binary" "$jobs" \
+            "${sanitizer_paths[@]}" || ubsan_status=1
+    done
+    run_unoptimized=
     ((asan_status == 0 && ubsan_status == 0)) || status=1
 fi
 exit "$status"
