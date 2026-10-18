@@ -32,11 +32,11 @@ frame's exact `op_array`; raw pointers are never persisted in metadata.
   responsible opcode. Exception transfer preserves that index as the exception
   continuation even if `EX(opline)` temporarily names Zend's exception-dispatch
   sentinel. Zend records this distinction in
-  [`zend_exceptions.c`](../../../../Zend/zend_exceptions.c#L206).
+  [`zend_exceptions.c`](../../../../Zend/zend_exceptions.c#L211).
 - **Generator suspension:** the suspended index is the `YIELD` or `YIELD_FROM`
-  opcode. Its resume ID maps to the verified semantic successor. The current VM
+  opcode. Its resume ID maps to the verified semantic successor. The Zend VM
   saves the yield opline before materializing generator state in
-  [`zend_vm_def.h`](../../../../Zend/zend_vm_def.h#L8442).
+  [`zend_vm_def.h`](../../../../Zend/zend_vm_def.h#L8485).
 - **Fiber suspension:** the frame keeps the responsible call/helper opline; the
   persistent fiber state owns the captured VM stack and current execute-data
   chain.
@@ -94,6 +94,11 @@ cleanup; no normal post-state is assumed.
 
 ## Required safepoints
 
+Each row except dynamic scope is one `safepoint.class` of the frame-state
+schema (`destructor` for a potential destructor, `deopt_resume` for
+deoptimization). Dynamic scope adds a materialization requirement to the call
+or opcode that performs it.
+
 | Class | Required pre-state | Normal post-state / nonlocal edge |
 |---|---|---|
 | Function entry | Callee identity, arguments, `$this`, return storage, parent, runtime cache, initialized CVs, and first executable opline are canonical; callee is current. | Body starts at that opline. Entry observers read the header and arguments only. |
@@ -104,11 +109,11 @@ cleanup; no normal post-state is assumed.
 | Exception edge | Throwing opline and the native exception continuation are known. | Branch to that continuation; it releases native-owned live values of the frame in Zend's cleanup order before the frame-owned cleanup runs, and unwinds exactly once. |
 | Bailout helper | Non-memory obligations are reachable from the active `zend_try` catcher. Native-owned PHP values need nothing: after a bailout, as in stock PHP, dropped frames are not released and objects reach their destructors through the object store during shutdown. | No local post-state exists. Transfer is nonlocal. |
 | Observer | Observed execute-data, opline, arguments, return or exception value and call flags are canonical before callback entry. | Callback may reenter, throw, or bail out; reload alias-observable slots and heap facts. An extension that inspects complete scopes (debuggers, statement handlers) selects full materialization for the functions it observes. |
-| Interrupt | Current frame and responsible opline are canonical before the interrupt callback. | Callback may run PHP code, throw or bail out; reload executor globals, alias-observable slots and heap facts before advancing. Current Zend interrupt entry is shown in [`zend_execute.c`](../../../../Zend/zend_execute.c#L4314). |
+| Interrupt | Current frame and responsible opline are canonical before the interrupt callback. | Callback may run PHP code, throw or bail out; reload executor globals, alias-observable slots and heap facts before advancing. Zend's interrupt entry is `zend_fcall_interrupt()` in [`zend_execute.c`](../../../../Zend/zend_execute.c#L4349). |
 | Dynamic scope | Before `extract`, `compact`, `get_defined_vars`, variable variables, `include`/`eval`, `func_get_args`: every CV of the frame is frame-owned. | Reload every CV the operation may have written; native ownership is taken back only by later definitions. |
 | Generator suspend | Yield opcode, yielded key/value, send target, frame slots, pending call chain, roots, cleanup, parent policy, resume ID, and code version are persistent: ownership of every live value moves into the generator frame. | Generator is not active; persistent state owns transferred values until resume or destruction. |
-| Generator resume | Persistent state, resume ID, code version, and caller chain are validated before the generator becomes current. | Reconstruct chain and roots, advance to the registered successor, reload resume-live values, then enter native code. Generator chain restoration is visible in [`zend_generators.c`](../../../../Zend/zend_generators.c#L762). |
-| Fiber switch | Active VM stack, top/end, current execute data, bailout catcher, active fiber and responsible opline are captured. Native-owned values of the suspended chain stay on the fiber's own C stack, described by the machine maps at each call-return PC. | Destination state is restored atomically. While suspended, GC treats native-owned values as externally referenced (never collects them wrongly; cycles through them are collected after resume). Destroying a suspended fiber resumes it with a graceful exit, whose exception paths release native-owned values. Zend's captured fields are listed in [`zend_fibers.c`](../../../../Zend/zend_fibers.c#L105). |
+| Generator resume | Persistent state, resume ID, code version, and caller chain are validated before the generator becomes current. | Reconstruct chain and roots, advance to the registered successor, reload resume-live values, then enter native code. Generator chain restoration is visible in [`zend_generators.c`](../../../../Zend/zend_generators.c#L836). |
+| Fiber switch | Active VM stack, top/end, current execute data, bailout catcher, active fiber and responsible opline are captured. Native-owned values of the suspended chain stay on the fiber's own C stack, described by the machine maps at each call-return PC. | Destination state is restored atomically. While suspended, GC treats native-owned values as externally referenced (never collects them wrongly; cycles through them are collected after resume). Destroying a suspended fiber resumes it with a graceful exit, whose exception paths release native-owned values. Zend's captured fields, including the native bailout records and native call state, are listed in [`zend_fibers.c`](../../../../Zend/zend_fibers.c#L111). |
 | Deoptimization | Ownership of every value live at the guard moves into its frame slot, following the guard's frame-state map; the guard precedes every side effect of its operation. | Continue in the generic native version at the guard's semantic continuation through the single resume entry. |
 
 ## Roots
@@ -152,7 +157,8 @@ Across a safepoint, registers and native stack slots may contain:
 A native location is never the owner of a pending call, a return target, an
 alias-observable value or a continuation. No callee-saved-register convention
 extends the public Zend ABI: native-to-native calls keep the frame header and
-arguments in Zend layout.
+arguments in Zend layout, except typed bodies and private frames, which reach
+no observation point (see the [frame contract](frame-contract.md)).
 
 ## Verification rule
 
@@ -167,11 +173,11 @@ a narrower reviewed contract classifies it.
 
 ## Required conformance cases
 
-Tests of a native implementation must isolate the current-engine distinctions
-that a single happy-path call does not expose:
+Tests of a native implementation must isolate the Zend distinctions that a
+single happy-path call does not expose:
 
-- builds that keep the instruction pointer in a VM global register still
-  synchronize `EX(opline)` before every observable boundary;
+- native code, whose position lives only in the machine instruction pointer,
+  still stores `EX(opline)` before every observable boundary;
 - skipped `RECV` opcodes make callee entry report the first opcode that actually
   executes;
 - internal frames have a null user-opline index while their caller reports the

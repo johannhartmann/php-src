@@ -6,16 +6,30 @@ target registers or backend-private layout knowledge.
 
 ## Physical model
 
-Every active native PHP call is represented by the existing
-`zend_execute_data` header and its contiguous VM-stack slots. Zend defines the
-header fields in [`zend_compile.h`](../../../../Zend/zend_compile.h#L645), the
-slot address calculation in
-[`zend_compile.h`](../../../../Zend/zend_compile.h#L714), and the concrete slot
-ordering in [`zend_execute.c`](../../../../Zend/zend_execute.c#L4349).
+Every active native PHP call that can reach an observation point is
+represented by the existing `zend_execute_data` header and its contiguous
+VM-stack slots. Zend defines the header fields in
+[`zend_compile.h`](../../../../Zend/zend_compile.h#L646), the slot address
+calculation in [`zend_compile.h`](../../../../Zend/zend_compile.h#L719), and
+the concrete slot ordering in
+[`zend_execute.c`](../../../../Zend/zend_execute.c#L4385).
 
 Native-private metadata is referenced by an immutable code version or an
 out-of-line runtime record. It does not change `zend_execute_data`, `zval`, call
 flags, slot offsets, or any exported C signature.
+
+A call between compiled functions runs without a published Zend frame only
+while it cannot reach an observation point:
+
+- a typed body passes scalars in registers and has no frame; an operation
+  that needs Zend semantics makes it fail, and the outermost Zend-entry
+  caller repeats the effect-free call through its Zend frame;
+- a private frame on the caller's native stack
+  (`ZEND_NATIVE_DIRECT_CALL_PRIVATE_RETRY_FRAME`) runs a straight-line body
+  of reads whose every effect is behind a helper; such a helper returns
+  `ZEND_NATIVE_RETRY` and the caller repeats the call through a Zend frame
+  before any PHP-visible mutation;
+- an inlined callee is a logical frame of its caller (see below).
 
 ## `zend_execute_data` components
 
@@ -33,7 +47,7 @@ flags, slot offsets, or any exported C signature.
 
 User-frame initialization already establishes opline, return storage, CVs,
 runtime cache, and `EG(current_execute_data)` in
-[`zend_execute.c`](../../../../Zend/zend_execute.c#L4437); native entry preserves
+[`zend_execute.c`](../../../../Zend/zend_execute.c#L4472); native entry preserves
 that ordering.
 
 ## VM-stack slot classes
@@ -94,9 +108,9 @@ write are reloaded after it returns.
 The caller first records the call opcode in its `opline`, constructs the
 callee/pending frame and arguments, links `prev_execute_data`, and establishes
 return storage. Only then may it publish the callee through
-`EG(current_execute_data)` or invoke an observer/helper. The current VM follows
+`EG(current_execute_data)` or invoke an observer/helper. The Zend VM follows
 this order for internal and user calls in
-[`zend_vm_def.h`](../../../../Zend/zend_vm_def.h#L4127).
+[`zend_vm_def.h`](../../../../Zend/zend_vm_def.h#L4129).
 
 At user-function entry, the callee opline is the first opcode that will execute;
 skipped receive opcodes are reflected by that index. At internal-function
@@ -115,11 +129,11 @@ itself a safepoint and obeys the reentry rules.
 
 The throwing frame retains the responsible opline separately from the
 exception-dispatch sentinel. Pending calls, live temporaries, arguments, and
-frame-owned values are unwound from explicit cleanup metadata. The current VM
+frame-owned values are unwound from explicit cleanup metadata. The Zend VM
 uses the saved throwing opline to select try/catch/finally and clean unfinished
-calls in [`zend_vm_def.h`](../../../../Zend/zend_vm_def.h#L8222).
+calls in [`zend_vm_def.h`](../../../../Zend/zend_vm_def.h#L8252).
 
-## Parent frames and future inlining
+## Parent frames and inlining
 
 `parent_frame_id` describes the logical `prev_execute_data` chain. IDs are
 unique inside a state set, every non-null parent exists, and the graph is

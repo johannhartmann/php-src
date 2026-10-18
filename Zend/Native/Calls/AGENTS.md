@@ -1,7 +1,7 @@
 # Native call semantics
 
-This subtree owns the target-neutral call representation used by executable
-native user, internal, and method calls.
+This subtree owns the target-neutral call representation (`Contracts/`,
+`Model/`) used by executable native user, internal, and method calls.
 
 - Lower a complete reachable INIT/SEND/DO sequence atomically, including named
   arguments, defaults, extra arguments, unpacking, variadics, references, and
@@ -16,11 +16,12 @@ native user, internal, and method calls.
 - Keep target ABI mechanics in `TPDE/` and Zend call-frame semantics in
   `Runtime/`; do not add a VM fallback, opcode handler call, or MIR interpreter.
 - Calls between compiled PHP functions use the native calling convention of
-  ADR 0025: the callee frame lives on the VM stack with an eagerly written
-  header, arguments go to the parameter slots and may additionally travel in
-  registers, and results return in registers. Everything else in the Zend
-  frame is reconstructed from frame-state metadata when the callee's state
-  becomes observable and at every boundary to internal functions, callbacks,
-  reflection and observers.
+  ADR 0025 section 3: the callee frame lives on the VM stack with an eagerly
+  written header, arguments go to the callee's parameter slots, the native
+  call entry checks the pushed frame, and the result goes to the caller's
+  result slot; typed component bodies pass arguments and results in
+  registers. Everything else in the Zend frame is reconstructed from
+  frame-state metadata when the callee's state becomes observable and at
+  every boundary to internal functions, callbacks, reflection and observers.
 - Extend the existing execution and PHPT coverage without introducing call
   gates, profiles, manifests, receipts, or ledgers.

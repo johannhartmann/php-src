@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted on 2026-07-17.
+Accepted.
 
 ## Context
 
@@ -12,11 +12,12 @@ effects, ownership, or recovery state.
 
 ## Decision
 
-Use exactly one canonical, architecture-independent PHP MIR, named ZNMIR. ZNMIR
-represents control flow, PHP operations, side effects, ownership, exceptional
-edges, and complete frame states explicitly. Target lowering consumes verified
-ZNMIR and may create backend-local machine representations, but those are not
-alternative PHP semantic IRs.
+Use exactly one canonical, architecture-independent PHP MIR, named ZNMIR
+(`Zend/Native/MIR`, produced by `Zend/Native/Lowering`). ZNMIR represents
+control flow, PHP operations, side effects, ownership, exceptional edges, and
+complete frame states explicitly. Target lowering consumes verified ZNMIR and
+may create backend-local machine representations (the TPDE plan and machine
+plan), but those are not alternative PHP semantic IRs.
 
 Every ZNMIR unit must pass a verifier before lowering. The verifier rejects
 unknown operations, malformed control flow, inconsistent ownership, incomplete
@@ -40,6 +41,7 @@ frame states, and effects unsupported by the selected compilation contract.
 ## Verification impact
 
 Verifier tests must cover each rejection rule and every operation. Structural
-checks must keep target registers, encodings, and calling conventions out of
-ZNMIR. Differential tests must run the same source semantics through each
-supported backend.
+checks (the architecture-leak scan of `scripts/native/mir/validate-mir.py`)
+must keep target registers, encodings, and calling conventions out of ZNMIR.
+Differential tests must run the same source semantics through each supported
+backend.

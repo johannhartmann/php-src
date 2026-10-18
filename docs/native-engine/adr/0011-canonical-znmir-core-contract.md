@@ -13,16 +13,21 @@ construction.
 ## Decision
 
 ZNMIR has one target-neutral internal C contract, versioned by
-`ZEND_MIR_CONTRACT_VERSION` in `zend_mir_ids.h` (same major, additive minor). Module,
-function, block, instruction, value, and frame-state storage stays opaque.
-Consumers use immutable record snapshots through `zend_mir_view`; construction
-uses `zend_mir_mutator`. Allocation is supplied by a context-bearing vtable and
-does not prescribe Zend, arena, or test allocation.
+`ZEND_MIR_CONTRACT_VERSION` in `zend_mir_ids.h`: a 16-bit major and minor, and
+`zend_mir_contract_is_compatible()` accepts the same major with a minor no
+newer than the build's. Minor versions are additive. Module, function, block,
+instruction, value, and frame-state storage stays opaque. Consumers use
+immutable record snapshots through `zend_mir_view`; construction uses
+`zend_mir_mutator`. Allocation is supplied by a context-bearing vtable
+(`zend_mir_allocator`) and does not prescribe Zend, arena, or test allocation.
 
-Text dumping writes through a process-local byte callback; parsing consumes a
-bounded byte span through the mutator. Stage-one verification consumes only the
-view. These signatures live in the core header so text and verifier tests run
-without the production arena.
+Text dumping (`zend_mir_dump_text()`) writes through a process-local byte
+callback (`zend_mir_text_writer`). Stage-one verification
+(`zend_mir_verify_stage1()`) consumes only the view. These signatures live in
+the core header `zend_mir.h` so text and verifier tests run without the
+production arena. The production library only dumps; the strict parser is
+test infrastructure that fills the fixture host
+([text format](../mir/text-format.md)).
 
 All identities are 32-bit. `0xffffffff` is the only invalid ID. Value IDs use
 the high bit as a stable namespace tag: low-half IDs preserve original Zend SSA
@@ -35,10 +40,11 @@ sentinel `-1`. Enum sentinels do not represent persistent identity and therefore
 remain distinct from the 32-bit ID sentinel.
 
 The core opcode catalog contains constants, PHI, copy, canonicalization,
-statepoints, and the branch, conditional branch, return, throw, and unreachable
-terminators; PHP operations are appended to it. Representations are void, control, fixed integer widths, double,
-semantic pointer, and canonical zval. These are semantic values, not machine
-register classes. Later PHP opcodes and representations are additive only.
+statepoints, and the branch, conditional branch, return, throw, and
+unreachable terminators; PHP operations are appended to it. Representations
+are void, control, fixed integer widths, double, semantic pointer, and
+canonical zval. These are semantic values, not machine register classes.
+Later PHP opcodes and representations are additive only.
 
 Constants use an immutable pool keyed by value ID. Tagged entries contain
 integer or IEEE-754 double bits, payload-free null/boolean values, or symbol IDs
@@ -54,13 +60,20 @@ Symbol kinds require a valid symbol ID and zero payload. Other kinds require
 the invalid symbol ID; payload-free kinds also require zero payload. A
 `CONSTANT` instruction's result, constant entry, and value record must agree.
 
-Traversal order carries the minimum control-flow association needed by all
-consumers: PHI operand N belongs to predecessor N. An unconditional branch has one
-successor, and a conditional branch has true successor 0 and false successor
-1. Return, throw, and unreachable have no successors.
+Scalar value facts (`zend_mir_value_fact_ref`) attach an exact scalar type,
+an optional integer range, nonzero, finite and non-refcounted flags, and a
+provenance to a value ID.
 
-The semantic catalogs have a fixed numeric order: 15 effects, 20 memory domains, 7 general ownership states, 10 ownership actions,
-7 predicates, 8 barriers, 12 guard facts, 11 composition rules, and the
+Traversal order carries the minimum control-flow association needed by all
+consumers: PHI operand N belongs to predecessor N. An unconditional branch has
+one successor, and a conditional branch has true successor 0 and false
+successor 1. Multiway successors keep every source case slot, including
+repeated targets; predecessors are unique source blocks. Return, throw, and
+unreachable have no successors.
+
+The semantic catalogs have a fixed numeric order: 15 effects, 20 memory
+domains, 7 general ownership states, 10 ownership actions, 7 predicates,
+8 barriers, 12 guard facts, 11 composition rules, and the
 frame/safepoint/resume catalogs. Frame-slot ownership stays a separate
 six-value catalog because it describes materialized frame custody, not the
 general MIR value-lifetime lattice.
@@ -70,12 +83,12 @@ frame-state, source-position, cleanup, continuation, resume, and diagnostic
 locations contain IDs and scalar values only. No persistent identity contains
 a raw pointer.
 
-An independent source-map record associates a stable
-source-position ID and op-array ID with an opline index, opline phase, and
-owning frame-state ID. The table contains neither a generated-code location
-nor a process address, and it does not alter the canonical 1.0 MIR text form.
+An independent source-map record associates a stable source-position ID and
+op-array ID with an opline index, opline phase, and owning frame-state ID. The
+table contains neither a generated-code location nor a process address, and
+it is not part of the canonical text form.
 
-A fixed-array fixture host implements the frozen callbacks under
+A fixed-array fixture host implements the view and mutator callbacks under
 `tests/native/mir/contracts`. It is test-only, has finite capacities, returns
 failure without partial mutation, and provides neither execution semantics nor
 opcode dispatch.
@@ -101,6 +114,7 @@ production semantics.
 
 ## Verification impact
 
-The contract checker compares every catalog name and number, rejects duplicate IDs,
-invalid sentinel changes, raw pointers in serializable records, and target or
-TPDE includes. It compiles every header and the fixture host as C11 and C++20.
+The contract checker (`scripts/native/mir/check-contract.py`) compares every
+catalog name and number, rejects duplicate IDs, invalid sentinel changes, raw
+pointers in serializable records, and target or TPDE includes. It compiles
+every header and the fixture host as C11 and C++20.

@@ -16,8 +16,11 @@ instructions.
   metadata; a missing or wrong frame state is a correctness bug, not a
   performance issue.
 - Put architecture-specific lowering and target code only under `TPDE/`.
-- Keep `MIR/`, `TPDE/`, and `Runtime/` as explicit architectural boundaries and
-  read their `AGENTS.md` before changing them.
+- Keep `MIR/`, `TPDE/`, and `Runtime/` as explicit architectural boundaries.
+  Read the `AGENTS.md` of `Calls/`, `Lowering/`, `MIR/`, `Runtime/`, `TPDE/`
+  (and `TPDE/LinuxX64/`) and `Values/` before changing code there.
+- [`TPDE.md`](../../TPDE.md) describes the pipeline, the source tree, the
+  build profiles and the test tiers.
 - Extend the existing native build, PHPT, differential, and CI paths. Do not add
   staged gate frameworks, ownership manifests, receipts, ledgers, seals, or
   status infrastructure.

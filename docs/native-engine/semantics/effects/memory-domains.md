@@ -16,7 +16,8 @@ is conservatively treated as reading and writing every registered domain.
 
 - `frame.*` covers arguments, locals, temporaries, and the observable call
   chain.  Calls, observers, interrupts, exceptions, and suspension require
-  materialization of the relevant frame state.
+  materialization of the frame state their boundary class reads (see the
+  [safepoint contract](../frames/safepoint-contract.md)).
 - `runtime.*` and engine tables cover the symbol table, caches, and lookup
   state.  A PHP call or reentry can change these even when the immediate
   opcode appears unrelated.

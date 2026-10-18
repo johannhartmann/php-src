@@ -21,11 +21,12 @@ PHP exceptions are executor state, not C++ unwinding:
 1. Before a throwing call or explicit throw, publish the state the boundary
    class reads under the [safepoint protocol](safepoint-contract.md).
 2. Preserve the responsible user-opline index as the throwing position.
-3. Publish or observe the exception through `EG(exception)`. Zend currently
-   records the pre-dispatch opline and then installs its exception sentinel in
-   [`zend_exceptions.c`](../../../../Zend/zend_exceptions.c#L155).
-4. Test `EG(exception)` on every locally returning may-throw edge and branch to
-   that frame's verified native exception continuation.
+3. Publish or observe the exception through `EG(exception)`. Zend records
+   the pre-dispatch opline and then installs its exception sentinel in
+   [`zend_exceptions.c`](../../../../Zend/zend_exceptions.c#L211).
+4. Test `EG(exception)` (or a native callee's `ZEND_NATIVE_EXCEPTION`
+   status) on every locally returning may-throw edge and branch to that
+   frame's verified native exception continuation.
 5. Use the throwing index to select try/catch/finally and the exact pending-call
    and live-value cleanup set. The native exception path releases the
    frame's native-owned live values in Zend's live-range order; frame-owned
@@ -41,9 +42,14 @@ the exception edge even if it also returns a success-shaped C value.
 
 `zend_try` installs an executor-global jump buffer and `_zend_bailout` clears
 `EG(current_execute_data)` before `LONGJMP`, as shown in
-[`zend.h`](../../../../Zend/zend.h#L273) and
-[`zend.c`](../../../../Zend/zend.c#L1264). Therefore bailout is not a status code
-and code after a may-bailout call is not guaranteed to run.
+[`zend.h`](../../../../Zend/zend.h#L275) and
+[`zend.c`](../../../../Zend/zend.c#L1282). Therefore bailout is not a status
+code for generated code, and code after a may-bailout call is not guaranteed
+to run. Only the C boundary that runs a native frame
+(`Zend/Native/Runtime/Common/zend_native_execute.c`) keeps its own
+`zend_try`; it reports the bailout as `ZEND_NATIVE_BAILOUT` to the native
+executor, which re-raises it with `zend_bailout()`
+(`Zend/Native/Compiler/zend_native_executor.c`).
 
 Before a may-bailout boundary:
 
@@ -54,7 +60,11 @@ Before a may-bailout boundary:
   through the object store during shutdown, exactly as for frame-owned values
   in stock PHP;
 - move every required non-memory cleanup action to a record reachable by the
-  active catcher, or complete it before the call;
+  active catcher, or complete it before the call. Such a record is a
+  `zend_native_bailout_record` linked with `ZEND_NATIVE_BAILOUT_RECORD_LINK`
+  (`Zend/Native/Runtime/Common/zend_native_calls.h`); `_zend_bailout` calls
+  `zend_native_bailout_unwind()` before its jump, which unwinds the records
+  linked under the target catcher, newest first;
 - ensure no C++ automatic object whose destructor is required for correctness
   remains live across the call;
 - ensure locks, pin counts, code-version references, temporary buffers, and
@@ -120,7 +130,7 @@ retained while any persistent record names one of its resume IDs.
 
 Zend's generator implementation restores the execute-data chain and frozen
 calls before execution in
-[`zend_generators.c`](../../../../Zend/zend_generators.c#L762); the native
+[`zend_generators.c`](../../../../Zend/zend_generators.c#L836); the native
 contract preserves that observable ordering while using a native resume ID.
 
 ### Fiber state machine
@@ -128,24 +138,28 @@ contract preserves that observable ordering while using a native resume ID.
 `created -> running -> suspended -> running -> terminated`
 
 - Before switching out, capture the VM stack, stack bounds, current execute
-  data, active bailout catcher, active fiber, frame chain, roots, obligations,
-  responsible opline, and transfer reason.
-- The suspended fiber owns this captured state. The destination state becomes
-  current as one atomic logical transition before observers run.
-- Resume validates the persistent frame and code version before it changes the
-  destination to running.
+  data, active bailout catcher and native bailout records, active fiber,
+  native call state, responsible opline, and transfer reason.
+- The suspended fiber owns this captured state. Its native activations stay
+  on the fiber's own C stack, in the code versions they run, which stay
+  retained while the activations exist. The destination state becomes current
+  as one atomic logical transition before observers run.
+- Resume restores the captured state and continues each native activation
+  where it called the switch; it does not pass through the native resume
+  entry below.
 - A bailout flag crosses the context boundary as a bailout transfer and is
   forwarded to the destination catcher; it is not converted to normal return.
 - Termination completes captured obligations once and publishes the result or
   exception to the resumer.
 
-The current fiber implementation's VM-state capture includes the VM stack,
-current execute data, bailout buffer, and active fiber in
-[`zend_fibers.c`](../../../../Zend/zend_fibers.c#L105).
+Zend's fiber VM-state capture includes the VM stack, current execute data,
+bailout buffer, active fiber and, in native builds, the bailout records and
+native call state in
+[`zend_fibers.c`](../../../../Zend/zend_fibers.c#L111).
 
 ## Single-entry native resume
 
-All generator, fiber, and future deoptimization resumes use one logical entry:
+Generator and deoptimization resumes use one logical entry:
 
 ```c
 typedef struct native_resume_request {
@@ -190,6 +204,22 @@ typedef struct native_resume_descriptor {
 supplied address. Resume IDs are local to one immutable code version. The entry
 does not accept a machine offset, compute a target from user-controlled data,
 or invoke the VM opcode dispatcher.
+
+In the TPDE back-end the logical entry is the function's native entry, and a
+resume ID is the opline index of its target. After the frame load the entry
+dispatches on `EX(opline)` to the target's landing, which reloads the
+landing's live values from their frame slots:
+
+- generator resume targets are the positions after each yield and the
+  `finally` entries (`freeze_generator_resume_liveness()` in
+  `Zend/Native/TPDE/Common/zend_tpde_plan_bindings.cpp`); a suspended
+  generator pins the entry cell and generation that created it
+  (`native_entry_cell`, `native_entry_generation` in `zend_generator`);
+- deoptimization targets are the guarded operations of the generic copy
+  outside every pending call (`freeze_deopt_resume_targets()` in
+  `Zend/Native/TPDE/Common/zend_tpde_plan_deopt.cpp`), entered in the same
+  image through `zend_native_deopt_transfer()` with `deopt_resume` set in
+  the execution context.
 
 ## Resume failure
 

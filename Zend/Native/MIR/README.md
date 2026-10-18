@@ -3,7 +3,12 @@
 This directory defines the single, target-neutral middle representation used
 by the native engine. Its contract is an internal C ABI that keeps lowering,
 analysis, text, frame-state, verifier and backend code independent of the
-storage layout.
+storage layout. ADR
+[0011](../../../docs/native-engine/adr/0011-canonical-znmir-core-contract.md)
+defines the core contract and ADR
+[0012](../../../docs/native-engine/adr/0012-znmir-text-diagnostics-verification.md)
+the text format, diagnostics and verification; [`TPDE.md`](../../../TPDE.md)
+shows where ZNMIR sits in the compilation pipeline.
 
 ## Contract layers
 
@@ -12,8 +17,9 @@ storage layout.
   It also declares the storage-independent text dump/parser and verifier
   entry points.
 - `zend_mir_ids.h` owns the contract version and all 32-bit identity rules.
-- `zend_mir_opcodes.h` holds the core opcode, representation, and
-  target-neutral constant-kind catalogs; PHP opcodes are appended to them.
+- `zend_mir_opcodes.h` holds the opcode catalog (core, scalar, call, value,
+  iterator, object, dynamic, zval and runtime groups), the representation
+  catalog, and the target-neutral constant-kind catalog.
 - `zend_mir_effects.h` binds the effect, domain, ownership, action, and
   barrier catalogs, plus predicates, guard facts, and composition rules, to
   exact numeric values.
@@ -21,10 +27,14 @@ storage layout.
   resume enums and exposes immutable, ID-only references.
 - `zend_mir_diagnostic.h` defines stable codes, locations, fixed-size messages,
   and a bounded process-local sink.
+- `zend_mir_call.h`, `zend_mir_values.h`, `zend_mir_scalar.h` and
+  `zend_mir_control_flow.h` define the call, value-storage, scalar-fact and
+  control-flow mapping records; `zend_mir_id_index.h` is an ID-to-index hash
+  helper.
 - `zend_mir_private.h` is the only storage-binding layer. Its pointers are
   process-local and are never persistent MIR identity.
 
-The fixture host in `tests/native/mir/contracts` implements the view and
+The fixture host in `tests/native/mir/contracts/` implements the view and
 mutator over fixed arrays solely for unit tests. It is not linked into PHP or a
 production library and intentionally has no opcode dispatcher or execution
 semantics.
@@ -59,7 +69,8 @@ Conditional branches use successor 0 for true and successor 1 for false.
 `ZEND_MIR_CONTRACT_VERSION` encodes a 16-bit major and 16-bit minor version.
 The source-map table associates a source-position ID, op-array ID, opline
 index and phase with its owning frame-state ID; it carries no generated-code
-location. Consumers accept the same major and a minor no newer than they implement.
+location. Consumers accept the same major and a minor no newer than they
+implement.
 Within major version 1, extensions are additive only: existing numbers,
 meanings, callback signatures, and record fields cannot be removed, reordered,
 or reused. Adding an enum value, callback, or record field increments the minor

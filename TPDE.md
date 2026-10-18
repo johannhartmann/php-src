@@ -65,14 +65,18 @@ A front-end connects to TPDE by implementing the `IRAdaptor` concept
 
 | Area | What the adaptor provides |
 |---|---|
-| Reference types | `IRValueRef`, `IRBlockRef`, `IRFuncRef`, `IRInstRef` and their `INVALID_*` constants |
+| Reference types | `IRValueRef`, `IRBlockRef`, `IRFuncRef`, `IRInstRef`; `INVALID_VALUE_REF`, `INVALID_BLOCK_REF`, `INVALID_FUNC_REF` |
 | Module | `func_count`, `funcs`, `funcs_to_compile`, `func_link_name`, `func_extern`, `func_only_local`, `func_has_weak_linkage` |
-| Current function | `switch_func`, `cur_args`, `cur_entry_block`, `cur_blocks`, `cur_static_allocas`, `cur_has_dynamic_alloca`, `cur_is_vararg`, `cur_needs_unwind_info`, argument attributes (`byval`, `sret`) |
-| Blocks | `block_succs`, `block_insts`, `block_phis`, and two `u32` slots the compiler stores per block (`block_info`, `block_info2`) |
+| Current function | `switch_func`, `cur_highest_val_idx`, `cur_args`, `cur_entry_block`, `cur_blocks`, `cur_static_allocas`, `cur_has_dynamic_alloca`, `cur_is_vararg`, `cur_needs_unwind_info`, argument attributes (`byval`, `sret`) |
+| Blocks | `block_succs`, `block_insts`, `block_phis`, and two `u32` slots the compiler stores per block (`block_info`, `block_info2` and their setters) |
 | Values | `val_local_idx`, a dense index per function that keys every array the compiler keeps; `val_is_phi`, `val_as_phi`, `val_ignore_in_liveness_analysis`, alloca size and alignment |
-| PHIs | `incoming_count`, `incoming_val_for_slot`, `incoming_block_for_slot`, `incoming_val_for_block` |
+| PHIs (`PHIRef`, returned by `val_as_phi`) | `incoming_count`, `incoming_val_for_slot`, `incoming_block_for_slot`, `incoming_val_for_block` |
 | Instructions | `inst_operands`, `inst_results`, `inst_fused` (the instruction was folded into another) |
 | Lifecycle | `start_compile`, `end_compile`, `reset` |
+| Debug output | `block_fmt_ref`, `value_fmt_ref`, `inst_fmt_ref` |
+
+Two constants configure the analysis: `TPDE_PROVIDES_HIGHEST_VAL_IDX` and
+`TPDE_LIVENESS_VISIT_ARGS`.
 
 The engine also uses `block_is_cold(IRBlockRef)`, an optional hook added by a
 local patch, which sends whole blocks to the cold area (see 1.5).
@@ -132,12 +136,13 @@ The front-end works with the following handles:
 
 The register file keeps three bitsets: allocatable, used and clobbered
 registers. The clobbered set later decides which callee-saved registers the
-prologue saves. When a register is needed, the eviction order is:
+prologue saves. When a register is needed and none is free,
+`select_reg_evict` picks:
 
-1. a stack variable reference;
-2. another variable reference;
-3. a value that is already spilled;
-4. the value whose last use is farthest away.
+1. a variable reference (an address that is cheap to recompute);
+2. otherwise the highest score: a value that is already spilled, then the
+   value whose liveness ends soonest, then the one with the fewest
+   references left.
 
 Values that stay live across blocks, inside a loop, may get a **fixed
 register** (on x64 at most 5 general-purpose and 6 FP registers). Fixed
@@ -146,7 +151,9 @@ registers are never spilled at branches.
 **Branches.** A branch follows a fixed protocol:
 
 1. `spill_before_branch()` writes every dirty register that is not fixed back
-   to its stack slot. Values whose liveness ends at the branch are skipped.
+   to its stack slot. Values whose liveness ends at the branch and that have
+   no references left are skipped, and nothing is spilled when the only
+   successor is the next block and has no other predecessor.
 2. `begin_branch_region()` starts the branch region.
 3. `generate_branch_to_block()` is called once per edge. It moves values into
    the PHI slots of the target block and splits conditional edges into
@@ -181,7 +188,7 @@ up front. In `finish_func` it:
   - `AssemblerElf::build_object_file()` produces a relocatable ELF object
     with an `.eh_frame` section.
   - Upstream also ships `ElfMapper` for mapping code in memory. The engine
-    does not use it; it maps images itself (see 2.6).
+    does not use it; it maps images itself (see 2.4, step 7).
 
 ### 1.5 Local patches
 
@@ -212,9 +219,9 @@ up front. In `finish_func` it:
    until nothing changes, removes jumps to the next instruction and turns
    `jcc A; jmp B; A:` into an inverted `jcc B`.
 9. **Biased base register.** `set_biased_reg` rewrites the displacements of
-   one register. The engine keeps the frame pointer of the Zend frame in RBX,
-   biased by 0x80, so that most frame-slot offsets fit in a one-byte
-   displacement. RBX is therefore not allocatable.
+   one register. The x64 engine keeps the pointer to the Zend frame in RBX,
+   biased by 0x7f, so that frame offsets up to 0xfe fit in a one-byte
+   displacement. RBX is then not allocatable for the rest of the function.
 
 ### 1.6 EncodeGen snippets
 
@@ -234,10 +241,14 @@ The snippet sources live in `Zend/Native/TPDE/EncodeGen/`:
   redo the whole operation.
 - `tpde-encodegen-cold-blocks.diff`: adds `--cold-blocks`. Blocks inside a
   snippet with an estimated frequency below 1%, such as `UNEXPECTED()`
-  branches, are emitted into the cold area.
-- `regenerate.sh`: rebuilds `LinuxX64/zend_tpde_encodegen_x64.hpp` and
-  `DarwinA64/zend_tpde_encodegen_a64.hpp`. It is a developer tool that needs
-  LLVM/clang 21. Normal builds use the checked-in headers and need no LLVM.
+  branches, are emitted into the cold area. Only the x86-64 header uses it.
+- `regenerate.sh`: rebuilds `LinuxX64/zend_tpde_encodegen_x64.hpp` (from
+  both sources) and `DarwinA64/zend_tpde_encodegen_a64.hpp` (from the scalar
+  source). It is a developer tool: it builds `tpde_encodegen` at the pinned
+  revision with LLVM/clang 21 (through `nix shell` unless
+  `ENCODEGEN_TOOLCHAIN=""`) and reads the Zend layouts of a configured
+  release build (`ENCODEGEN_BUILD_DIR`). Normal builds use the checked-in
+  headers and need no LLVM.
 
 ---
 
@@ -247,14 +258,19 @@ The snippet sources live in `Zend/Native/TPDE/EncodeGen/`:
 
 ```
 PHP source
-  -> Zend compiler: op_array            (Zend/zend_compile.c)
+  -> Zend compiler: op_array       Zend/zend_compile.c
   -> OPcache optimizer: SSA and type inference
-  -> ZNMIR lowering                     (Zend/Native/Lowering, Zend/Native/MIR)
-  -> TPDE plan and machine plan         (Zend/Native/TPDE/Common/zend_tpde_plan*.cpp)
-  -> IR adaptor -> TPDE code generation (zend_tpde_ir_adaptor.*, LinuxX64/zend_tpde_linux_x64.cpp)
-  -> ELF image -> mapped code           (zend_tpde_image.cpp, Runtime/LinuxX64/zend_native_publish_linux_x64.cpp)
+  -> ZNMIR lowering                Zend/Native/Lowering, Zend/Native/MIR
+  -> TPDE plan and machine plan    TPDE/Common/zend_tpde_plan*.cpp,
+                                   TPDE/Common/zend_tpde_machine_plan.cpp
+  -> IR adaptor, code generation   TPDE/Common/zend_tpde_ir_adaptor.*,
+                                   TPDE/LinuxX64/zend_tpde_linux_x64.cpp
+  -> ELF image, mapped code        TPDE/Common/zend_tpde_image.cpp,
+                                   Runtime/LinuxX64/zend_native_publish_linux_x64.cpp
   -> entry cell publishes the code -> zend_native_execute_frame_entered()
 ```
+
+Paths below `TPDE/` and `Runtime/` are relative to `Zend/Native/`.
 
 The source tree:
 
@@ -262,6 +278,7 @@ The source tree:
 |---|---|
 | `Zend/Native/Compiler/` | Compiler driver (`zend_native_compiler.c`), executor hook (`zend_native_executor.c`), dynamic code |
 | `Zend/Native/MIR/`, `Zend/Native/Lowering/` | ZNMIR: the canonical mid-level IR, its verifier and text format, and the lowering from Zend opcodes |
+| `Zend/Native/Calls/`, `Zend/Native/Values/` | Target-neutral call and value models and their lowering contracts |
 | `Zend/Native/TPDE/Common/` | Planning, IR adaptor, shared code generator, image format, layout profile |
 | `Zend/Native/TPDE/LinuxX64/` | `ZendCompilerX64`, the x86-64 code generator, and the generated snippet encoders |
 | `Zend/Native/TPDE/DarwinA64/` | Darwin arm64 code generator and PHP's own A64 assembler |
@@ -271,11 +288,12 @@ The source tree:
 ### 2.2 When code is compiled
 
 **Executor hook.** `zend_post_startup()` calls
-`zend_native_executor_startup()` (`Zend/Native/Compiler/zend_native_executor.c`).
+`zend_native_executor_startup()`
+(`Zend/Native/Compiler/zend_native_executor.c`).
 That function:
 
 - validates the runtime helper table;
-- reserves an op_array and extension handle;
+- reserves a resource handle and an op_array extension handle;
 - installs `zend_native_executor_execute_ex` as `zend_execute_ex`.
 
 The executor also activates and deactivates per request, from `Zend/zend.c`.
@@ -302,9 +320,10 @@ component is published at once.
 (`ext/opcache/ZendAccelerator.c`) compiles the script's main code, its
 functions, methods and closures ahead of time and serializes them into a
 **bundle**. The bundle is stored with the script in shared memory or the file
-cache. Each worker process later imports the bundle and maps it locally. A
-content-keyed cache in the process reuses the bundle of a script whose content
-is identical.
+cache. Each worker process later imports the bundle and maps it locally. For
+a script that declares no class and no named function, a content-keyed cache
+in the process reuses the bundle of an earlier script with identical
+op_arrays, such as a cache file an application rewrites in every request.
 
 ### 2.3 Immutable code and entry cells (ADR 0005)
 
@@ -365,8 +384,9 @@ Each compiled function has a `zend_native_entry_cell`
 7. **Mapping.** `zend_native_publish_linux_x64.cpp` parses the ELF,
    applies the relocations (`R_X86_64_64`, `PC32`, `PLT32`, `GOTPCREL`),
    sets the page protections and registers the `.eh_frame` for unwinding.
-   Images are placed within 1 GiB below the executable, so calls to runtime
-   helpers are direct `rel32` calls without a PLT.
+   While there is room, images are placed just below the executable, so
+   calls to runtime helpers are direct `rel32` calls; an image mapped
+   elsewhere calls them through PLT entries.
 8. **Execution.** `zend_native_execute_frame_entered()`
    (`Runtime/Common/zend_native_execute.c`) calls the entry as
    `entry(execute_data, context)` and handles the return, interrupts,
@@ -430,9 +450,11 @@ There are four kinds of call path:
 - **Universal protocol.** A site with no valid target takes the cold
   universal protocol (`zend_native_call_universal_init`, `_send`, `_expand`,
   `_do`). It resolves the target as the VM would and publishes the site.
-  - Sites go stale at the end of a request. They re-arm once per request
-    through a cold stub (`zend_native_call_fast_rearm`) when their target
-    still applies.
+  - A site whose target needs a name or class binding goes stale at the
+    end of a request and re-arms once per request through a cold stub
+    (`zend_native_call_fast_rearm`) when its target still applies. A site
+    that needs no binding (a method of an immutable class, `self::`,
+    `parent::`, `static::`) keeps its target across requests.
   - Self-forwarding sites (`self::`, `parent::`) inside trait methods and
     closures compare the caller's scope with the site's key.
 - **Dynamic calls.** `$f(...)`, `call_user_func()`, `$obj->$m(...)` and
@@ -451,13 +473,15 @@ There are four kinds of call path:
   that rarely run are emitted after the epilogue.
 - **Layout profile** (`zend_tpde_layout.*`). Jumps that training finds
   taken at least 9 times in 10, over at least 256 runs, are inverted or
-  moved so that the hot path falls through. FPM trains this automatically:
+  moved so that the hot path falls through. Blocks entered in fewer than 1
+  of 100 calls of their function, over at least 64 calls, go to the cold
+  area. FPM trains this automatically:
   - it counts in shared memory;
   - after `ZEND_NATIVE_LAYOUT_REQUESTS` requests it restarts OPcache so that
     scripts are recompiled with the profile.
-- **Rare functions.** A function called at most `ZEND_NATIVE_RARE_CALLS`
-  times per request (default 12) gets no native call entry, which keeps it
-  small.
+- **Rare functions.** Once a layout profile holds at least 16 trained
+  requests, a function entered at most `ZEND_NATIVE_RARE_CALLS` times per
+  request (default 12) gets no native call entry, which keeps it small.
 - **Tier 2.** Off unless `ZEND_NATIVE_TIER2_THRESHOLD > 0`. It recompiles
   hot functions with argument-type guards, and the result stays local to the
   process.
@@ -486,14 +510,15 @@ that shared changes keep compiling there.
 - Linux x86-64 or Darwin arm64. Other hosts fail at configure (ADR 0006).
 - **clang/clang++.** The linux-amd64 profiles set `PROFILE_CC=clang`. GCC
   cannot compile the TPDE x64 templates, so do not override `CC` with it.
-- **Build tools:** C++20, python3 >= 3.9 (it generates the Fadec tables),
-  autoconf, bison, re2c, make, pkg-config, git and flock.
+- **Build tools:** C++20, python3 >= 3.9 (it also generates the Fadec
+  tables), autoconf, bison, re2c, make, pkg-config and git.
 - **Optional, for release builds:** `xz` (for PGO profiles) and binutils
   >= 2.43 (for `--section-ordering-file`). Without them the build continues,
   just without those features.
 - **Configure switch:** `--enable-native-engine`, defined in
   `ext/native_mir_test/config.m4`. It cannot be built as a shared extension.
-  - `--enable-native-mir-test` additionally builds the test bridge.
+  - `--enable-native-mir-test` additionally builds the test bridge and
+    implies `--enable-native-engine`.
   - OPcache is always built in.
 
 ### 3.2 Profiles
@@ -504,12 +529,17 @@ default, `debug-nts`, is stock PHP without the native engine.
 
 | Profile | Purpose |
 |---|---|
-| `linux-amd64-native-debug-nts` (`-zts`) | Debug build at `-Og`, with FPM and the test bridge; the tier and test profile |
-| `linux-amd64-native-asan-nts`, `-ubsan-nts` | Sanitizer builds at `-O1` |
-| `linux-amd64-native-release-nts` | Release build with function order and PGO |
-| `linux-amd64-native-product-release-nts` | Release build with FPM, CGI, phpdbg and embed |
-| `linux-amd64-native-app-debug-nts`, `-app-release-nts`, `-app-asan-nts` | Builds with the extensions applications need (mbstring, session, PDO/SQLite, mysqli, DOM, zlib, ...), used for WordPress, Symfony and Laravel |
+| `linux-amd64-native-debug-nts` | Debug build at `-Og` with FPM and the test bridge; the profile of the test tiers |
+| `linux-amd64-native-debug-zts` | ZTS debug build at `-Og` with the test bridge, without FPM |
+| `linux-amd64-native-asan-nts`, `-ubsan-nts` | Sanitizer builds at `-O1` with the test bridge |
+| `linux-amd64-native-release-nts` | Release build with the test bridge |
+| `linux-amd64-native-product-release-nts` | Release build with FPM, CGI, phpdbg and static embed |
+| `linux-amd64-native-app-debug-nts`, `-app-release-nts`, `-app-asan-nts` | Builds with the extensions applications need (mbstring, session, PDO/SQLite, mysqli, DOM, zlib, ...), used for WordPress, Symfony and Laravel; debug and release with FPM, ASan at `-O1` |
 | `darwin-arm64-native-*` | The Darwin counterparts |
+
+The three Linux release profiles link with the function order and compile
+with the PGO profile of section 6, and omit frame pointers
+(`-fomit-frame-pointer`).
 
 **Variables.**
 
@@ -535,9 +565,12 @@ scripts/native/build.sh --profile linux-amd64-native-debug-nts [--print-binary]
 ```
 
 `build.sh` reconfigures only when build-system inputs change:
-`configure.ac`, `*.m4`, `config*.m4`, `Makefile.frag*`, the profile, the
-toolchain or the flags. Source edits rebuild incrementally in seconds. Use
-`--force-configure` only when you need it, and never build with `--jobs 1`.
+`configure.ac`, `buildconf`, `build/`, `*.m4`, `config*.m4`,
+`Makefile.frag*`, the profile, the compiler or `CC`, `CFLAGS`, `CPPFLAGS`
+and `LDFLAGS`. A change of the profile's extra flags or function order
+cleans the objects once instead. Source edits rebuild incrementally in
+seconds. Use `--force-configure` only when you need it, and never build with
+`--jobs 1`.
 
 ---
 
@@ -566,21 +599,23 @@ php-fpm -n -y pool.conf -F -O -d opcache.enable=1 \
 
 FPM trains the branch layout automatically (see 2.8).
 
-The environment variables below are read at startup, before FPM clears the
-environment:
+The layout variables, `ZEND_NATIVE_RARE_CALLS` and
+`ZEND_NATIVE_COMPILE_TRACE` are read at startup, before FPM clears the
+environment of its workers. The others are read on first use; under FPM a
+pool passes them only with `clear_env = no` or an `env[...]` entry.
 
 | Variable | Effect |
 |---|---|
 | `ZEND_NATIVE_LAYOUT=path\|off` | Use `path` as the layout profile if it exists, else train into it; `off` disables FPM's automatic training |
 | `ZEND_NATIVE_LAYOUT_PROFILE=path` | Apply a layout profile; `*` sends every eligible region to the cold area (a stress mode) |
 | `ZEND_NATIVE_LAYOUT_TRAIN=path\|off` | Count jumps in shared memory and write a training file |
-| `ZEND_NATIVE_LAYOUT_REQUESTS=N` | Requests before switching to the trained profile (default 128, 0 = never) |
-| `ZEND_NATIVE_RARE_CALLS=N` | Calls per request below which a function counts as rare (default 12, 0 = off) |
+| `ZEND_NATIVE_LAYOUT_REQUESTS=N` | Requests before switching to the trained profile (default 128; 0 = never, which also disables FPM's automatic training) |
+| `ZEND_NATIVE_RARE_CALLS=N` | Calls per request up to which a function counts as rare (default 12, 0 = off) |
 | `ZEND_NATIVE_SPECULATE=1` | Enable speculative specialization (Linux x64) |
 | `ZEND_NATIVE_TIER2_THRESHOLD=N`, `ZEND_NATIVE_TIER2_TRACE` | Enable tier-2 recompilation after N calls; trace its outcomes |
 | `ZEND_NATIVE_DEOPT_STRESS=N` | Debug builds: stress every N-th deoptimization point |
 | `ZEND_NATIVE_COMPILE_TRACE=path` | Append a compile trace (do not measure timing with it on) |
-| `ZEND_NATIVE_PERF_MAP` | Write perf JIT maps (`/tmp/perf-<pid>.map`) so `perf` can name generated code |
+| `ZEND_NATIVE_PERF_MAP` | Write perf JIT maps (`/tmp/perf-<pid>.map`, plus `/tmp/perf-<pid>.names` and the mapped image bytes) so `perf` can name generated code (Linux x64) |
 
 ---
 
@@ -594,16 +629,20 @@ binary under test.
 # tiers: quick after every change, commit before a commit, full before a push
 NATIVE_PHPT_RUNNER=/path/to/plain/php \
   scripts/native/test-phpt.sh --tier quick|commit|full \
-  [--baseline FILE] [--show-slow MS] [--deopt-stress N] [PATH...]
+  [--jobs N] [--no-build] [--baseline FILE] [--show-slow MS] \
+  [--deopt-stress N] [PATH...]
 ```
 
 - **quick:** the native PHPT suite `ext/native_mir_test/tests`, plus any
   paths you pass.
 - **commit:** quick, plus `Zend/tests`, `ext/opcache/tests`, `ext/spl/tests`,
-  `ext/reflection/tests` and parts of `ext/standard/tests`.
-- **full:** commit, then commit again under deoptimization and layout
-  stress, then the ASan and UBSan builds. The sanitizer builds are built in
-  parallel and run one after the other.
+  `ext/reflection/tests` and the `array`, `math` and `strings` directories of
+  `ext/standard/tests`.
+- **full:** commit, then the commit suites again under deoptimization and
+  layout stress, then the ASan and UBSan profiles on `Zend/tests`, the native
+  suite, `ext/opcache/tests` and the `array` and `math` directories. The
+  sanitizer profiles are built in parallel and run one after the other.
+- The debug runs use the host's `*-native-debug-nts` profile.
 - **On Linux,** every tier also syntax-checks the Darwin back-end.
 - **Exit codes** (`docs/native-engine/test-command-contract.md`): 0 pass,
   1 test failures, 2 usage error, 3 missing prerequisite.
@@ -624,7 +663,8 @@ fail; use a plain PHP as the runner.
 - `scripts/native/test-smoke.sh` checks the version, the modules and three
   PHPTs.
 - `scripts/native/test-sanitizers.sh --profile linux-amd64-native-asan-nts`
-  runs a sanitizer profile; without `--profile` it runs the stock profiles.
+  builds a sanitizer profile and runs the smoke checks under it; without
+  `--profile` it runs the stock `asan-nts` and `ubsan-nts` profiles.
 - `test-fpm-runtime.sh` and `test-native-product-fpm.sh` test FPM.
 - FPM PHPTs live in `sapi/fpm/tests`.
 

@@ -69,8 +69,9 @@ These are semantic pseudocode rewrites.  `Before` is the input order and
 8. **Before:** `destroy($x); may_throw()`. **After:** `may_throw(); destroy($x)`.
    **Reason:** the exception can change whether and when cleanup executes.
 9. **Before:** `materialize(frame); observer_callback()`. **After:** defer
-   materialization until after the callback. **Reason:** the observer sees frame
-   arguments, locals, temporaries, and call position.
+   materialization until after the callback. **Reason:** the observer reads
+   the frame state its boundary class publishes (function, arguments, return
+   value and call position, or the complete frame for scope inspectors).
 10. **Before:** `cache_lookup($slot); call_php(); use_cached_target`. **After:**
     hoist `use_cached_target` before validation after the call. **Reason:**
     runtime caches and class/function tables can change during reentry.

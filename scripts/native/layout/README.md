@@ -1,6 +1,13 @@
-# Runtime function layout
+# Runtime function layout and PGO
 
-The Linux release profiles set `PROFILE_FUNCTION_ORDER` to
+The Linux release profiles (`linux-amd64-native-release-nts`,
+`-product-release-nts`, `-app-release-nts`) optimize the C and C++ runtime
+with the two artifacts in this directory. [`TPDE.md`](../../../TPDE.md)
+section 6 gives the overview; this file has the recipes.
+
+## Function order
+
+The release profiles set `PROFILE_FUNCTION_ORDER` to
 `linux-amd64-apps.order`. `scripts/native/build.sh` then compiles with
 `-ffunction-sections` and links with `ld --section-ordering-file` (binutils
 2.43 or newer; an older linker keeps the default layout). The hot runtime
@@ -9,10 +16,10 @@ functions of warm WordPress, Symfony and Laravel requests come first in
 
 This removes instruction-fetch stalls, and it keeps the hot runtime code in
 place when unrelated objects change size. Without it, an edit to the TPDE
-compiler moves every Zend runtime function and shifts A/B cycle measurements
-by about one million cycles per request.
+compiler moves every Zend runtime function and shifts A/B cycle
+measurements.
 
-## Regenerating the order
+### Regenerating the order
 
 Profile warm requests of each application with callgrind, using a binary
 built from one of these profiles, then run:
@@ -32,7 +39,7 @@ a blog post; Laravel `/`).
 Functions missing from a later build are ignored by the linker. A changed
 order file rebuilds the profile.
 
-# Profile-guided optimization
+## Profile-guided optimization
 
 The same release profiles set `PROFILE_PGO_PROFILE` to
 `linux-amd64-apps.profdata.xz`, an xz-compressed clang profile
@@ -45,7 +52,7 @@ their own profile (the out-of-date warnings are silenced). Without `xz` or
 with a compiler that cannot read the profile, the build continues without
 it; `NATIVE_PGO=off` disables it.
 
-## Regenerating the profile
+### Regenerating the profile
 
 The clang that reads the profile must match the `llvm-profdata` that merges
 it (same LLVM major version).

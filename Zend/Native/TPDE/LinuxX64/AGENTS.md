@@ -24,7 +24,6 @@ Linux x86-64 is the primary target. Known pitfalls of the x64 backend:
 - **Cold blocks reload spilled parts.** When a guarded cold block stores a
   boxed value to the frame, reload parts whose assignment is `stack_valid()`
   from the stack instead of trusting the register.
-
 - **Snippet register budget.** An EncodeGen snippet needs its scratch
   registers plus the held values free at once; gate inline paths on
   `unlocked_gp_registers()` or TPDE aborts in `select_reg_evict`.

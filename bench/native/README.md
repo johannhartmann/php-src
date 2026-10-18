@@ -1,8 +1,9 @@
 # Native call-1-through-10 benchmark harness
 
-This harness measures deterministic PHP workloads without depending on a
-future native engine. It does not claim that outer wall time is JIT compilation
-time, and it never invents native-code size when no source exists.
+This harness measures deterministic PHP workloads on any PHP binary, stock or
+native. It does not claim that outer wall time is JIT compilation time, and
+it never invents native-code size when no source exists. The native engine
+and its build profiles are described in [`TPDE.md`](../../TPDE.md).
 
 ## Quick start
 
@@ -121,5 +122,5 @@ source commit, host, kernel, CPU, configuration, and raw samples are retained.
 The executable itself is never copied.
 
 Review the generated provenance and measurements before committing a promoted
-baseline. Do not promote a Codex sandbox or arbitrary workstation run as a
+baseline. Do not promote a sandboxed or arbitrary workstation run as a
 canonical result.

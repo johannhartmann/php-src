@@ -2,13 +2,13 @@
 
 ## Status
 
-Accepted on 2026-07-17.
+Accepted.
 
 ## Context
 
 PHP behavior includes output, diagnostics, exit status, exceptions, ordering,
 and side effects that unit tests of compiler internals cannot fully define. A
-full cutover needs comparison against the pinned reference implementation
+full cutover needs comparison against stock PHP at the pinned php-src baseline
 without hiding native mismatches through broad normalization.
 
 ## Decision
@@ -17,13 +17,16 @@ Use a caller-supplied, explicit reference PHP binary as the semantic oracle for
 differential tests. Run the same deterministic fixture and declared environment
 with reference and candidate binaries. Compare observable output, diagnostics,
 exit status, and declared side effects, including separately attributable calls
-1 through 10 for repeated-call scenarios.
+1 through 10 for repeated-call scenarios. The harness is
+`tests/native/diff_runner.py`; `tests/native/capture_manifest.py` records the
+binary provenance. PHPTs whose expected output comes from stock PHP apply the
+same oracle inside `run-tests.php`.
 
 Apply no silent normalization. Allow a narrowly defined normalization only when
 the field is inherently unstable, the rule is recorded in result metadata, and
-the normalizer has direct tests. Record binary paths, binary identities, source
-revision, platform, configuration, fixture identity, and normalization set with
-each baseline or result.
+the normalizer has direct tests; the current contract defines none. Record
+binary paths, binary identities, source revision, platform, configuration,
+fixture identity, and normalization set with each baseline or result.
 
 ## Consequences
 
@@ -36,8 +39,8 @@ each baseline or result.
 
 ## Alternatives
 
-- Comparing only PHPT expected output was rejected because it can omit process
-  and repeated-call behavior needed by the native harness.
+- Comparing only hand-written PHPT expected output was rejected because it can
+  omit process and repeated-call behavior needed by the native harness.
 - Broad filtering of addresses, ordering, warnings, or timing was rejected
   because it can erase real semantic differences.
 

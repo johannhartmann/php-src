@@ -30,11 +30,12 @@ obligations.  A bailout is not a normal return and must not execute normal
 success continuations.
 
 Before any call, observer callback, interrupt check, destructor, exception
-dispatch, bailout, or suspension boundary, live interpreter-visible values
-must be materialized.  Cleanup remains in source order unless a proof shows
-that no release can run user code, throw, observe the frame, or affect an
-alias.  A pending exception also cannot be cleared or replaced merely to make
-code motion convenient.
+dispatch, bailout, or suspension boundary, the state that boundary class
+reads must be materialized, as the
+[safepoint contract](../frames/safepoint-contract.md) defines per class.
+Cleanup remains in source order unless a proof shows that no release can run
+user code, throw, observe the frame, or affect an alias.  A pending exception
+also cannot be cleared or replaced merely to make code motion convenient.
 
 This contract follows the destructor and exception behavior in
 `zend_objects.c`, `zend_exceptions.c`, `zend_variables.c`, and the VM exception

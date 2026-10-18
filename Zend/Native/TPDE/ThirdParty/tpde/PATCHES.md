@@ -1,22 +1,28 @@
 # Local integration patches
 
-The imported TPDE sources are pinned by `REVISION` to upstream `master`
-9779acf; the library sources under `include/` and `src/` equal that revision
-except for the patches below. Fadec and Disarm are pinned to the revisions
-TPDE's submodules use. Newer upstream revisions replace the pin; this tree
-keeps no compatibility with older TPDE revisions.
+`REVISION` pins the imported TPDE sources to upstream `master` 9779acf. The
+library sources under `include/` and `src/` equal that revision except for
+the patches below; upstream's `src/test` is not imported. Fadec and Disarm
+are pinned to the revisions of TPDE's `deps/` submodules. Their imported
+files are unmodified except for the Fadec patch below;
+`disarm/disarm64-public.inc` and `disarm/disarm64-private.inc` are the
+unmodified output of `parse.py --encode-in-header` for `desc.txt` and
+`feat.txt`. Newer upstream revisions replace the pin; this tree keeps no
+compatibility with older TPDE revisions.
 
 ## Mapper access
 
 - `include/tpde/Assembler.hpp` exposes read-only access to the finalized
-  section list and relocation spans. The Darwin in-memory mapper needs this
+  section list (`section_count()`, `section_present()`) and relocation spans
+  (`DataSection::relocations()`). The Darwin in-memory mapper needs this
   information to lay out TPDE output, apply AArch64 relocations, and enforce
   per-section final permissions without the ELF object model.
 
 ## Fadec
 
-- `fadec/encode2.c` widens shift operands to unsigned 32-bit values before
-  shifting, removing signed-shift undefined behaviour UBSan reports.
+- `fadec/encode2.c` widens shift operands and the VEX opcode-mask enum
+  constants to unsigned 32-bit values, removing signed-shift undefined
+  behaviour that UBSan reports.
 
 ## Scratch value parts
 
@@ -24,7 +30,10 @@ keeps no compatibility with older TPDE revisions.
   unassigned non-constant part used as call result and snippet output
   scratch.
 
-## Jump threading (`include/tpde/FunctionWriter.hpp`, `src/FunctionWriter.cpp`, `src/x64/FunctionWriterX64.cpp`, `include/tpde/x64/CompilerX64.hpp`)
+## Jump threading
+
+Files: `include/tpde/FunctionWriter.hpp`, `src/FunctionWriter.cpp`,
+`src/x64/FunctionWriterX64.cpp`, `include/tpde/x64/CompilerX64.hpp`.
 
 - `FunctionWriter` records the labels placed at the current offset; when
   `CompilerX64::generate_raw_jump` emits an unconditional jump there, those
@@ -35,7 +44,9 @@ keeps no compatibility with older TPDE revisions.
   and turns a jump to the immediately following instruction into a NOP.
   `label_offset()` and RIP-relative operands are unchanged.
 
-## Allocator and control flow (`include/tpde/CompilerBase.hpp`)
+## Allocator and control flow
+
+File: `include/tpde/CompilerBase.hpp`.
 
 General corrections:
 
@@ -65,7 +76,10 @@ IR-visible guard, cold and join blocks:
   block liveness ends, and `free_reg` accepts discarding a modified register
   only once no reference remains.
 
-## Cold code area (`include/tpde/FunctionWriter.hpp`, `src/FunctionWriter.cpp`, `include/tpde/x64/CompilerX64.hpp`, `include/tpde/CompilerBase.hpp`)
+## Cold code area
+
+Files: `include/tpde/FunctionWriter.hpp`, `src/FunctionWriter.cpp`,
+`include/tpde/x64/CompilerX64.hpp`, `include/tpde/CompilerBase.hpp`.
 
 Code that rarely runs can be written out of the hot instruction stream while
 it is compiled in place, so the allocator state stays that of its position:
@@ -84,8 +98,10 @@ it is compiled in place, so the allocator state stays that of its position:
   at its RET the frame is gone (`DW_CFA_remember_state`, CFA = RSP + 8,
   restored registers), and `DW_CFA_restore_state` gives the cold code behind
   it the frame again.
-- `CompilerX64::generate_raw_jump` takes a fixup for a label in the other
-  area (`label_needs_fixup()`). `next_block()` names the block physically
+- Jumps between the areas are label fixups: `CompilerX64::generate_raw_jump`
+  emits every jump as one (see Short jumps). `label_needs_fixup()` tells
+  whether a jump to a label needs one (unplaced, or in the other area).
+  `next_block()` names the block physically
   placed next (one past the last block if none), so no branch falls through
   into the other area: for a hot block the next hot block in layout order,
   across cold ones; for a cold block only an immediately following cold
@@ -103,7 +119,10 @@ it is compiled in place, so the allocator state stays that of its position:
   compiled in layout order, so the allocator state is that of their
   position.
 
-## Code before the prologue (`include/tpde/Assembler.hpp`, `src/FunctionWriter.cpp`)
+## Code before the prologue
+
+Files: `include/tpde/Assembler.hpp`, `include/tpde/FunctionWriter.hpp`,
+`src/FunctionWriter.cpp`.
 
 `remove_prologue_bytes` moves only the relocations behind the removed bytes
 (`adjust_relocation_offsets` takes the first moved offset). A compiler may
@@ -112,27 +131,32 @@ entry with its own symbol, whose relocations keep their offsets.
 `FunctionWriterBase::begin_func_after_prefix()` then starts the function at
 the end of such code, which writes its own FDE first.
 
-## Short jumps (`src/x64/FunctionWriterX64.cpp`, `include/tpde/x64/FunctionWriterX64.hpp`, `include/tpde/x64/CompilerX64.hpp`, `include/tpde/Assembler.hpp`)
+## Short jumps
+
+Files: `src/x64/FunctionWriterX64.cpp`, `include/tpde/x64/FunctionWriterX64.hpp`,
+`include/tpde/x64/CompilerX64.hpp`, `include/tpde/Assembler.hpp`.
 
 Upstream encodes every forward jump with a 32-bit displacement. Here
 `CompilerX64::generate_raw_jump` always emits jmp/jcc rel32 with a label
 fixup, also to a label that is already placed, and the return sites of a
 function become fixups to a label in front of the epilogue.
-`FunctionWriterX64::relax_jumps`, called by `CompilerX64::finish_func` once
-the epilogue is written and the cold area appended, and before the prologue
-is written,
-shortens every jump whose target lies within rel8 range to the 2-byte form
-and removes jumps to the next instruction, including a jump to a label
-placed right after it that threading would resolve elsewhere. A conditional jump over an
-unconditional one (`jcc A; jmp B; A:`) becomes the inverted `jcc B` when no
-label is placed at the `jmp`, so nothing else can enter it. It starts with
-every jump short and lengthens those whose target lies out of rel8 range,
-iterating to a fixed point (lengthening never shortens another jump), compacts the code from the end of
-the reserved prologue on, and moves labels, the remaining fixups, jump
-tables and relocations (`DataSection::remap_relocation_offsets`) with it.
-Code before the prologue, such as an alternative entry, is not touched.
+`FunctionWriterX64::relax_jumps` runs in `CompilerX64::finish_func` once the
+epilogue is written and the cold area appended, before the prologue is
+written. It shortens every jump whose target lies within rel8 range to the
+2-byte form and removes jumps to the next instruction, including a jump to a
+label placed right after it that threading would resolve elsewhere. A
+conditional jump over an unconditional one (`jcc A; jmp B; A:`) becomes the
+inverted `jcc B` when no label is placed at the `jmp`, so nothing else can
+enter it. It starts with every jump short and lengthens those whose target
+lies out of rel8 range, iterating to a fixed point (lengthening never
+shortens another jump). It then compacts the code from the end of the
+reserved prologue on and moves labels, the remaining fixups, jump tables and
+relocations (`DataSection::remap_relocation_offsets`) with it. Code before
+the prologue, such as an alternative entry, is not touched.
 
-## Biased base register (`include/tpde/x64/CompilerX64.hpp`)
+## Biased base register
+
+File: `include/tpde/x64/CompilerX64.hpp`.
 
 - `CompilerX64::set_biased_reg(reg, off)` declares that `reg` holds its value
   plus `off` until the next `start_func`/`prologue_begin`. `asm_helper`
@@ -141,6 +165,6 @@ Code before the prologue, such as an alternative entry, is not touched.
   into it add `off`, `MOV64rr`/`MOV64mr` out of it subtract it (stores
   through flag-preserving `LEA`s); `PUSHr`/`POPr` pass unchanged. Any other
   operand use of the register, including as an index, is a fatal error.
-  The PHP emitter biases its frame register RBX by 0x80, so that frame
-  offsets up to 0xff encode as disp8, and keeps RBX non-allocatable for the
+  The PHP x64 emitter biases its frame register RBX by 0x7f, so that frame
+  offsets up to 0xfe encode as disp8, and keeps RBX non-allocatable for the
   rest of the function.

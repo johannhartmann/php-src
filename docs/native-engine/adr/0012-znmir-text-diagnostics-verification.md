@@ -12,10 +12,10 @@ diagnostic limits.
 
 ## Decision
 
-The canonical text form is UTF-8, LF-terminated, and emitted solely through a
-`zend_mir_view`. It starts with `znmir 1.0 module m<ID>`. Functions, blocks,
-frame states, and instructions follow in ascending numeric ID order. References
-use typed decimal IDs (`f`, `b`, `i`, `v`, `fs`, `p`); the invalid sentinel is
+The canonical text form consists of printable ASCII and LF-terminated lines
+and is emitted solely through a `zend_mir_view` (`zend_mir_dump_text()`). It
+starts with `znmir 1.0 module m<ID>`. References use typed decimal IDs (`m`,
+`f`, `b`, `i`, `v`, `vf`, `fs`, `p`, `r`, `s`); the invalid sentinel is
 spelled `invalid`. Catalog values use their lowercase contract labels. Masks
 use fixed-width lowercase hexadecimal: four digits for effects and ownership
 actions, eight for domains, and two for barriers.
@@ -24,9 +24,10 @@ Lists use comma-space separators inside square brackets and preserve semantic
 operand or successor order. Empty lists are `[]`. Each field appears exactly
 once in the order defined by the corresponding immutable record. No address,
 allocator detail, target feature, machine offset, or incidental traversal order
-is printable. The parser accepts only this versioned canonical form: unknown,
-duplicate, missing, overflowing, out-of-range, or trailing data is rejected.
-Dump-parse-dump must be byte-identical.
+is printable. The parser, a test-only component under `tests/native/mir/text`,
+accepts only this versioned canonical form: unknown, duplicate, missing,
+overflowing, out-of-range, or trailing data is rejected. Dump-parse-dump must
+be byte-identical.
 
 Version 1.0 uses these line records, in the shown field order. `<id>` is an
 unsigned decimal integer, `<bool>` is `true` or `false`, `<span>` is
@@ -40,6 +41,7 @@ function f<id> symbol s<id> entry b<id> flags 0x<8 hex>
 block b<id> function f<id> predecessors [<block-ids>] successors [<block-ids>]
 value v<id> representation <label> ownership <label>
 constant v<id> representation <label> kind <label> payload 0x<16 hex> symbol s<id>
+fact vf<id> value v<id> type <label> flags 0x<8 hex> range <min>:<max>|none provenance <label> source p<id>
 source p<id> file s<id> line <id> columns <id>:<id>
 slot <id> value v<id> index <id> kind <label> representation <label> materialization <label> ownership <label> rooted <bool> cleanup <bool>
 root <slot-id>
@@ -49,17 +51,23 @@ instruction i<id> block b<id> opcode <label> representation <label> result v<id>
 end
 ```
 
-Functions, blocks, values, constants, source positions, frame states, and
-instructions are sorted by their numeric ID. Slot, root, and cleanup records
-retain pool index order because frame spans address those pools. Record kinds
-occur in the order above. Exactly one ASCII space separates tokens, no line has
-trailing whitespace, and the file ends after the newline following `end`.
+Functions, blocks, values, constants, value facts, source positions, frame
+states, and instructions are sorted by their numeric ID. Slot, root, and
+cleanup records retain pool index order because frame spans address those
+pools. Record kinds occur in the order above; `fact` records appear only when
+the view provides value facts, and their range is `none` unless the
+integer-range flag is set. Exactly one ASCII space separates tokens, no line
+has trailing whitespace, and the file ends after the newline following `end`.
+The complete grammar is in the [text format](../mir/text-format.md).
+
+Modules from the production arena also emit their call and value model
+records (`call-site`, `value-storage`, ...) between the instructions and
+`end`. These are diagnostic output outside the strict grammar.
 
 For payload-free constants, `payload` is all zeroes and `symbol` is `invalid`.
 Integer and double constants use `payload`; string and semantic-pointer
-constants use `symbol` and an all-zero payload. PHI operand N is paired with
-predecessor N. Conditional successor 0 is true and successor 1 is false; an
-unconditional branch has only successor 0.
+constants use `symbol` and an all-zero payload. PHI operand and successor
+order follow ADR 0011.
 
 Diagnostics contain a stable code, severity, ID-based location, and a message
 of at most 191 bytes plus NUL. A sink invokes at most its configured `limit`
@@ -68,14 +76,15 @@ an error while reporting success. Diagnostic order is verifier stage, then
 function, block, instruction, and frame-state ID; messages may add context but
 must not replace the stable code or location oracle.
 
-Stage-one verification consumes only `zend_mir_view` and fails closed. It
-checks at least contract compatibility; unique and valid IDs; referential
-integrity; function/block membership; entry blocks; terminator placement and
-successor arity; predecessor/successor symmetry; PHI placement, input count,
-and predecessor association; value definition/use and representation; effect,
-domain, ownership, and barrier ranges; and frame-state/source/resume reference
-integrity. Arithmetic used for counts, spans, and diagnostics is checked before
-addition or multiplication. No malformed module may proceed to lowering.
+Stage-one verification (`zend_mir_verify_stage1()`) consumes only
+`zend_mir_view` and fails closed. It checks at least contract compatibility;
+unique and valid IDs; referential integrity; function/block membership; entry
+blocks; terminator placement and successor arity; predecessor/successor
+symmetry; PHI placement, input count, and predecessor association; value
+definition/use, dominance and representation; effect, domain, ownership, and
+barrier ranges; and frame-state/source/resume reference integrity. Arithmetic
+used for counts, spans, and diagnostics is checked before addition or
+multiplication. No malformed module may proceed to lowering.
 
 ## Consequences
 
@@ -98,6 +107,6 @@ because target code must never receive malformed canonical MIR.
 ## Verification impact
 
 Text tests must include golden output, byte-identical round trips, overflow,
-unknown-field, duplicate-field, ordering, and trailing-data tests. Verifier tests must
-cover every invariant with a stable diagnostic code/location and
+unknown-field, duplicate-field, ordering, and trailing-data tests. Verifier
+tests must cover every invariant with a stable diagnostic code/location and
 must prove diagnostic limits are honored.

@@ -18,7 +18,7 @@ semantics of the function without speculation. Specialized versions
 resume target with a verified frame state and immutable code-version identity.
 
 Resume targets enter generic native code, a native runtime continuation, or a
-caller boundary defined by the ABI contract. They never enter a VM
+caller boundary defined by the ABI contract (ADR 0010). They never enter a VM
 opcode-dispatch loop.
 
 ## Consequences
@@ -32,10 +32,12 @@ opcode-dispatch loop.
 
 ## Alternatives
 
-- Resuming at arbitrary machine offsets does not prove a reconstructible
-  Zend-compatible state.
+- Resuming at arbitrary machine offsets was rejected because it does not prove
+  a reconstructible Zend-compatible state.
 
 ## Verification impact
 
 Tests force every resume class, validate live values and observable state,
-and prove that targets belong to the active immutable code version.
+and prove that targets belong to the active immutable code version. The
+deoptimization stress mode (`ZEND_NATIVE_DEOPT_STRESS=N`, debug builds) moves
+the frame of every N-th deoptimization point to a new activation.
