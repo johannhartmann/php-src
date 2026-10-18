@@ -2680,10 +2680,14 @@ static zend_function *zend_native_call_static_method(
 					called_scope, Z_STR_P(name))
 				: zend_std_get_static_method(
 					called_scope, Z_STR_P(name), cache_name);
+			/* As the VM's INIT_STATIC_METHOD_CALL: a static trait method
+			 * deprecates its call on every lookup. */
 			if (function != NULL && cache_slot != NULL
 					&& (function->common.fn_flags
 						& (ZEND_ACC_CALL_VIA_TRAMPOLINE
-							| ZEND_ACC_NEVER_CACHE)) == 0) {
+							| ZEND_ACC_NEVER_CACHE)) == 0
+					&& (function->common.scope->ce_flags
+						& ZEND_ACC_TRAIT) == 0) {
 				if (function->type == ZEND_USER_FUNCTION
 						&& RUN_TIME_CACHE(&function->op_array) == NULL) {
 					zend_init_func_run_time_cache(&function->op_array);
@@ -4652,6 +4656,8 @@ static bool zend_native_call_callable_identity(
 			&& Z_TYPE_P(object) == IS_OBJECT
 			&& Z_TYPE_P(method) == IS_STRING
 			&& ZSTR_IS_INTERNED(Z_STR_P(method))
+			&& memchr(ZSTR_VAL(Z_STR_P(method)), ':',
+				ZSTR_LEN(Z_STR_P(method))) == NULL
 			&& (function->common.fn_flags & ZEND_ACC_STATIC) == 0
 			&& (resolution->call_info
 				& (ZEND_CALL_HAS_THIS | ZEND_CALL_RELEASE_THIS))
@@ -5666,8 +5672,11 @@ static void zend_native_call_recorded_target_record(
 		zval *object = zend_native_callable_element(Z_ARRVAL_P(callable), 0);
 		zval *name = zend_native_callable_element(Z_ARRVAL_P(callable), 1);
 
+		/* A "Class::method" name deprecates the callable on every call
+		 * (zend_is_callable_check_func()). */
 		if (object == NULL || name == NULL || Z_TYPE_P(name) != IS_STRING
-				|| !ZSTR_IS_INTERNED(Z_STR_P(name))) {
+				|| !ZSTR_IS_INTERNED(Z_STR_P(name))
+				|| memchr(Z_STRVAL_P(name), ':', Z_STRLEN_P(name)) != NULL) {
 			return;
 		}
 		method = Z_STR_P(name);
@@ -6579,6 +6588,14 @@ static void zend_native_call_resolution_cache_store(
 	zend_class_entry *callable_class = NULL;
 	const zend_op *code;
 
+	/* A static trait method deprecates its call on every lookup, which the
+	 * VM therefore never caches. */
+	if (resolution->function != NULL
+			&& resolution->function->common.scope != NULL
+			&& (resolution->function->common.scope->ce_flags
+				& ZEND_ACC_TRAIT) != 0) {
+		return;
+	}
 	/* A dynamic call is cached only under a stable identity of its callable:
 	 * a closure's function lives in its object, and the address of a freed
 	 * closure, receiver or name string identifies nothing. */
