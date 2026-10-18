@@ -914,10 +914,9 @@ struct ZendIRAdaptor::InlineClone {
  * the target backends see ordinary TPDE instructions and values. Only a
  * call the plan froze as an effect-closed clone gets here, so the plan's
  * facts for it hold: its guarded cold block, its argument bindings and the
- * arguments the body reads. The observer-enabled path still runs the complete Zend-frame call, so pure
- * scalar instructions may run speculatively before the observer guard; no
- * effectful, trapping, branching or frame-observing instruction is
- * admitted.
+ * arguments the body reads. With observers enabled the call compiles to the
+ * complete Zend-frame call instead. No effectful, trapping, branching or
+ * frame-observing instruction is admitted.
  */
 ZendIRAdaptor::InlinedBody ZendIRAdaptor::inline_component_scalar_body(
 		const zend_tpde_instruction &call,
@@ -3684,8 +3683,6 @@ void ZendIRAdaptor::Builder::select_register_binary_results() {
 		}
 		const uint32_t source_opcode =
 			instruction.value_operation.source_opcode;
-		const bool boolean_result =
-			long_comparison_source_opcode(source_opcode);
 		if (!long_binary_source_opcode(source_opcode)) {
 			continue;
 		}
@@ -6239,8 +6236,6 @@ bool ZendIRAdaptor::Builder::select_source_boxed_result(InstContext &ctx) {
 						reference->base_value_id))
 				&& zend_mir_id_is_valid(
 					reference->index_value_id)
-				&& reference->scale == sizeof(zval)
-				&& reference->access_width == sizeof(zval)
 				&& (source_array_constant_key
 					|| (source_array_key != INVALID_VALUE_REF
 						&& ((exact_type(source_array_key)
@@ -6271,8 +6266,7 @@ bool ZendIRAdaptor::Builder::select_source_boxed_result(InstContext &ctx) {
 				&& reference->kind
 					== ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT
 				&& reference->stable_storage_or_layout_id
-					== layout.cache_offset
-				&& reference->access_width == sizeof(zval);
+					== layout.cache_offset;
 		} else if (ctx.record.opcode
 				== ZEND_MIR_OPCODE_DYNAMIC_FETCH_R) {
 			zend_tpde_dynamic_fetch_read layout{};

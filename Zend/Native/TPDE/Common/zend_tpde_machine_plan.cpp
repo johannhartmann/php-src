@@ -973,9 +973,6 @@ static bool typed_body_signature_step(
 	if (record.opcode == ZEND_MIR_OPCODE_VALUE_TYPE_CHECK) {
 		return typed_body_type_check(walk, instruction);
 	}
-	if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
-		return false;
-	}
 	if (record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH) {
 		return typed_body_cond_branch(walk, instruction);
 	}
@@ -1338,8 +1335,7 @@ static bool typed_component_call_guarded_pointer_transport(
 		&& boxed_read_reference->kind
 			== ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT
 		&& boxed_read_reference->stable_storage_or_layout_id
-			== property_layout.cache_offset
-		&& boxed_read_reference->access_width == sizeof(zval);
+			== property_layout.cache_offset;
 	const bool guarded_array_pointer_transport =
 		boxed_read_producer != nullptr
 		&& boxed_read_producer->record.opcode
@@ -1353,9 +1349,7 @@ static bool typed_component_call_guarded_pointer_transport(
 		&& zend_mir_id_is_valid(
 			boxed_read_reference->base_value_id)
 		&& zend_mir_id_is_valid(
-			boxed_read_reference->index_value_id)
-		&& boxed_read_reference->scale == sizeof(zval)
-		&& boxed_read_reference->access_width == sizeof(zval);
+			boxed_read_reference->index_value_id);
 	return !check.effect_closed_inline
 		&& callee_abi.valid
 		&& machine_value_kind_can_be_register_authoritative(

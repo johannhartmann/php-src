@@ -24,7 +24,6 @@
 #include "../../MIR/Core/zend_mir_module_internal.h"
 #include "../../MIR/Semantics/zend_mir_effect_summary.h"
 
-#define ZEND_MIR_SNAPSHOT_MAGIC UINT32_C(0x57365350)
 #define ZEND_MIR_LIMIT UINT32_C(1048576)
 
 typedef struct _zend_mir_records {

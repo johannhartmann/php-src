@@ -553,14 +553,6 @@ bool freeze_source_call_phases(
 						"source-call SEND value is defined after its landing");
 					return false;
 				}
-				entry->operand_flags |=
-					ZEND_TPDE_SOURCE_CALL_OPERAND_SOURCE;
-			}
-
-			if (source_argument.source_mode
-					== ZEND_MIR_SOURCE_CALL_ARGUMENT_UNPACK) {
-				entry->operand_flags |=
-					ZEND_TPDE_SOURCE_CALL_OPERAND_RUNTIME_EXPANSION;
 			}
 		}
 		/*
@@ -1458,7 +1450,6 @@ static bool freeze_direct_call_arguments(plan_builder &builder, uint32_t i,
 		&argument_guard_types = frame.argument_guard_types;
 	argument_guard_types.assign(
 		site.arguments.count, ZEND_MIR_SCALAR_TYPE_NONE);
-	bool &has_argument_guard_type = frame.has_argument_guard_type;
 	const zend_op_array &op_array = callee->op_array;
 	const bool inline_receiver =
 		(op_array.scope == nullptr

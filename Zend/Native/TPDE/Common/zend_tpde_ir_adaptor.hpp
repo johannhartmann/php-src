@@ -759,11 +759,10 @@ private:
 	/*
 	 * Clones a proof-closed scalar callee body into the caller graph after
 	 * every component member was lowered: source opcodes are not consulted, and
-	 * the target backends see ordinary TPDE instructions and values. The
-	 * observer-enabled path still runs the complete Zend-frame call, so pure
-	 * scalar instructions may run speculatively before the observer guard; no
-	 * effectful, trapping, branching or frame-observing instruction is
-	 * admitted.
+	 * the target backends see ordinary TPDE instructions and values. With
+	 * observers enabled the call compiles to the complete Zend-frame call
+	 * instead. No effectful, trapping, branching or frame-observing
+	 * instruction is admitted.
 	 */
 	InlinedBody inline_component_scalar_body(
 			const zend_tpde_instruction &call,

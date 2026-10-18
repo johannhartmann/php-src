@@ -1535,8 +1535,6 @@ void freeze_machine_control_flow(zend_tpde_plan *plan)
 						record.source_position_id - 1].opcode == ZEND_BOOL_NOT);
 			if ((record.opcode == ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 						|| record.opcode == ZEND_MIR_OPCODE_COND_BRANCH)
-					&& instruction.value_operation.opcode
-						== ZEND_MIR_OPCODE_VALUE_COND_BRANCH
 				&& !follows_boolean_unary
 			&& (instruction.value_operation.source_opcode
 						== ZEND_JMPZ

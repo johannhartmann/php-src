@@ -240,10 +240,9 @@ extern "C" zend_result zend_tpde_compile_component(
 		/* A generic copy is entered only by deoptimization. A member that
 		 * runs rarely is entered through the shared fast Do: its own native
 		 * call entry would only add bytes. */
-		plans[initialized].rare = zend_tpde_layout_rare_function(
-			initialized, &plans[initialized]);
 		if (plans[initialized].deopt_landings
-				|| (plans[initialized].rare
+				|| (zend_tpde_layout_rare_function(
+						initialized, &plans[initialized])
 					& ZEND_TPDE_RARE_NO_CALL_ENTRY) != 0) {
 			plans[initialized].fast_call_eligible = false;
 		}
@@ -310,8 +309,6 @@ extern "C" zend_result zend_tpde_compile_component(
 		image->metrics.guard_sites += metrics.guard_sites;
 		image->metrics.slow_path_sites += metrics.slow_path_sites;
 		image->metrics.direct_call_sites += metrics.direct_call_sites;
-		image->metrics.direct_leaf_scalar_sites +=
-			metrics.direct_leaf_scalar_sites;
 		image->metrics.direct_call_frame_bytes +=
 			metrics.direct_call_frame_bytes;
 		image->metrics.inner_call_runtime_helper_calls +=

@@ -672,11 +672,6 @@ public:
 				this->stack.frame_size + this->max_callee_stack_arg_size, 16);
 	}
 
-	void reset() {
-		Base::reset();
-		EncodeBase::reset();
-	}
-
 	/* The symbol of a helper an emitter calls: planning required it. */
 	tpde::SymRef runtime_symbol(zend_native_runtime_helper_id id) {
 		return runtime_symbol_ref(id,
@@ -833,8 +828,7 @@ public:
 	/* Runs the function's tier-1 code on this frame and returns its status:
 	 * the stack alignment of an entry is unknown, so align, call, restore. */
 	void emit_tier1_fallback_call(
-			AsmReg frame_reg, AsmReg context_reg, const void *entry,
-			uint32_t member_plus_one = 0) {
+			AsmReg frame_reg, AsmReg context_reg, const void *entry) {
 		this->stack.generated_call = true;
 		/* Either register may be the other's argument register. */
 		ASM(MOV64rr, FE_AX, context_reg);
@@ -844,13 +838,8 @@ public:
 		ASM(AND64ri, FE_SP, -16);
 		ASM(PUSHr, FE_AX);
 		ASM(PUSHr, FE_AX);
-		if (member_plus_one != 0) {
-			/* A member of this component. */
-			emit_symbol_address(FE_AX, this->func_syms[member_plus_one - 1]);
-		} else {
-			ASM(MOV64ri, FE_AX, static_cast<int64_t>(
-				reinterpret_cast<uintptr_t>(entry)));
-		}
+		ASM(MOV64ri, FE_AX, static_cast<int64_t>(
+			reinterpret_cast<uintptr_t>(entry)));
 		ASM(CALLr, FE_AX);
 		ASM(MOV64rm, FE_SP, FE_MEM(FE_SP, 0, FE_NOREG, 0));
 		ScratchReg status{this};
@@ -867,11 +856,8 @@ public:
 	 * (zend_native_compiler_tier2_specialize_arguments()): arguments of
 	 * other types, or missing ones, run the function's tier-1 code.
 	 */
-	bool emit_tier2_arg_guards(AsmReg frame_reg, AsmReg context_reg) {
+	void emit_tier2_arg_guards(AsmReg frame_reg, AsmReg context_reg) {
 		const zend_tpde_plan *plan = ir().plan();
-		if (plan->tier2_fallback_entry == nullptr) {
-			return true;
-		}
 		auto fallback = text_writer.label_create();
 		auto passed = text_writer.label_create();
 		{
@@ -926,7 +912,6 @@ public:
 			cold_end();
 		}
 		label_place(passed);
-		return true;
 	}
 	/* The stack slot holding the element an isset found for its read, and
 	 * the reads whose isset stores it (lookup_reuse_consumer()). */
@@ -4986,28 +4971,6 @@ public:
 				base = canonical_frame_register();
 				offset = static_cast<uint64_t>(descriptor->displacement);
 				break;
-			case ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD:
-			{
-				auto context_ref = val_ref(
-					IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
-				auto context = context_ref.part(0);
-				base = context.load_to_reg();
-				offset = static_cast<uint64_t>(descriptor->displacement);
-				if (offset <= INT32_MAX) {
-					ASM(LEA64rm, destination,
-						FE_MEM(base, 0, FE_NOREG,
-							static_cast<int32_t>(offset)));
-					return;
-				}
-				ASM(MOV64rr, destination, base);
-				ScratchReg amount{this};
-				auto amount_reg = amount.alloc_gp();
-				materialize_constant(&offset,
-					tpde::x64::PlatformConfig::GP_BANK, 8,
-					amount_reg);
-				ASM(ADD64rr, destination, amount_reg);
-				return;
-			}
 			case ZEND_TPDE_MACHINE_REFERENCE_LITERAL:
 				emit_literal_base(destination, canonical_frame_register());
 				offset = static_cast<uint64_t>(
@@ -5491,7 +5454,6 @@ public:
 	bool compile_zval_boxed_store(InstContext &ctx);
 	bool compile_zval_payload_load(InstContext &ctx);
 	bool compile_zval_store(InstContext &ctx);
-	bool compile_echo_scalar(InstContext &ctx);
 	auto unary(InstContext &ctx);
 	auto binary(InstContext &ctx);
 	bool copy_result(InstContext &ctx);
@@ -6844,9 +6806,9 @@ bool ZendCompilerX64::compile_typed_call_guard(InstContext &ctx) {
 
 	/*
 	 * A guarded boxed argument owns the copy produced by its fast read.
-	 * The typed hot call releases that copy after use.  If a runtime type
-	 * or observer guard selects the canonical cold call instead, transfer
-	 * the same ownership into the source frame slot consumed by that path.
+	 * The typed hot call releases that copy after use. If a runtime type
+	 * guard selects the canonical cold call instead, transfer the same
+	 * ownership into the source frame slot consumed by that path.
 	 */
 	auto [frame_ref, frame] = val_ref_single(guard_operands[0]);
 	auto frame_reg = frame.load_to_reg();
@@ -7199,9 +7161,7 @@ bool ZendCompilerX64::compile_load_frame(InstContext &ctx) {
 	}
 	if (ir().plan()->tier2_fallback_entry != nullptr
 			&& context_use.has_value() && !ir().typed_body()) {
-		if (!emit_tier2_arg_guards(result_reg, context_reg)) {
-			return false;
-		}
+		emit_tier2_arg_guards(result_reg, context_reg);
 	}
 	std::optional<tpde::Label> deopt_entry;
 	if (context_use.has_value()
@@ -8825,8 +8785,6 @@ bool ZendCompilerX64::compile_universal_send(UserCallContext &uc) {
 			ir().exact_type(node.operands[2]);
 		const int32_t argument_base = static_cast<int32_t>(
 			ZEND_CALL_FRAME_SLOT * sizeof(zval));
-		const int32_t argument_type = argument_base
-			+ static_cast<int32_t>(offsetof(zval, u1.type_info));
 		{
 			ScratchReg callee{this};
 			auto callee_reg = callee.alloc_gp();
@@ -10919,7 +10877,7 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 	auto slot_reg = slot.alloc_gp();
 	auto old_type_reg = old_type.alloc_gp();
 	auto counted_reg = counted.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	/* The old value is released first (no destructor runs here: a
 	 * last reference or a collectable one takes the cold path), then
 	 * the scalar is stored into the resolved slot. */
@@ -10986,33 +10944,6 @@ bool ZendCompilerX64::compile_zval_store(InstContext &ctx) {
 	 * take it directly. */
 	finish_guarded(slow_release, finished, std::move(decision), frame,
 		successors);
-	return true;
-}
-
-bool ZendCompilerX64::compile_echo_scalar(InstContext &ctx) {
-	const Adaptor::InstNode &node = ctx.node;
-	const zend_tpde_instruction &mir = *ctx.mir;
-	zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
-	if (!zend_mir_scalar_type_is_exact(exact_type)
-			|| node.operands.empty()) {
-		return false;
-	}
-	tpde::x64::CCAssignerSysV assigner;
-	CallBuilder builder{*this, assigner};
-	builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-	if (exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
-		builder.add_arg(CallArg{node.operands[0]});
-		builder.call(runtime_symbol(mir.runtime_helper));
-	} else {
-		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-			builder.add_arg(ValuePart{uint64_t{0}, 8,
-				tpde::x64::PlatformConfig::GP_BANK}, tpde::CCAssignment{});
-		} else {
-			builder.add_arg(CallArg{node.operands[0]});
-		}
-		add_const_arg(builder, static_cast<uint32_t>(exact_type), 4);
-		builder.call(runtime_symbol(mir.runtime_helper));
-	}
 	return true;
 }
 
@@ -12865,8 +12796,8 @@ bool ZendCompilerX64::free_temporary_slot(InstContext &ctx) {
 	ScratchReg decision{this};
 	auto type_reg = type.alloc_gp();
 	auto value_reg = value.alloc_gp();
-	auto probe_reg = probe.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	probe.alloc_gp();
+	decision.alloc_gp();
 
 	ASM(MOV32rm, type_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
@@ -14575,8 +14506,6 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 				&& !zend_mir_id_is_valid(
 					element_reference->base_value_id))
 			|| !zend_mir_id_is_valid(element_reference->index_value_id)
-			|| element_reference->scale != sizeof(zval)
-			|| element_reference->access_width != sizeof(zval)
 			|| layout.container_offset > INT32_MAX - 8
 			|| node.control_block == UINT32_MAX
 			|| node.continuation_block == UINT32_MAX) {
@@ -14723,7 +14652,7 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 	}
 	table.reset(this);
 	const AsmReg element_reg = element.cur_reg_or_load(this);
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	/* A missing key warns and an undecided probe needs the helper. */
 	ASM(CMP64ri, element_reg,
 		static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
@@ -14935,7 +14864,7 @@ int ZendCompilerX64::type_check_inline(InstContext &ctx) {
 	const AsmReg matched_reg = matched.cur_reg_or_load(this);
 	ScratchReg decision{this};
 	ScratchReg type{this};
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	auto type_reg = type.alloc_gp();
 	if (!plain) {
 		ASM(CMP64ri, matched_reg, ZEND_NATIVE_TYPE_CHECK_UNDEFINED);
@@ -15156,7 +15085,7 @@ int ZendCompilerX64::identical_literal(InstContext &ctx) {
 	const AsmReg matched_reg = matched.cur_reg_or_load(this);
 	ScratchReg decision{this};
 	ScratchReg type{this};
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	auto type_reg = type.alloc_gp();
 	if (!typed_literal) {
 		ASM(CMP64ri, matched_reg, ZEND_NATIVE_IDENTICAL_UNKNOWN);
@@ -15292,7 +15221,7 @@ int ZendCompilerX64::key_exists_inline(InstContext &ctx) {
 	const AsmReg element_reg = element.cur_reg_or_load(this);
 	ScratchReg decision{this};
 	ScratchReg answer{this};
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	auto answer_reg = answer.alloc_gp();
 	ASM(CMP64ri, element_reg,
 		static_cast<int32_t>(ZEND_NATIVE_ELEMENT_ABSENT));
@@ -15530,7 +15459,7 @@ int ZendCompilerX64::count_inline(InstContext &ctx) {
 	}
 	const AsmReg count_reg = count.cur_reg_or_load(this);
 	ScratchReg decision{this};
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	ASM(CMP64ri, count_reg, -1);
 	generate_raw_jump(Jump::je, slow);
 	/* A CV result is overwritten: its old value must need no
@@ -15622,10 +15551,7 @@ bool ZendCompilerX64::append_packed_array(InstContext &ctx) {
 					|| !zend_mir_id_is_valid(
 						element_reference->base_value_id)
 					|| zend_mir_id_is_valid(
-						element_reference->index_value_id)
-					|| element_reference->scale != sizeof(zval)
-					|| element_reference->access_width
-						!= sizeof(zval)))
+						element_reference->index_value_id)))
 			|| layout.container_offset > INT32_MAX - 8
 			|| layout.value_offset > INT32_MAX - 8
 			|| layout.result_offset > INT32_MAX - 8) {
@@ -15685,7 +15611,7 @@ bool ZendCompilerX64::append_packed_array(InstContext &ctx) {
 	auto element_reg = element.alloc_gp();
 	auto low_word_reg = low_word.alloc_gp();
 	auto high_word_reg = high_word.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 
 	if (layout.indirect_container) {
 		/* The VAR addresses the array's zval, as ZEND_FETCH_DIM_W left
@@ -15926,7 +15852,7 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 				ScratchReg decision{this};
 				ScratchReg type{this};
 				ScratchReg truth{this};
-				auto decision_reg = decision.alloc_gp();
+				decision.alloc_gp();
 				auto type_reg = type.alloc_gp();
 				auto truth_reg = truth.alloc_gp();
 				const int32_t operand =
@@ -16136,7 +16062,7 @@ bool ZendCompilerX64::string_length(InstContext &ctx) {
 	ScratchReg decision{this};
 	auto type_reg = type.alloc_gp();
 	auto string_reg = string.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 
 	ASM(MOVZXr32m8, type_reg,
 		FE_MEM(frame_reg, 0, FE_NOREG,
@@ -16693,9 +16619,8 @@ int ZendCompilerX64::general_numeric_binary(
 	auto left_reg = left_value.alloc_gp();
 	auto right_reg = right_value.alloc_gp();
 	/* Register pressure: the right type becomes the result type once
-	 * the operands are classified, the left type the decision. */
+	 * the operands are classified. */
 	const AsmReg result_type_reg = right_type_reg;
-	const AsmReg decision_reg = left_type_reg;
 	auto left_fp = left_double.alloc(
 		tpde::x64::PlatformConfig::FP_BANK);
 	auto right_fp = right_double.alloc(
@@ -16979,7 +16904,7 @@ bool ZendCompilerX64::register_long_binary(LongBinaryContext &lb) {
 	ScratchReg result_value{this};
 	ScratchReg decision{this};
 	auto result_reg = result_value.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 
 	auto load_register_long =
 		[&](IRValueRef operand, AsmReg target) {
@@ -17144,7 +17069,7 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 	auto type_reg = type.alloc_gp();
 	auto left_reg = left.alloc_gp();
 	auto right_reg = right.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	/* A lazy mutation leaves its result in the register only when it
 	 * read the previous value from the register too: a value read
 	 * from the slot is the slot's, which the result must update. */
@@ -17383,7 +17308,7 @@ bool ZendCompilerX64::long_incdec(InstContext &ctx) {
 	auto type_reg = type.alloc_gp();
 	auto value_reg = value.alloc_gp();
 	auto limit_reg = limit.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	/* Address of the updated integer when it is not the CV slot itself. */
 	ScratchReg target{this};
 	AsmReg target_reg{};
@@ -17762,7 +17687,7 @@ bool ZendCompilerX64::slot_isset_empty(InstContext &ctx) {
 	ScratchReg decision{this};
 	auto type_reg = type.alloc_gp();
 	auto value_reg = value.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 
 	if (node.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
 		generate_raw_jump(Jump::jmp,
@@ -17929,9 +17854,7 @@ bool ZendCompilerX64::object_property_read(InstContext &ctx) {
 			|| (!frame_result
 				&& (property_reference == nullptr
 					|| property_reference->stable_storage_or_layout_id
-						!= layout.cache_offset
-					|| property_reference->access_width
-						!= sizeof(zval)))
+						!= layout.cache_offset))
 			|| layout.receiver_offset > INT32_MAX
 			|| layout.result_offset > INT32_MAX
 			|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)
@@ -17963,7 +17886,7 @@ bool ZendCompilerX64::object_property_read(InstContext &ctx) {
 	auto frame_scratch = frame_register(std::move(frame));
 	auto frame_reg = frame_scratch.cur_reg();
 	ScratchReg decision{this};
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	{
 		ScratchReg cache{this};
 		auto cache_reg = cache.alloc_gp();
@@ -18093,7 +18016,7 @@ bool ZendCompilerX64::object_property_address(InstContext &ctx) {
 	auto frame_scratch = frame_register(std::move(frame));
 	auto frame_reg = frame_scratch.cur_reg();
 	ScratchReg decision{this};
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	{
 		ScratchReg cache{this};
 		auto cache_reg = cache.alloc_gp();
@@ -18152,7 +18075,6 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 			|| property_reference == nullptr
 			|| property_reference->stable_storage_or_layout_id
 				!= layout.cache_offset
-			|| property_reference->access_width != sizeof(zval)
 			|| layout.receiver_offset > INT32_MAX
 			|| layout.value_offset > INT32_MAX
 			|| layout.cache_offset > INT32_MAX - 3 * sizeof(void *)) {
@@ -18194,7 +18116,7 @@ bool ZendCompilerX64::object_property_write(InstContext &ctx) {
 	auto property_reg = property.alloc_gp();
 	auto type_reg = type.alloc_gp();
 	auto low_word_reg = low_word.alloc_gp();
-	auto decision_reg = decision.alloc_gp();
+	decision.alloc_gp();
 	if (!receiver_is_object(mir.value_operation)) {
 		ASM(MOVZXr32m8, type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
@@ -22788,8 +22710,7 @@ bool ZendCompilerX64::reserve_direct_user_frame(DirectUserCallContext &du,
 	ASM(MOV64mr, FE_MEM(act.second_reg, 0, FE_NOREG, 0), act.callee_reg);
 
 	/* The activation leads the callee frame, so the frame ends
-	 * at the stack top and a tier-2 host entry can grow it. A
-	 * call nested in another call's arguments finds that call
+	 * at the stack top. A call nested in another call's arguments finds that call
 	 * pending in EX(call); the activation keeps it for the
 	 * completion to restore. */
 	ASM(LEA64rm, act.callee_reg,
@@ -25904,7 +25825,6 @@ bool ZendCompilerX64::compile_register_return(InstContext &ctx) {
 }
 
 bool ZendCompilerX64::compile_opcode(InstContext &ctx) {
-	const IRInstRef instruction = ctx.instruction;
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &mir = *ctx.mir;
 	const zend_mir_instruction_record &record = ctx.record;
@@ -26472,7 +26392,7 @@ bool ZendCompilerX64::compile_scalar_operation(InstContext &ctx) {
 			ScratchReg rdx{this};
 			ScratchReg divisor{this};
 			auto ax = rax.alloc_specific(tpde::x64::AsmReg::AX);
-			auto dx = rdx.alloc_specific(tpde::x64::AsmReg::DX);
+			rdx.alloc_specific(tpde::x64::AsmReg::DX);
 			auto cx = divisor.alloc_specific(tpde::x64::AsmReg::CX);
 			auto [left_pair, right_pair] = binary(ctx);
 			auto &[left_ref, left] = left_pair;
@@ -26716,9 +26636,6 @@ bool ZendCompilerX64::compile_inst_impl(
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 		return compile_zval_store(ctx);
-	}
-	if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
-		return compile_echo_scalar(ctx);
 	}
 	if (node.kind == Adaptor::InstKind::GuardedCold
 			&& record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {

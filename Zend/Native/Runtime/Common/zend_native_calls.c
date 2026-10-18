@@ -889,87 +889,13 @@ static zend_never_inline zend_native_status
 zend_native_call_frameless_general(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots);
 
-static zend_always_inline zval *zend_native_call_frameless_argument(
-	zend_execute_data *execute_data, uint64_t descriptor, uint32_t index,
-	uint32_t offset)
-{
-	return ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_CONST_SHIFT + index))
-			& 1)
-		? &execute_data->func->op_array.literals[offset]
-		: (zval *) ((char *) execute_data + offset);
-}
-
-/* FREE_OP of a temporary argument the fast path found defined. */
-static zend_always_inline void zend_native_call_frameless_release(
-	zend_execute_data *execute_data, uint64_t descriptor, uint32_t index,
-	uint32_t offset)
-{
-	if ((descriptor >> (ZEND_NATIVE_FRAMELESS_DIRECT_TMP_SHIFT + index)) & 1) {
-		zval *slot = (zval *) ((char *) execute_data + offset);
-
-		zval_ptr_dtor_nogc(slot);
-		ZVAL_UNDEF(slot);
-	}
-}
-
 /*
- * The VM's FRAMELESS_ICALL_2 and _3 handlers for defined arguments of an
- * unobserved function; an undefined CV, which warns, and everything else
- * take the general form below.
+ * The VM's FRAMELESS_ICALL_0 handler; the one-, two- and three-argument
+ * calls take zend_native_call_frameless_1() and the address helpers.
  */
 zend_native_status zend_native_call_frameless_direct(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots)
 {
-	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
-	const uint32_t argument_count = (uint32_t) ((descriptor >> 16) & 3);
-
-	if (EXPECTED(argument_count >= 2)
-#if !ZEND_VM_SPEC || ZEND_OBSERVER_ENABLED
-			&& !(ZEND_OBSERVER_ENABLED
-				&& UNEXPECTED(!zend_observer_handler_is_unobserved(
-					ZEND_OBSERVER_DATA(zend_flf_functions[handler_index]))))
-#endif
-			) {
-		zval *first = zend_native_call_frameless_argument(
-			execute_data, descriptor, 0, (uint32_t) (slots >> 32));
-		zval *second = zend_native_call_frameless_argument(
-			execute_data, descriptor, 1, (uint32_t) more_slots);
-		zval *third = argument_count == 3
-			? zend_native_call_frameless_argument(
-				execute_data, descriptor, 2, (uint32_t) (more_slots >> 32))
-			: NULL;
-
-		if (Z_TYPE_P(first) != IS_UNDEF && Z_TYPE_P(second) != IS_UNDEF
-				&& (third == NULL || Z_TYPE_P(third) != IS_UNDEF)) {
-			zval *result = (zval *) ((char *) execute_data + (uint32_t) slots);
-
-			execute_data->opline =
-				&execute_data->func->op_array.opcodes[descriptor >> 32];
-			ZVAL_NULL(result);
-			if (third == NULL) {
-				((zend_frameless_function_2)
-					zend_flf_handlers[handler_index])(result,
-						Z_ISREF_P(first) ? Z_REFVAL_P(first) : first,
-						Z_ISREF_P(second) ? Z_REFVAL_P(second) : second);
-			} else {
-				((zend_frameless_function_3)
-					zend_flf_handlers[handler_index])(result,
-						Z_ISREF_P(first) ? Z_REFVAL_P(first) : first,
-						Z_ISREF_P(second) ? Z_REFVAL_P(second) : second,
-						Z_ISREF_P(third) ? Z_REFVAL_P(third) : third);
-			}
-			zend_native_call_frameless_release(execute_data, descriptor, 0,
-				(uint32_t) (slots >> 32));
-			zend_native_call_frameless_release(execute_data, descriptor, 1,
-				(uint32_t) more_slots);
-			if (third != NULL) {
-				zend_native_call_frameless_release(execute_data, descriptor,
-					2, (uint32_t) (more_slots >> 32));
-			}
-			return EG(exception) == NULL
-				? ZEND_NATIVE_RETURNED : ZEND_NATIVE_EXCEPTION;
-		}
-	}
 	return zend_native_call_frameless_general(execute_data,
 		descriptor, slots, more_slots);
 }
@@ -979,13 +905,12 @@ zend_native_call_frameless_general(
 	zend_execute_data *execute_data, uint64_t descriptor, uint64_t slots, uint64_t more_slots)
 {
 	const uint32_t handler_index = (uint32_t) (descriptor & 0xffff);
+	/* FRAMELESS_ICALL_0 or _1. */
 	const uint32_t argument_count = (uint32_t) ((descriptor >> 16) & 3);
-	const uint32_t offsets[3] = {
-		(uint32_t) (slots >> 32), (uint32_t) more_slots,
-		(uint32_t) (more_slots >> 32)};
+	const uint32_t offsets[1] = {(uint32_t) (slots >> 32)};
 	zend_op_array *op_array = &execute_data->func->op_array;
 	zval *result = (zval *) ((char *) execute_data + (uint32_t) slots);
-	zval *arguments[3] = {NULL, NULL, NULL};
+	zval *arguments[1] = {NULL};
 	uint32_t index;
 
 	ZEND_ASSERT(handler_index < zend_flf_count);
@@ -1019,25 +944,11 @@ zend_native_call_frameless_general(
 			result, arguments, argument_count);
 	} else
 #endif
-	switch (argument_count) {
-		case 0:
-			((zend_frameless_function_0)
-				zend_flf_handlers[handler_index])(result);
-			break;
-		case 1:
-			((zend_frameless_function_1)
-				zend_flf_handlers[handler_index])(result, arguments[0]);
-			break;
-		case 2:
-			((zend_frameless_function_2)
-				zend_flf_handlers[handler_index])(
-					result, arguments[0], arguments[1]);
-			break;
-		default:
-			((zend_frameless_function_3)
-				zend_flf_handlers[handler_index])(
-					result, arguments[0], arguments[1], arguments[2]);
-			break;
+	if (argument_count == 0) {
+		((zend_frameless_function_0) zend_flf_handlers[handler_index])(result);
+	} else {
+		((zend_frameless_function_1)
+			zend_flf_handlers[handler_index])(result, arguments[0]);
 	}
 
 cleanup:
@@ -2398,15 +2309,6 @@ ZEND_NORETURN static ZEND_COLD void zend_native_call_abort(const char *message)
 {
 	zend_throw_error(NULL, "%s", message);
 	zend_bailout();
-}
-
-/*
- * The table slot of a retired runtime helper id: no generated code calls
- * it.
- */
-void zend_native_call_retired_helper(void)
-{
-	zend_native_call_abort("Retired native runtime helper called");
 }
 
 static zend_function *zend_native_call_reject_target(const char *message)
@@ -5207,8 +5109,7 @@ static bool zend_native_call_fast_static_mode(
 	} else if (call_info != ZEND_CALL_NESTED_FUNCTION) {
 		return false;
 	} else {
-		*static_mode = forwarding ? ZEND_NATIVE_CALL_FAST_STATIC_FORWARD
-			: late ? ZEND_NATIVE_CALL_FAST_STATIC_LATE : 0;
+		*static_mode = forwarding ? ZEND_NATIVE_CALL_FAST_STATIC_FORWARD : 0;
 	}
 	return true;
 }
@@ -11038,60 +10939,6 @@ zend_native_status zend_native_call_fragment_explicit(
 	descriptor.do_result = descriptor.init_result;
 	return zend_native_call_invoke_finish_source(
 		caller, &seed, &descriptor);
-}
-
-static void zend_native_echo_zval(
-	zend_execute_data *execute_data, const zval *value)
-{
-	zend_string *string;
-
-	if (execute_data == NULL || execute_data != EG(current_execute_data)) {
-		zend_native_call_abort("Invalid native echo frame");
-	}
-	string = zval_get_string_func(value);
-	if (ZSTR_LEN(string) != 0) {
-		zend_write(ZSTR_VAL(string), ZSTR_LEN(string));
-	}
-	zend_string_release_ex(string, false);
-	if (UNEXPECTED(EG(exception) != NULL)) {
-		zend_bailout();
-	}
-}
-
-void zend_native_echo_integer(
-	zend_execute_data *execute_data,
-	uint64_t payload_bits,
-	zend_mir_scalar_type_mask exact_type)
-{
-	zval value;
-
-	switch (exact_type) {
-		case ZEND_MIR_SCALAR_TYPE_NULL:
-			ZVAL_NULL(&value);
-			break;
-		case ZEND_MIR_SCALAR_TYPE_I1:
-			ZVAL_BOOL(&value, payload_bits != 0);
-			break;
-		case ZEND_MIR_SCALAR_TYPE_I64:
-			ZVAL_LONG(&value, (zend_long) payload_bits);
-			break;
-		case ZEND_MIR_SCALAR_TYPE_F64:
-			memcpy(&value.value.dval, &payload_bits, sizeof(payload_bits));
-			Z_TYPE_INFO(value) = IS_DOUBLE;
-			break;
-		default:
-			zend_native_call_abort("Invalid native echo scalar type");
-	}
-	zend_native_echo_zval(execute_data, &value);
-}
-
-void zend_native_echo_double(
-	zend_execute_data *execute_data, double payload)
-{
-	zval value;
-
-	ZVAL_DOUBLE(&value, payload);
-	zend_native_echo_zval(execute_data, &value);
 }
 
 /*

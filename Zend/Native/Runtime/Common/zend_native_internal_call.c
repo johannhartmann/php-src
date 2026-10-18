@@ -2740,27 +2740,6 @@ zend_native_status zend_native_finally_enter(
 	return ZEND_NATIVE_RETURNED;
 }
 
-void zend_native_finally_call(
-	zend_execute_data *execute_data, uint32_t fast_call_opline_index)
-{
-	const zend_op *opline;
-	zval *fast_call;
-
-	if (execute_data == NULL || execute_data->func == NULL
-			|| !ZEND_USER_CODE(execute_data->func->type)
-			|| fast_call_opline_index >= execute_data->func->op_array.last) {
-		zend_bailout();
-	}
-	opline = &execute_data->func->op_array.opcodes[fast_call_opline_index];
-	if (opline->opcode != ZEND_FAST_CALL || opline->result_type != IS_TMP_VAR) {
-		zend_bailout();
-	}
-	execute_data->opline = opline;
-	fast_call = ZEND_CALL_VAR(execute_data, opline->result.var);
-	Z_OBJ_P(fast_call) = NULL;
-	Z_OPLINE_NUM_P(fast_call) = fast_call_opline_index;
-}
-
 static uint32_t zend_native_finally_unwind_target(
 	zend_execute_data *execute_data,
 	const zend_op_array *op_array,

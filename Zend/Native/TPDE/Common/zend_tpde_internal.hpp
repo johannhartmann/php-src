@@ -344,7 +344,6 @@ struct zend_tpde_materialization {
 
 enum zend_tpde_machine_reference_kind : uint8_t {
 	ZEND_TPDE_MACHINE_REFERENCE_FRAME_SLOT = 0,
-	ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD = 1,
 	ZEND_TPDE_MACHINE_REFERENCE_LITERAL = 2,
 	ZEND_TPDE_MACHINE_REFERENCE_PROPERTY_SLOT = 3,
 	ZEND_TPDE_MACHINE_REFERENCE_PACKED_ELEMENT = 4,
@@ -352,8 +351,7 @@ enum zend_tpde_machine_reference_kind : uint8_t {
 
 /*
  * Pointer-free address-selection facts for the adaptor. Values name ZNMIR
- * identities; UINT32_MAX denotes a synthetic base such as the canonical
- * frame or the execution context.
+ * identities; UINT32_MAX denotes the canonical frame as a synthetic base.
  */
 struct zend_tpde_machine_reference {
 	zend_tpde_machine_reference_kind kind;
@@ -362,7 +360,6 @@ struct zend_tpde_machine_reference {
 	uint32_t stable_storage_or_layout_id;
 	uint32_t scale;
 	int64_t displacement;
-	uint32_t access_width;
 };
 
 enum zend_tpde_machine_use_kind : uint8_t {
@@ -422,8 +419,6 @@ enum zend_tpde_source_call_phase : uint8_t {
 
 enum zend_tpde_source_call_operand_flag : uint8_t {
 	ZEND_TPDE_SOURCE_CALL_OPERAND_DIRECT_VALUE = 1u << 0,
-	ZEND_TPDE_SOURCE_CALL_OPERAND_SOURCE = 1u << 1,
-	ZEND_TPDE_SOURCE_CALL_OPERAND_RUNTIME_EXPANSION = 1u << 2,
 };
 
 struct zend_tpde_source_call_phase_entry {
@@ -476,7 +471,6 @@ struct zend_tpde_instruction {
 	 */
 	zend_mir_scalar_type_mask *direct_call_argument_guard_types;
 	_zend_native_direct_internal_call_descriptor *direct_internal_call;
-	zend_mir_scalar_type_mask source_effect_exact_type;
 	bool debug_probe;
 	zend_mir_storage_id zval_store_storage_id;
 	bool zval_store_direct_scalar;
@@ -896,10 +890,6 @@ struct zend_tpde_concat_direct {
 	uint64_t result_offset;
 };
 
-bool zend_tpde_concat_direct_operand(
-	const zend_mir_source_operand_ref &operand, zend_mir_storage_id storage,
-	uint64_t *kind, uint64_t *offset);
-
 bool zend_tpde_concat_direct_at(
 	const zend_tpde_instruction &instruction, zend_tpde_concat_direct *out);
 
@@ -1140,10 +1130,6 @@ struct zend_tpde_plan {
 	 * defaults are literals the runtime's inline receive takes too.
 	 */
 	bool fast_call_eligible;
-	/* The layout profile saw the member run rarely
-	 * (zend_tpde_layout_rare_function()): what of its code to keep small,
-	 * ZEND_TPDE_RARE_* bits. */
-	uint32_t rare;
 	/* The entry collects extra arguments into an untyped, by-value
 	 * variadic parameter (zend_native_call_receive_variadic()). */
 	bool fast_call_variadic;

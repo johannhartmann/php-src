@@ -657,28 +657,6 @@ bool zend_tpde_concat_assign_direct_at(
 	return true;
 }
 
-bool zend_tpde_concat_direct_operand(
-	const zend_mir_source_operand_ref &operand, zend_mir_storage_id storage,
-	uint64_t *kind, uint64_t *offset)
-{
-	if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
-		*kind = ZEND_NATIVE_DIM_DIRECT_CONST;
-		*offset = operand.index;
-		return true;
-	}
-	if ((operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
-				&& operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
-			|| (operand.slot_kind != ZEND_MIR_SOURCE_SLOT_CV
-				&& operand.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP)
-			|| !zend_mir_id_is_valid(storage)) {
-		return false;
-	}
-	*kind = operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
-		? ZEND_NATIVE_DIM_DIRECT_CV : ZEND_NATIVE_DIM_DIRECT_TMP;
-	*offset = (uint64_t{ZEND_CALL_FRAME_SLOT} + storage) * sizeof(zval);
-	return *offset <= UINT32_MAX;
-}
-
 bool zend_tpde_concat_direct_at(
 	const zend_tpde_instruction &instruction, zend_tpde_concat_direct *out)
 {
@@ -698,10 +676,10 @@ bool zend_tpde_concat_direct_at(
 			|| !zend_mir_id_is_valid(operation.result_storage_id)
 			|| operation.result_storage_id == operation.op1_storage_id
 			|| operation.result_storage_id == operation.op2_storage_id
-			|| !zend_tpde_concat_direct_operand(operation.op1,
-				operation.op1_storage_id, &left_kind, &left_offset)
-			|| !zend_tpde_concat_direct_operand(operation.op2,
-				operation.op2_storage_id, &right_kind, &right_offset)) {
+			|| !zend_tpde_dim_direct_operand(operation.op1,
+				operation.op1_storage_id, false, &left_kind, &left_offset)
+			|| !zend_tpde_dim_direct_operand(operation.op2,
+				operation.op2_storage_id, false, &right_kind, &right_offset)) {
 		return false;
 	}
 	const uint64_t result_offset =
@@ -740,10 +718,10 @@ bool zend_tpde_identical_direct_at(
 				&& (operation.result_storage_id == operation.op1_storage_id
 					|| operation.result_storage_id
 						== operation.op2_storage_id))
-			|| !zend_tpde_concat_direct_operand(operation.op1,
-				operation.op1_storage_id, &left_kind, &left_offset)
-			|| !zend_tpde_concat_direct_operand(operation.op2,
-				operation.op2_storage_id, &right_kind, &right_offset)) {
+			|| !zend_tpde_dim_direct_operand(operation.op1,
+				operation.op1_storage_id, false, &left_kind, &left_offset)
+			|| !zend_tpde_dim_direct_operand(operation.op2,
+				operation.op2_storage_id, false, &right_kind, &right_offset)) {
 		return false;
 	}
 	const uint64_t result_offset =

@@ -47,7 +47,6 @@ constexpr uint32_t zend_tpde_direct_user_call_context_uses(
  */
 struct zend_tpde_direct_user_call_layout {
 	uint32_t frame_operand;
-	uint32_t frame_use_count;
 	uint32_t context_operand;
 	uint32_t slow_enter_frame_use;
 	uint32_t slow_enter_context_use;
@@ -79,7 +78,6 @@ zend_tpde_direct_user_call_layout_of(bool split_cold, bool typed_body,
 					: 2;
 	return {
 		.frame_operand = frame_operand,
-		.frame_use_count = frame_use_count,
 		.context_operand = frame_operand + frame_use_count,
 		.slow_enter_frame_use =
 			generated_fast_path ? (private_inline_body ? 1u : 4u) : 0u,

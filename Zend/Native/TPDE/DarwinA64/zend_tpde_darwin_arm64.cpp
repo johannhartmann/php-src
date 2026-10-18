@@ -831,15 +831,6 @@ public:
 				add_unsigned_offset(destination, canonical_frame_register(),
 					static_cast<uint64_t>(descriptor->displacement));
 				return;
-			case ZEND_TPDE_MACHINE_REFERENCE_CONTEXT_FIELD:
-			{
-				auto context_ref = val_ref(
-					IRValueRef{Adaptor::EXECUTION_CONTEXT_ARGUMENT});
-				auto context = context_ref.part(0);
-				add_unsigned_offset(destination, context.load_to_reg(),
-					static_cast<uint64_t>(descriptor->displacement));
-				return;
-			}
 			case ZEND_TPDE_MACHINE_REFERENCE_LITERAL: {
 				load_off(destination, canonical_frame_register(),
 					static_cast<uint32_t>(
@@ -936,7 +927,6 @@ public:
 	bool compile_zval_boxed_store();
 	bool compile_zval_payload_load();
 	bool compile_zval_store();
-	bool compile_echo_scalar();
 	bool compile_guarded_cold();
 	bool compile_func_num_args();
 	bool compile_value_multi_branch();
@@ -2423,8 +2413,6 @@ bool ZendCompilerA64::read_array() {
 					element_reference->base_value_id))
 			|| !zend_mir_id_is_valid(
 				element_reference->index_value_id)
-			|| element_reference->scale != sizeof(zval)
-			|| element_reference->access_width != sizeof(zval)
 			|| layout.container_offset > UINT32_MAX - 8
 			|| layout.key_offset > UINT32_MAX - 8
 			|| layout.result_offset > UINT32_MAX - 8) {
@@ -3233,8 +3221,6 @@ bool ZendCompilerA64::append_packed_array() {
 				element_reference->base_value_id)
 			|| zend_mir_id_is_valid(
 				element_reference->index_value_id)
-			|| element_reference->scale != sizeof(zval)
-			|| element_reference->access_width != sizeof(zval)
 			|| layout.container_offset > UINT32_MAX - 8
 			|| layout.value_offset > UINT32_MAX - 8
 			|| layout.result_offset > UINT32_MAX - 8) {
@@ -4706,8 +4692,7 @@ bool ZendCompilerA64::object_property_read() {
 	if (!zend_tpde_object_property_read_at(mir, &layout)
 			|| property_reference == nullptr
 			|| property_reference->stable_storage_or_layout_id
-				!= layout.cache_offset
-			|| property_reference->access_width != sizeof(zval)) {
+				!= layout.cache_offset) {
 		return branch_to_guarded_cold();
 	}
 	if (!node.has_result) {
@@ -4892,8 +4877,7 @@ bool ZendCompilerA64::object_property_write() {
 	if (!zend_tpde_object_property_write_at(mir, &layout)
 			|| property_reference == nullptr
 			|| property_reference->stable_storage_or_layout_id
-				!= layout.cache_offset
-			|| property_reference->access_width != sizeof(zval)) {
+				!= layout.cache_offset) {
 		return execute_value_operation();
 	}
 	if (node.kind != Adaptor::InstKind::GuardedFast
@@ -5419,9 +5403,9 @@ bool ZendCompilerA64::compile_typed_call_guard() {
 
 	/*
 	 * A guarded boxed argument owns the copy produced by its fast read.
-	 * The typed hot call releases that copy after use.  If a runtime type
-	 * or observer guard selects the canonical cold call instead, transfer
-	 * the same ownership into the source frame slot consumed by that path.
+	 * The typed hot call releases that copy after use. If a runtime type
+	 * guard selects the canonical cold call instead, transfer the same
+	 * ownership into the source frame slot consumed by that path.
 	 */
 	auto [frame_ref, frame] = val_ref_single(node.operands[0]);
 	auto frame_reg = frame.load_to_reg();
@@ -8762,35 +8746,6 @@ bool ZendCompilerA64::compile_zval_store() {
 		{1, successors[1]},
 	}};
 	generate_switch(std::move(decision), 32, successors[0], cases);
-	return true;
-}
-
-bool ZendCompilerA64::compile_echo_scalar() {
-	const Adaptor::InstNode &node = inst_context_->node;
-	const zend_tpde_instruction &mir = *inst_context_->mir;
-	zend_mir_scalar_type_mask exact_type = mir.source_effect_exact_type;
-	if (!zend_mir_scalar_type_is_exact(exact_type)
-			|| node.operands.empty()) {
-		return false;
-	}
-	zend::native::tpde::CCAssignerAppleA64 assigner;
-	CallBuilder builder{*this, assigner};
-	builder.add_arg(CallArg{IRValueRef{Adaptor::FRAME_VALUE}});
-	if (exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
-		builder.add_arg(CallArg{node.operands[0]});
-		builder.call(runtime_symbol(mir.runtime_helper));
-	} else {
-		if (exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
-			builder.add_arg(ValuePart{uint64_t{0}, 8, DarwinConfig::GP_BANK},
-				::tpde::CCAssignment{});
-		} else {
-			builder.add_arg(CallArg{node.operands[0]});
-		}
-		builder.add_arg(ValuePart{
-			static_cast<uint32_t>(exact_type), 4,
-			DarwinConfig::GP_BANK}, ::tpde::CCAssignment{});
-		builder.call(runtime_symbol(mir.runtime_helper));
-	}
 	return true;
 }
 
@@ -14584,9 +14539,6 @@ bool ZendCompilerA64::compile_inst_impl(
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_ZVAL_STORE) {
 		return compile_zval_store();
-	}
-	if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
-		return compile_echo_scalar();
 	}
 	if (node.kind == Adaptor::InstKind::GuardedCold
 			&& record.opcode != ZEND_MIR_OPCODE_CALL_DIRECT_USER) {

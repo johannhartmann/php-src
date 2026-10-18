@@ -921,12 +921,10 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 #define ZEND_NATIVE_CALL_FAST_DEFAULTS UINT32_C(4)
 /* A static-method site: the callee's $this is the caller's object
  * (STATIC_THIS), its called scope the caller's (STATIC_FORWARD), or else
- * the class fast_key names. */
+ * the class fast_key names. A static:: site compares the caller's called
+ * scope with fast_key, as its descriptor names it. */
 #define ZEND_NATIVE_CALL_FAST_STATIC_THIS UINT32_C(8)
 #define ZEND_NATIVE_CALL_FAST_STATIC_FORWARD UINT32_C(16)
-/* A static:: site: the callee's called scope is the caller's, which must be
- * the class fast_key names. */
-#define ZEND_NATIVE_CALL_FAST_STATIC_LATE UINT32_C(32)
 /* A $this method site whose target does not depend on the receiver class:
  * fast_key only records the class it was published for. */
 #define ZEND_NATIVE_CALL_FAST_ANY_THIS UINT32_C(64)
@@ -941,8 +939,6 @@ zend_native_direct_call_result zend_native_call_direct_leave(
 
 
 const uint64_t *zend_native_call_cache_epoch_address(void);
-/* The address of a retired helper id's table slot; aborts. */
-void zend_native_call_retired_helper(void);
 void zend_native_call_fast_scalar_violation(void);
 /*
  * A dynamic site's Init: the recorded target's Zend entry, NULL on a miss,
@@ -1363,8 +1359,6 @@ zend_native_status zend_native_receive_explicit_pending(
 	uint32_t source_position);
 zend_native_status zend_native_finally_enter(
 	zend_execute_data *execute_data, uint32_t finally_opline_index);
-void zend_native_finally_call(
-	zend_execute_data *execute_data, uint32_t fast_call_opline_index);
 uint32_t zend_native_finally_return(
 	zend_execute_data *execute_data, uint32_t fast_ret_opline_index);
 uint32_t zend_native_finally_return_explicit(
@@ -1383,13 +1377,6 @@ zend_native_status zend_native_discard_exception(
 #define ZEND_NATIVE_FINALLY_PROPAGATE UINT32_MAX
 void zend_native_interrupt_poll(
 	zend_execute_data *execute_data, uint32_t source_opline_index);
-
-void zend_native_echo_integer(
-	zend_execute_data *execute_data,
-	uint64_t payload_bits,
-	zend_mir_scalar_type_mask exact_type);
-void zend_native_echo_double(
-	zend_execute_data *execute_data, double value);
 
 #ifdef __cplusplus
 }

@@ -99,9 +99,6 @@ ZEND_NATIVE_VALUE_HELPER(zend_native_value_ext_fcall_end)
 ZEND_NATIVE_VALUE_HELPER(zend_native_value_ext_nop)
 
 #undef ZEND_NATIVE_VALUE_HELPER
-void zend_native_zval_store_integer(
-	zval *slot, uint64_t payload, uint32_t exact_type);
-void zend_native_zval_store_double(zval *slot, double value);
 void zend_native_zval_release_slow(zval *slot);
 zend_native_status zend_native_value_unset_cv(
 	zend_execute_data *execute_data,

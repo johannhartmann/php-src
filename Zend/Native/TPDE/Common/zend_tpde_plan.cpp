@@ -2212,42 +2212,6 @@ static bool plan_multi_branch(plan_builder &builder, uint32_t i) {
 	return true;
 }
 
-[[nodiscard]]
-static bool plan_semantic_echo(plan_builder &builder, uint32_t i) {
-	zend_tpde_plan *const plan = builder.plan;
-	zend_native_diagnostic *const diag = builder.diag;
-	zend_mir_value_id value_id;
-	const zend_mir_executable_value_ref &operation =
-		plan->instructions[i].value_operation;
-	if (operation.source_opcode != ZEND_ECHO
-			|| !source_operand_value_id(operation.op1, value_id)) {
-		zend_tpde_set_diagnostic(diag,
-			ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-			"semantic echo lacks an explicit scalar operand");
-		return false;
-	}
-	const int32_t value_index =
-		zend_tpde_value_index(plan, value_id);
-	if (value_index < 0
-			|| !zend_mir_scalar_type_is_exact(
-				plan->values[value_index].exact_type)) {
-		zend_tpde_set_diagnostic(diag,
-			ZEND_NATIVE_DIAGNOSTIC_UNSUPPORTED_OPCODE,
-			"semantic echo operand has no exact scalar type");
-		return false;
-	}
-	plan->instructions[i].source_effect_exact_type =
-		plan->values[value_index].exact_type;
-	plan->instructions[i].runtime_helper =
-		plan->values[value_index].exact_type
-			== ZEND_MIR_SCALAR_TYPE_F64
-			? ZEND_NATIVE_HELPER_ECHO_DOUBLE
-			: ZEND_NATIVE_HELPER_ECHO_INTEGER;
-	require_runtime_helper(plan,
-		plan->instructions[i].runtime_helper);
-	return true;
-}
-
 static void refine_long_binary_result(plan_builder &builder, uint32_t i) {
 	zend_tpde_plan *const plan = builder.plan;
 	const zend_ssa *const source_ssa = builder.source_ssa;
@@ -2565,21 +2529,16 @@ static plan_status plan_value_operation(plan_builder &builder, uint32_t i) {
 	const zend_mir_instruction_record &record =
 		plan->instructions[i].record;
 	const uint32_t count = plan->instructions[i].operand_count;
-	const bool semantic_echo =
-		record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR;
 	const bool multi_branch =
 		record.opcode == ZEND_MIR_OPCODE_VALUE_MULTI_BRANCH;
-	const zend_native_runtime_helper_id helper = semantic_echo
+	const zend_native_runtime_helper_id helper = multi_branch
 		? ZEND_NATIVE_HELPER_COUNT
-		: multi_branch
-			? ZEND_NATIVE_HELPER_COUNT
 		: executable_value_helper(record.opcode);
 	plan->instructions[i].runtime_helper = helper;
-	if ((semantic_echo ? count != 1 : count != 0)
+	if (count != 0
 			|| !zend_mir_id_is_valid(record.source_position_id)
-			|| (!semantic_echo && !multi_branch
-				&& helper == ZEND_NATIVE_HELPER_COUNT)
-			|| (!semantic_echo && !multi_branch
+			|| (!multi_branch && helper == ZEND_NATIVE_HELPER_COUNT)
+			|| (!multi_branch
 				&& !zend_tpde_helper_has_explicit_operands(helper))
 			|| !plan->instructions[i].has_value_operation
 			|| plan->instructions[i].value_operation.opcode
@@ -2594,10 +2553,6 @@ static plan_status plan_value_operation(plan_builder &builder, uint32_t i) {
 	freeze_lazy_mutation(builder, i);
 	if (multi_branch) {
 		return plan_multi_branch(builder, i)
-			? plan_status::finished : plan_status::failed;
-	}
-	if (semantic_echo) {
-		return plan_semantic_echo(builder, i)
 			? plan_status::finished : plan_status::failed;
 	}
 	if (record.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
@@ -3044,9 +2999,6 @@ static bool plan_instructions(plan_builder &builder) {
 			case ZEND_MIR_OPCODE_FINALLY_ENTER:
 				require_runtime_helper(plan, ZEND_NATIVE_HELPER_FINALLY_ENTER);
 				break;
-			case ZEND_MIR_OPCODE_FINALLY_CALL:
-				require_runtime_helper(plan, ZEND_NATIVE_HELPER_FINALLY_CALL);
-				break;
 			case ZEND_MIR_OPCODE_FINALLY_RETURN:
 				require_runtime_helper(plan, ZEND_NATIVE_HELPER_FINALLY_RETURN);
 				break;
@@ -3246,20 +3198,6 @@ static bool check_instruction_operands(plan_builder &builder) {
 					plan, zend_tpde_operand_at(plan, &instruction, n)) < 0) {
 				zend_tpde_set_diagnostic(diag, ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
 					"MIR operand table references an unknown value");
-				return false;
-			}
-		}
-		const zend_mir_instruction_record record =
-			zend_tpde_instruction_record_at(plan, &instruction);
-		if (record.opcode == ZEND_MIR_OPCODE_ECHO_SCALAR) {
-			zend_mir_value_id expected;
-			if (!source_operand_value_id(
-					instruction.value_operation.op1, expected)
-					|| instruction.operand_count != 1
-					|| zend_tpde_operand_at(plan, &instruction, 0) != expected) {
-				zend_tpde_set_diagnostic(diag,
-					ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
-					"semantic echo MIR operand differs from source semantics");
 				return false;
 			}
 		}

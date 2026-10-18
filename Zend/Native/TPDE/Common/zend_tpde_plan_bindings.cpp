@@ -711,8 +711,7 @@ bool freeze_machine_references(
 					uint64_t{reference.index_value_id},
 					uint64_t{reference.stable_storage_or_layout_id},
 					uint64_t{reference.scale},
-					static_cast<uint64_t>(reference.displacement),
-					uint64_t{reference.access_width}}) {
+					static_cast<uint64_t>(reference.displacement)}) {
 				hash = (hash ^ field) * UINT64_C(1099511628211);
 			}
 			return static_cast<size_t>(hash);
@@ -727,8 +726,7 @@ bool freeze_machine_references(
 				&& left.stable_storage_or_layout_id
 					== right.stable_storage_or_layout_id
 				&& left.scale == right.scale
-				&& left.displacement == right.displacement
-				&& left.access_width == right.access_width;
+				&& left.displacement == right.displacement;
 		}
 	};
 	std::unordered_map<zend_tpde_machine_reference, uint32_t,
@@ -771,7 +769,6 @@ bool freeze_machine_references(
 					static_cast<int64_t>(
 						(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id)
 							* sizeof(zval)),
-					sizeof(zval),
 				});
 			}
 			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
@@ -782,7 +779,6 @@ bool freeze_machine_references(
 					operand.index,
 					sizeof(zval),
 					0,
-					sizeof(zval),
 				});
 			}
 			return UINT32_MAX;
@@ -808,7 +804,6 @@ bool freeze_machine_references(
 				static_cast<int64_t>(
 					(uint64_t{ZEND_CALL_FRAME_SLOT} + storage_id)
 						* sizeof(zval)),
-				sizeof(zval),
 			}) == UINT32_MAX) {
 			zend_tpde_set_diagnostic(diag,
 				ZEND_NATIVE_DIAGNOSTIC_MALFORMED_MIR,
@@ -853,7 +848,6 @@ bool freeze_machine_references(
 				operation.extended_value & ~ZEND_FETCH_REF,
 				1,
 				0,
-				sizeof(zval),
 			});
 		} else if (operation.opcode
 					== ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
@@ -868,7 +862,6 @@ bool freeze_machine_references(
 				0,
 				sizeof(zval),
 				0,
-				sizeof(zval),
 			});
 		}
 		if ((instruction.operation_reference_index == UINT32_MAX
