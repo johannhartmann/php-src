@@ -13561,7 +13561,32 @@ bool ZendCompilerA64::compile_return() {
 		return_builder.ret();
 		return true;
 	}
-	{
+	/* A scalar the ABI keeps boxed without an exact type (an argument of a
+	 * declared false or true type) returns both parts of its zval. */
+	const bool boxed = ir().machine_kind(node.operands[0])
+			== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+		&& zval_type(*adaptor, node.operands[0]) == IS_UNDEF;
+	if (boxed) {
+		auto boxed_ref = val_ref(node.operands[0]);
+		auto payload = boxed_ref.part(0);
+		auto type_info = boxed_ref.part(1);
+		auto [frame_ref, frame] = val_ref_single(node.operands[1]);
+		auto frame_reg = frame.load_to_reg();
+		ScratchReg source_position{this};
+		auto source_position_reg = source_position.alloc_gp();
+		emit_publish_opline(frame_reg, source_position_reg,
+			uint64_t{record.source_position_id} * sizeof(zend_op));
+		ScratchReg pointer{this};
+		auto pointer_reg = pointer.alloc_gp();
+		load_off(pointer_reg, frame_reg,
+			static_cast<uint32_t>(offsetof(zend_execute_data, return_value)),
+			8);
+		auto no_result = text_writer.label_create();
+		generate_raw_jump(Jump{Jump::Cbz, pointer_reg, false}, no_result);
+		store_off(pointer_reg, 0, payload.load_to_reg(), 8);
+		store_off(pointer_reg, 8, type_info.load_to_reg(), 4);
+		label_place(no_result);
+	} else {
 	auto [value_ref, value] = val_ref_single(node.operands[0]);
 	auto [frame_ref, frame] = val_ref_single(node.operands[1]);
 	auto frame_reg = frame.load_to_reg();

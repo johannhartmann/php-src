@@ -6008,6 +6008,7 @@ public:
 	bool compile_finally_return(InstContext &ctx);
 	bool compile_catch_enter(InstContext &ctx);
 	bool compile_return(InstContext &ctx);
+	bool compile_boxed_scalar_return(InstContext &ctx);
 	bool compile_return_source_zval(InstContext &ctx);
 	bool compile_typed_body_return(InstContext &ctx);
 	bool compile_register_return(InstContext &ctx);
@@ -25310,6 +25311,11 @@ bool ZendCompilerX64::compile_return(InstContext &ctx) {
 		return_builder.ret();
 		return true;
 	}
+	if (ir().machine_kind(node.operands[0])
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& zval_type(*adaptor, node.operands[0]) == IS_UNDEF) {
+		return compile_boxed_scalar_return(ctx);
+	}
 	{
 	auto [value_ref, value] = val_ref_single(node.operands[0]);
 	auto [frame_ref, frame] = val_ref_single(node.operands[1]);
@@ -25346,6 +25352,44 @@ bool ZendCompilerX64::compile_return(InstContext &ctx) {
 			static_cast<int32_t>(type));
 	}
 	label_place(no_result);
+	}
+	emit_status_return(ZEND_NATIVE_RETURNED);
+	return true;
+}
+
+/*
+ * The return of a scalar the ABI keeps boxed without an exact type, an
+ * argument of a declared false or true type: both parts of its zval go to
+ * the return value.
+ */
+bool ZendCompilerX64::compile_boxed_scalar_return(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_mir_instruction_record &record = ctx.record;
+	const uint64_t source_offset =
+		uint64_t{record.source_position_id} * sizeof(zend_op);
+	if (source_offset > INT32_MAX) {
+		return false;
+	}
+	{
+		auto boxed = val_ref(node.operands[0]);
+		auto payload = boxed.part(0);
+		auto type_info = boxed.part(1);
+		auto [frame_ref, frame] = val_ref_single(node.operands[1]);
+		auto frame_reg = frame.load_to_reg();
+		ScratchReg source_position{this};
+		auto source_position_reg = source_position.alloc_gp();
+		emit_publish_opline(frame_reg, source_position_reg,
+			static_cast<int32_t>(source_offset));
+		ScratchReg pointer{this};
+		auto pointer_reg = pointer.alloc_gp();
+		ASM(MOV64rm, pointer_reg, FE_MEM(frame_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, return_value))));
+		auto no_result = text_writer.label_create();
+		ASM(TEST64rr, pointer_reg, pointer_reg);
+		generate_raw_jump(Jump::je, no_result);
+		store_boxed_part(payload, pointer_reg, 0, 8, false);
+		store_boxed_part(type_info, pointer_reg, zval_high_word, 4, false);
+		label_place(no_result);
 	}
 	emit_status_return(ZEND_NATIVE_RETURNED);
 	return true;
