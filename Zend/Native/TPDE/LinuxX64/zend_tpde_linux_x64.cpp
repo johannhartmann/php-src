@@ -6554,6 +6554,7 @@ public:
 	bool compile_opcode(InstContext &ctx);
 	bool compile_verify_return_type(InstContext &ctx);
 	bool compile_interrupt_poll(InstContext &ctx);
+	int emit_preserving_interrupt_poll(InstContext &ctx);
 	bool compile_scalar_operation(InstContext &ctx);
 	bool compile_inst_impl(IRInstRef instruction, InstRange);
 	bool compile_inst(IRInstRef instruction, InstRange);
@@ -27091,6 +27092,10 @@ bool ZendCompilerX64::compile_interrupt_poll(InstContext &ctx) {
 		}
 		return true;
 	}
+	if (const int preserved = emit_preserving_interrupt_poll(ctx);
+			preserved != 0) {
+		return preserved > 0;
+	}
 	/*
 	 * The poll's fast/slow branch is invisible to TPDE's CFG, and
 	 * the slow path's call clobbers caller-saved assignments: live
@@ -27141,6 +27146,231 @@ bool ZendCompilerX64::compile_interrupt_poll(InstContext &ctx) {
 	label_place(done);
 	release_spilled_regs(spilled);
 	return true;
+}
+
+/*
+ * An interrupt poll whose slow path keeps every value where TPDE holds it:
+ * it saves the caller-saved registers in use, stores the statepoint's
+ * materializations from the values' registers or spill slots, calls the
+ * handler and restores the registers. The loop's values then stay in
+ * registers across the poll; a spill before the branch would cost each
+ * loop-carried value a store and a reload per iteration. Returns 0 where a
+ * materialization has no such form (the caller spills instead), -1 on
+ * failure.
+ */
+int ZendCompilerX64::emit_preserving_interrupt_poll(InstContext &ctx) {
+	const IRInstRef instruction = ctx.instruction;
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	const auto materializations = ir().materializations(instruction);
+	struct Source {
+		bool valid = false;
+		AsmReg reg = AsmReg::make_invalid();
+		int32_t stack_offset = 0;
+	};
+	struct Store {
+		zend_tpde_machine_value_kind kind;
+		int32_t slot_offset;
+		Source payload;
+		Source type_info;
+	};
+	auto source_of = [&](tpde::ValueAssignment *assignment, uint32_t part,
+			Source &out) {
+		tpde::AssignmentPartRef location{assignment, part};
+		if (location.variable_ref()) {
+			return false;
+		}
+		out.valid = true;
+		if (location.register_valid()) {
+			out.reg = AsmReg{location.get_reg()};
+		} else if (location.stack_valid()) {
+			out.stack_offset = location.frame_off();
+		} else {
+			return false;
+		}
+		return true;
+	};
+	std::vector<Store> stores;
+	if (!materializations.empty()) {
+		if (node.materialization_operand_index == UINT32_MAX
+				|| node.materialization_count != materializations.size()
+				|| node.materialization_operand_index
+					+ materializations.size()
+						> node.liveness_operands.size()) {
+			return 0;
+		}
+		for (uint32_t index = 0; index < materializations.size(); ++index) {
+			const IRValueRef value = node.liveness_operands[
+				node.materialization_operand_index + index];
+			const zend_mir_storage_id storage =
+				materializations[index].storage_id;
+			if (ir().republished(instruction, index)
+					|| materialized_in_own_slot(value, storage)) {
+				continue;
+			}
+			const uint64_t offset = frame_slot_offset(storage);
+			const zend_tpde_machine_value_kind kind = ir().machine_kind(value);
+			auto *assignment = val_assignment(adaptor->val_local_idx(value));
+			if (!zend_mir_id_is_valid(storage)
+					|| offset > INT32_MAX - sizeof(zval)
+					|| assignment == nullptr
+					|| (kind != ZEND_TPDE_MACHINE_VALUE_I64
+						&& kind != ZEND_TPDE_MACHINE_VALUE_F64
+						&& kind != ZEND_TPDE_MACHINE_VALUE_BOOL
+						&& kind != ZEND_TPDE_MACHINE_VALUE_STRING_PTR
+						&& kind != ZEND_TPDE_MACHINE_VALUE_ARRAY_PTR
+						&& kind != ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)) {
+				return 0;
+			}
+			Store store{kind, static_cast<int32_t>(offset), {}, {}};
+			if (!source_of(assignment, 0, store.payload)
+					|| (kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+						&& !source_of(assignment, 1, store.type_info))) {
+				return 0;
+			}
+			stores.push_back(store);
+		}
+	}
+	/* The hot path: the check only. */
+	auto done = text_writer.label_create();
+	auto slow = text_writer.label_create();
+	{
+		auto [context_ref, context] = val_ref_single(node.operands[1]);
+		const AsmReg context_reg = context.load_to_reg();
+		ScratchReg pending{this};
+		const AsmReg pending_reg = pending.alloc_gp();
+		ASM(MOV64rm, pending_reg,
+			FE_MEM(context_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(
+					zend_native_execution_context, vm_interrupt))));
+		ASM(CMP8mi, FE_MEM(pending_reg, 0, FE_NOREG, 0), 0);
+		generate_raw_jump(Jump::jne, slow);
+	}
+	const bool cold = !text_writer.in_cold_area();
+	if (cold) {
+		cold_begin();
+	} else {
+		generate_raw_jump(Jump::jmp, done);
+	}
+	label_place(slow);
+	/* The caller-saved registers in use, saved below the stack pointer,
+	 * which stays aligned for the call. */
+	static constexpr AsmReg gp_caller_saved[] = {
+		AsmReg{AsmReg::AX}, AsmReg{AsmReg::CX}, AsmReg{AsmReg::DX},
+		AsmReg{AsmReg::SI}, AsmReg{AsmReg::DI}, AsmReg{AsmReg::R8},
+		AsmReg{AsmReg::R9}, AsmReg{AsmReg::R10}, AsmReg{AsmReg::R11}};
+	std::vector<std::pair<AsmReg, int32_t>> saved;
+	int32_t area = 0;
+	for (const AsmReg reg : gp_caller_saved) {
+		if (register_file.is_used(reg)) {
+			saved.emplace_back(reg, area);
+			area += 8;
+		}
+	}
+	area = (area + 15) & ~15;
+	for (uint32_t id = AsmReg::XMM0; id <= AsmReg::XMM15; ++id) {
+		const AsmReg reg{id};
+		if (register_file.is_used(reg)) {
+			saved.emplace_back(reg, area);
+			area += 16;
+		}
+	}
+	area = (area + 15) & ~15;
+	if (area != 0) {
+		ASM(SUB64ri, FE_SP, area);
+	}
+	auto saved_slot = [&](AsmReg reg) -> int32_t {
+		for (const auto &[saved_reg, slot] : saved) {
+			if (saved_reg == reg) {
+				return slot;
+			}
+		}
+		return -1;
+	};
+	for (const auto &[reg, slot] : saved) {
+		if (reg.id() >= AsmReg::XMM0) {
+			ASM(SSE_MOVDQUmr, FE_MEM(FE_SP, 0, FE_NOREG, slot), reg);
+		} else {
+			ASM(MOV64mr, FE_MEM(FE_SP, 0, FE_NOREG, slot), reg);
+		}
+	}
+	/* A source in a saved register is read from its save slot: the
+	 * scratch registers below may be among them. */
+	auto load = [&](const Source &source, AsmReg target) {
+		if (!source.reg.valid()) {
+			ASM(MOV64rm, target,
+				FE_MEM(FE_BP, 0, FE_NOREG, source.stack_offset));
+		} else if (const int32_t slot = saved_slot(source.reg); slot >= 0) {
+			ASM(MOV64rm, target, FE_MEM(FE_SP, 0, FE_NOREG, slot));
+		} else if (source.reg != target) {
+			ASM(MOV64rr, target, source.reg);
+		}
+	};
+	const AsmReg frame_reg = canonical_frame_register();
+	const AsmReg payload_reg{AsmReg::AX};
+	const AsmReg type_reg{AsmReg::CX};
+	for (const Store &store : stores) {
+		const auto payload = FE_MEM(frame_reg, 0, FE_NOREG,
+			store.slot_offset);
+		const auto type_info = FE_MEM(frame_reg, 0, FE_NOREG,
+			store.slot_offset
+				+ static_cast<int32_t>(offsetof(zval, u1.type_info)));
+		load(store.payload, payload_reg);
+		switch (store.kind) {
+			case ZEND_TPDE_MACHINE_VALUE_I64:
+				ASM(MOV64mr, payload, payload_reg);
+				ASM(MOV32mi, type_info, IS_LONG);
+				break;
+			case ZEND_TPDE_MACHINE_VALUE_F64:
+				ASM(MOV64mr, payload, payload_reg);
+				ASM(MOV32mi, type_info, IS_DOUBLE);
+				break;
+			case ZEND_TPDE_MACHINE_VALUE_BOOL:
+				static_assert(IS_TRUE == IS_FALSE + 1);
+				ASM(MOVZXr32r8, type_reg, payload_reg);
+				ASM(ADD32ri, type_reg, IS_FALSE);
+				ASM(MOV32mr, type_info, type_reg);
+				break;
+			case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
+				ASM(MOV64mr, payload, payload_reg);
+				load(store.type_info, type_reg);
+				ASM(MOV32mr, type_info, type_reg);
+				break;
+			default:
+				ASM(MOV64mr, payload, payload_reg);
+				if (!emit_machine_zval_type_info(
+						store.kind, payload_reg, type_reg)) {
+					return -1;
+				}
+				ASM(MOV32mr, type_info, type_reg);
+				break;
+		}
+	}
+	this->stack.generated_call = true;
+	ASM(MOV64rr, FE_DI, frame_reg);
+	ASM(MOV32ri, FE_SI, static_cast<int32_t>(mir.source_opline_index));
+	emit_symbol_call(runtime_symbol(ZEND_NATIVE_HELPER_INTERRUPT_POLL));
+	for (const auto &[reg, slot] : saved) {
+		if (reg.id() >= AsmReg::XMM0) {
+			ASM(SSE_MOVDQUrm, reg, FE_MEM(FE_SP, 0, FE_NOREG, slot));
+		} else {
+			ASM(MOV64rm, reg, FE_MEM(FE_SP, 0, FE_NOREG, slot));
+		}
+	}
+	if (area != 0) {
+		ASM(ADD64ri, FE_SP, area);
+	}
+	generate_raw_jump(Jump::jmp, done);
+	if (cold) {
+		cold_end();
+	}
+	label_place(done);
+	/* The slow path read the operands where they are: only their uses
+	 * end here. */
+	auto frame = val_ref(node.operands[0]);
+	(void) frame;
+	consume_materializations(instruction);
+	return 1;
 }
 
 /*
