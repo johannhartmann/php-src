@@ -106,7 +106,13 @@ typedef struct _zend_native_entry_cell {
 	 * calls: per parameter, a bit per Z_TYPE() its argument had, and
 	 * ZEND_NATIVE_TIER2_ARG_MISSING when the call omitted it. */
 	uint16_t tier2_arg_types[8];
+	/* Exits a specialized version (ADR 0025 section 4) took into its
+	 * generic copy; from ZEND_NATIVE_SPECULATION_EXIT_LIMIT on, its entry
+	 * runs the copy. */
+	uint32_t speculation_exits;
 } zend_native_entry_cell;
+
+#define ZEND_NATIVE_SPECULATION_EXIT_LIMIT 16
 
 #define ZEND_NATIVE_TIER2_RECORD_CALLS 64
 #define ZEND_NATIVE_TIER2_ARG_MISSING (UINT16_C(1) << 15)
@@ -120,6 +126,8 @@ typedef enum _zend_native_tier2_state {
 
 /* Image symbol id of a counted function's own entry cell. */
 #define ZEND_NATIVE_TIER2_COUNT_SYMBOL_ID (UINT32_MAX - 1)
+/* Image symbol id of a specialized function's own entry cell. */
+#define ZEND_NATIVE_SPECULATION_SYMBOL_ID (UINT32_MAX - 2)
 
 uint32_t zend_native_tier2_threshold(void);
 /* The executor's recompilation of a function whose countdown ran out;

@@ -53,4 +53,17 @@ zend_mir_lowering_result zend_mir_lower_typed_zend_op_array(
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics);
 
+/*
+ * The typed lowering of a specialized function's generic copy (ADR 0025
+ * section 4), which its specialized version's exits land in: no guarded
+ * long induction keeps a loop's long in a register only, so that every
+ * landing reloads its frame state from the slots.
+ */
+zend_mir_lowering_result zend_mir_lower_landing_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics);
+
 #endif /* ZEND_MIR_LOWERING_ZEND_H */

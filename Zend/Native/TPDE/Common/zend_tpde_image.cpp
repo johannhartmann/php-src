@@ -353,6 +353,17 @@ bool prepare_image_symbols(
 			"unable to create the native image call-count symbols");
 		return false;
 	}
+	if (plan->speculation_cell != nullptr
+			&& !image_add_symbol(image,
+				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+				ZEND_NATIVE_SPECULATION_SYMBOL_ID,
+				plan->symbol_namespace,
+				plan->speculation_cell)) {
+		zend_tpde_set_diagnostic(diag,
+			ZEND_NATIVE_DIAGNOSTIC_ALLOCATION_FAILED,
+			"unable to create the native image speculation symbol");
+		return false;
+	}
 	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
 		const zend_tpde_instruction &instruction = plan->instructions[index];
 		if (instruction.entry_cell != nullptr

@@ -322,9 +322,11 @@ struct zend_tpde_value {
 	zend_tpde_local_abi_type local_abi;
 	bool register_authoritative;
 	bool canonical_alias_observable;
-	/* A long a specialized version assumes: its definition deoptimizes
-	 * instead of overflowing (ZEND_MIR_VALUE_FACT_SPECULATED). */
+	/* A value a specialized version assumes: its definition deoptimizes
+	 * instead of overflowing (ZEND_MIR_VALUE_FACT_SPECULATED) or, for an
+	 * element read, of yielding another type than speculated_type. */
 	bool speculated;
+	uint8_t speculated_type;
 	bool constant;
 	uint64_t constant_bits;
 	bool known_string_literal;
@@ -1107,6 +1109,8 @@ struct zend_tpde_plan {
 	/* zend_native_component_member::speculation_cv_guards, borrowed. */
 	const uint8_t *speculation_cv_guards;
 	uint32_t speculation_cv_guard_count;
+	/* zend_native_component_member::speculation_cell. */
+	zend_native_entry_cell *speculation_cell;
 	const void *tier2_fallback_entry;
 	/* The resume IDs are deoptimization stress targets. */
 	bool deopt_stress;

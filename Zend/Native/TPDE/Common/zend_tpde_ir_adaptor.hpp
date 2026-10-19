@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <map>
 #include <cstdlib>
 #include <cstdint>
 #include <memory>
@@ -390,6 +391,13 @@ private:
 	std::vector<uint32_t> deopt_resume_by_instruction_;
 	/* Per TPDE block: it holds a guard's or boxed branch's cold node. */
 	std::vector<uint8_t> block_cold_;
+	/* Per node of a specialized main script: the materializations a
+	 * dominating node published already (freeze_republished_globals()). */
+	std::unordered_map<uint32_t, std::vector<uint8_t>> republished_;
+	/* Per materializing or exiting node of a specialized main script: the
+	 * (storage, value) pairs a dominating node published. */
+	std::unordered_map<uint32_t,
+		std::vector<std::pair<uint32_t, uint32_t>>> published_globals_;
 	std::vector<Slice> deopt_landing_slices_;
 	std::vector<IRValueRef> deopt_landing_values_;
 	zend_tpde_instruction synthetic_instruction_{};
@@ -994,6 +1002,13 @@ public:
 		const uint32_t index = static_cast<uint32_t>(value);
 		return index < slot_load_storage_.size()
 			? slot_load_storage_[index] : ZEND_MIR_ID_INVALID;
+	}
+	/* Whether materialization index of inst stores a value a dominating
+	 * node stored to the same slot already. */
+	bool republished(IRInstRef inst, uint32_t index) const {
+		const auto found = republished_.find(static_cast<uint32_t>(inst));
+		return found != republished_.end() && index < found->second.size()
+			&& found->second[index] != 0;
 	}
 	std::span<const zend_tpde_materialization>
 	materializations(IRInstRef inst) const {

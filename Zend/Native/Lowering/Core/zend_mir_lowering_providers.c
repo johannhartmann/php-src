@@ -116,6 +116,9 @@ struct _zend_mir_integration {
 	bool module_seeded;
 	/* Typed lowering tier (ADR 0024), Linux x64 only. */
 	bool typed;
+	/* A specialized function's generic copy
+	 * (zend_mir_lower_landing_zend_op_array()). */
+	bool landing_copy;
 	bool user_opcode_callbacks;
 	bool overlay_has_synthetic_one;
 	bool overlay_pending_store;
@@ -1600,7 +1603,8 @@ static bool zend_mir_infer_scalar_facts(
 				&induction, op_array, ssa, slot_count)) {
 			return false;
 		}
-		for (index = 0; index < slot_count; index++) {
+		for (index = 0; index < slot_count
+				&& !integration->landing_copy; index++) {
 			(void) zend_mir_infer_long_induction_slot(
 				integration, op_array, ssa, &induction, (int) index);
 		}
@@ -1706,6 +1710,31 @@ static bool zend_mir_infer_scalar_facts(
 }
 
 /*
+ * The ADD, SUB or MUL a compound assignment to a CV computes into the CV's
+ * new version, when nothing reads its result; otherwise 0.
+ */
+static uint8_t zend_mir_compound_arithmetic(const zend_op *opline)
+{
+	return opline->opcode == ZEND_ASSIGN_OP && opline->op1_type == IS_CV
+			&& opline->result_type == IS_UNUSED
+			&& (opline->extended_value == ZEND_ADD
+				|| opline->extended_value == ZEND_SUB
+				|| opline->extended_value == ZEND_MUL)
+		? (uint8_t) opline->extended_value : 0;
+}
+
+/* The ADD, SUB or MUL an opline computes, itself or as a compound
+ * assignment (zend_mir_compound_arithmetic()), and its definition. */
+static uint8_t zend_mir_arithmetic_opcode(
+	const zend_op *opline, const zend_ssa_op *ssa_op, int *definition)
+{
+	const uint8_t compound = zend_mir_compound_arithmetic(opline);
+
+	*definition = compound != 0 ? ssa_op->op1_def : ssa_op->result_def;
+	return compound != 0 ? compound : opline->opcode;
+}
+
+/*
  * Typed lowering tier (ADR 0024): ADD, SUB and MUL whose operands have exact
  * types. A double result takes long and double operands, converting a long
  * one; a long result requires ranges that exclude overflow.
@@ -1716,7 +1745,9 @@ static bool zend_mir_typed_arithmetic_operands(
 	zend_mir_value_fact_ref *left, zend_mir_value_fact_ref *right)
 {
 	const zend_op *opline = &op_array->opcodes[index];
-	const int definition = ssa->ops[index].result_def;
+	int definition;
+	const uint8_t opcode = zend_mir_arithmetic_opcode(
+		opline, &ssa->ops[index], &definition);
 	zend_mir_numeric_range left_range;
 	zend_mir_numeric_range right_range;
 	zend_mir_numeric_range result_range;
@@ -1759,7 +1790,7 @@ static bool zend_mir_typed_arithmetic_operands(
 	left_range.maximum = left->integer_max;
 	right_range.minimum = right->integer_min;
 	right_range.maximum = right->integer_max;
-	switch (opline->opcode) {
+	switch (opcode) {
 		case ZEND_ADD:
 			return zend_mir_numeric_range_add(
 				left_range, right_range, &result_range);
@@ -1930,6 +1961,11 @@ static bool zend_mir_scalarizable_opcode(
 			return zend_mir_opcode_operand_fact(
 				integration, op_array, ssa, index,
 				ZEND_MIR_FRONTEND_OP1, &left);
+		case ZEND_ASSIGN_OP:
+			if (zend_mir_compound_arithmetic(opline) == 0) {
+				return false;
+			}
+			ZEND_FALLTHROUGH;
 		case ZEND_ADD:
 		case ZEND_SUB:
 		case ZEND_MUL:
@@ -2370,6 +2406,16 @@ static bool zend_mir_projected_ssa_operand(
 			|| opcode == ZEND_PRE_DEC || opcode == ZEND_POST_DEC) {
 		if (operand_index == ZEND_MIR_FRONTEND_OP1) {
 			*use = ssa_op->op1_use;
+		} else if (operand_index == ZEND_MIR_FRONTEND_RESULT) {
+			*definition = ssa_op->op1_def;
+		}
+		return true;
+	}
+	if (opcode == ZEND_ASSIGN_OP) {
+		if (operand_index == ZEND_MIR_FRONTEND_OP1) {
+			*use = ssa_op->op1_use;
+		} else if (operand_index == ZEND_MIR_FRONTEND_OP2) {
+			*use = ssa_op->op2_use;
 		} else if (operand_index == ZEND_MIR_FRONTEND_RESULT) {
 			*definition = ssa_op->op1_def;
 		}
@@ -2979,6 +3025,17 @@ static bool zend_mir_prepare_overlay(
 					const int definition = definitions[definition_index];
 
 					if (definition >= 0
+							&& definition < ssa->vars_count
+							&& opcode == ZEND_FETCH_DIM_R
+							&& definition == ssa_op->result_def
+							&& ssa->vars[definition].speculated
+							&& integration->overlay_inferred_fact_valid[
+								definition]) {
+						/* A specialized version checks the element type
+						 * it assumes. */
+						integration->overlay_fact_modes[definition] =
+							ZEND_MIR_FACT_ORIGINAL;
+					} else if (definition >= 0
 							&& definition < ssa->vars_count) {
 						integration->overlay_inferred_fact_valid[definition] = 0;
 						integration->overlay_fact_modes[definition] =
@@ -3278,6 +3335,26 @@ static bool zend_mir_overlay_decode_opcode(
 		out->op2.slot_kind = ZEND_MIR_SOURCE_SLOT_KIND_INVALID;
 		out->op2.index = integration->overlay_synthetic_one_literal;
 		out->op2.ssa_variable_id = ZEND_MIR_ID_INVALID;
+		out->result = out->op1;
+		out->result.ssa_variable_id = (uint32_t) ssa_op->op1_def;
+		return true;
+	}
+	if (integration->overlay_scalarized_opcodes[index]
+			&& out->zend_opcode_number == ZEND_ASSIGN_OP) {
+		/* The arithmetic into the CV's new version. */
+		if (ssa_op->op1_use < 0 || ssa_op->op1_def < 0) {
+			return false;
+		}
+		out->zend_opcode_number = out->extended_value;
+		out->extended_value = 0;
+		out->op1.kind = ZEND_MIR_SOURCE_OPERAND_SSA;
+		out->op1.ssa_variable_id = (uint32_t)
+			zend_mir_resolve_ssa(integration, ssa_op->op1_use);
+		if (out->op2.kind == ZEND_MIR_SOURCE_OPERAND_SSA
+				&& ssa_op->op2_use >= 0) {
+			out->op2.ssa_variable_id = (uint32_t) zend_mir_resolve_ssa(
+				integration, ssa_op->op2_use);
+		}
 		out->result = out->op1;
 		out->result.ssa_variable_id = (uint32_t) ssa_op->op1_def;
 		return true;
@@ -5122,7 +5199,9 @@ static bool zend_mir_typed_seed_conversions(
 		return true;
 	}
 	for (index = 0; index < op_array->last; index++) {
-		const uint8_t opcode = op_array->opcodes[index].opcode;
+		int definition;
+		const uint8_t opcode = zend_mir_arithmetic_opcode(
+			&op_array->opcodes[index], &ssa->ops[index], &definition);
 		zend_mir_value_fact_ref operands[2];
 		uint32_t operand;
 
@@ -5133,7 +5212,7 @@ static bool zend_mir_typed_seed_conversions(
 					integration, op_array, ssa, index,
 					&operands[0], &operands[1])
 				|| integration->overlay_inferred_facts[
-					ssa->ops[index].result_def].exact_type
+					definition].exact_type
 						!= ZEND_MIR_SCALAR_TYPE_F64) {
 			continue;
 		}
@@ -5386,7 +5465,7 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_op_array(
 	const zend_ssa *ssa,
 	const zend_mir_lowering_module_ops *module_ops,
 	zend_mir_diagnostic_sink *diagnostics,
-	bool typed_execution)
+	bool typed_execution, bool landing_copy)
 {
 	zend_mir_integration integration;
 	zend_mir_frontend_diagnostic frontend_diagnostic;
@@ -5416,6 +5495,7 @@ static zend_mir_lowering_result zend_mir_lower_direct_user_op_array(
 	}
 	/* Values live across a generator suspension stay canonical (ADR 0024),
 	 * so generator functions keep the boxed form. */
+	integration.landing_copy = landing_copy;
 	integration.typed = typed_execution
 		&& (op_array->fn_flags & ZEND_ACC_GENERATOR) == 0;
 	integration.value_op_array = op_array;
@@ -5523,7 +5603,7 @@ zend_mir_lowering_result zend_mir_lower_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	return zend_mir_lower_direct_user_op_array(
-		script, op_array, ssa, module_ops, diagnostics, false);
+		script, op_array, ssa, module_ops, diagnostics, false, false);
 }
 
 zend_mir_lowering_result zend_mir_lower_typed_zend_op_array(
@@ -5534,5 +5614,16 @@ zend_mir_lowering_result zend_mir_lower_typed_zend_op_array(
 	zend_mir_diagnostic_sink *diagnostics)
 {
 	return zend_mir_lower_direct_user_op_array(
-		script, op_array, ssa, module_ops, diagnostics, true);
+		script, op_array, ssa, module_ops, diagnostics, true, false);
+}
+
+zend_mir_lowering_result zend_mir_lower_landing_zend_op_array(
+	const zend_script *script,
+	const zend_op_array *op_array,
+	const zend_ssa *ssa,
+	const zend_mir_lowering_module_ops *module_ops,
+	zend_mir_diagnostic_sink *diagnostics)
+{
+	return zend_mir_lower_direct_user_op_array(
+		script, op_array, ssa, module_ops, diagnostics, true, true);
 }

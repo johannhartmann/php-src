@@ -223,6 +223,7 @@ extern "C" zend_result zend_tpde_compile_component(
 			member.speculation_cv_guards;
 		plans[initialized].speculation_cv_guard_count =
 			member.speculation_cv_guard_count;
+		plans[initialized].speculation_cell = member.speculation_cell;
 		if (!initialize_plan(
 				member.module,
 				member.user_bindings, member.user_binding_count,

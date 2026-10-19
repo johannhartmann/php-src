@@ -855,7 +855,22 @@ void ZendIRAdaptor::add_deopt_stores(const std::vector<uint32_t> &cold_nodes,
 /* Appends stores as liveness operands a node stores first
  * (deopt_store_operand_index). */
 void ZendIRAdaptor::attach_deopt_stores(InstNode &current,
-		const std::vector<IRValueRef> &stores) {
+		const std::vector<IRValueRef> &all_stores) {
+	/* A specialized main script's exit leaves a global a dominating node
+	 * published to its slot, which a callee may have changed since. */
+	const auto published = published_globals_.find(
+		static_cast<uint32_t>(&current - nodes_.data()));
+	std::vector<IRValueRef> stores;
+	for (const IRValueRef value : all_stores) {
+		if (published == published_globals_.end()
+				|| std::ranges::find(published->second,
+					std::pair<uint32_t, uint32_t>{
+						canonical_storage(value),
+						static_cast<uint32_t>(value)})
+					== published->second.end()) {
+			stores.push_back(value);
+		}
+	}
 	if (stores.empty()) {
 		return;
 	}
@@ -2246,6 +2261,7 @@ private:
 	void publish_assigned_pointer(InstContext &ctx, GuardedSplit &split);
 	void lower_boxed_cond_branch(InstContext &ctx);
 	void verify_emission();
+	void freeze_republished_globals();
 	void index_landings();
 	void attach_generator_resume_values();
 	void emit_trailing_source_landings();
@@ -10434,7 +10450,123 @@ void ZendIRAdaptor::Builder::verify_emission() {
 	}
 }
 
+/*
+ * A specialized main script's globals (ADR 0025 section 4): a value a
+ * dominating node published to a global's slot is not published again. A
+ * callee or handler may have changed the global since, binding it by
+ * reference: the script reads its register copy no more (crossing
+ * boundaries freezes a global), and that copy must not overwrite the slot.
+ * An interrupt poll publishes only on its slow path.
+ */
+void ZendIRAdaptor::Builder::freeze_republished_globals() {
+	if (plan_->speculation_cv_guards == nullptr || !valid_
+			|| function_mode_ != FunctionMode::ZendEntry) {
+		return;
+	}
+	struct Publication {
+		uint32_t block;
+		uint32_t position;
+	};
+	std::map<std::pair<uint32_t, uint32_t>, std::vector<Publication>>
+		published;
+	std::vector<std::pair<uint32_t, uint32_t>> node_places(
+		nodes_.size(), {UINT32_MAX, UINT32_MAX});
+	std::vector<uint32_t> positions(tpde_block_count, 0);
+	auto publishes = [&](const InstNode &current) {
+		if (current.kind == InstKind::BoxedCondCold || current.synthetic
+				|| current.materialization_count == 0
+				|| current.materialization_operand_index == UINT32_MAX
+				|| current.mir_instruction_index >= plan_->instruction_count) {
+			return false;
+		}
+		const zend_mir_instruction_record &record =
+			plan_->instructions[current.mir_instruction_index].record;
+		return !(record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+			&& (record.effects & ZEND_MIR_EFFECT_MASK(
+				ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0);
+	};
+	auto key = [&](const InstNode &current, uint32_t index) {
+		const zend_tpde_instruction &instruction =
+			plan_->instructions[current.mir_instruction_index];
+		const zend_tpde_materialization &materialization =
+			plan_->materializations[
+				instruction.materialization_offset + index];
+		return std::pair<uint32_t, uint32_t>{materialization.storage_id,
+			static_cast<uint32_t>(operands_[current.operand_offset
+				+ current.materialization_operand_index + index])};
+	};
+	auto global = [&](const InstNode &current, uint32_t index) {
+		const zend_tpde_instruction &instruction =
+			plan_->instructions[current.mir_instruction_index];
+		return index < instruction.materialization_count
+			&& current.materialization_operand_index + index
+				< current.operand_count
+			&& plan_->materializations[instruction.materialization_offset
+				+ index].storage_id < plan_->source_frame_variable_count;
+	};
+	for (const BlockItem<IRInstRef> &item : block_instructions) {
+		const uint32_t node_index = static_cast<uint32_t>(item.value);
+		if (item.block >= tpde_block_count || node_index >= nodes_.size()) {
+			continue;
+		}
+		const InstNode &current = nodes_[node_index];
+		node_places[node_index] = {item.block, positions[item.block]++};
+		if (!publishes(current)) {
+			continue;
+		}
+		for (uint32_t index = 0; index < current.materialization_count;
+				++index) {
+			if (global(current, index)) {
+				published[key(current, index)].push_back(
+					{item.block, node_places[node_index].second});
+			}
+		}
+	}
+	auto exits = [&](const InstNode &current) {
+		return current.deopt_exit
+			|| (current.kind == InstKind::MIR && !current.synthetic
+				&& current.mir_instruction_index < plan_->instruction_count
+				&& plan_->instructions[current.mir_instruction_index]
+					.deopt_exit_resume_plus_one != 0);
+	};
+	for (uint32_t node_index = 0; node_index < nodes_.size(); ++node_index) {
+		const InstNode &current = nodes_[node_index];
+		const auto [block, position] = node_places[node_index];
+		const bool materializes = current.materialization_count != 0
+			&& current.materialization_operand_index != UINT32_MAX
+			&& current.mir_instruction_index < plan_->instruction_count;
+		if (block == UINT32_MAX || (!materializes && !exits(current))) {
+			continue;
+		}
+		/* The values dominating nodes published. */
+		std::vector<std::pair<uint32_t, uint32_t>> &keys =
+			published_globals_[node_index];
+		for (const auto &[published_key, publications] : published) {
+			if (std::ranges::any_of(publications,
+					[&](const Publication &publication) {
+						return publication.block == block
+							? publication.position < position
+							: machine_block_dominates(
+								publication.block, block);
+					})) {
+				keys.push_back(published_key);
+			}
+		}
+		for (uint32_t index = 0; materializes
+				&& index < current.materialization_count; ++index) {
+			if (global(current, index)
+					&& std::ranges::find(keys, key(current, index))
+						!= keys.end()) {
+				std::vector<uint8_t> &marks = republished_[node_index];
+				marks.resize(current.materialization_count, 0);
+				marks[index] = 1;
+			}
+		}
+	}
+}
+
 void ZendIRAdaptor::Builder::index_landings() {
+	freeze_republished_globals();
 	freeze_deopt_landing_values(
 		block_instructions, block_phis, tpde_block_count);
 	for (uint32_t resume = 0; resume < deopt_resume_landed_.size();

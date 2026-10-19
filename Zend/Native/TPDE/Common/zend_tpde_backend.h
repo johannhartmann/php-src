@@ -229,6 +229,9 @@ typedef struct _zend_native_component_member {
 	 * Zend entry runs the generic copy instead. */
 	const uint8_t *speculation_cv_guards;
 	uint32_t speculation_cv_guard_count;
+	/* A specialized member's own entry cell, which counts its exits
+	 * (speculation_exits), or NULL. */
+	zend_native_entry_cell *speculation_cell;
 } zend_native_component_member;
 
 /*

@@ -394,6 +394,21 @@ class ZendCompilerX64 final
 			return false;
 		}
 		const AsmReg frame_reg = canonical_frame_register();
+		if (plan->speculation_cell != nullptr) {
+			/* The exit counts toward the member's retirement. */
+			const tpde::SymRef cell = image_symbol_slot(
+				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+				ZEND_NATIVE_SPECULATION_SYMBOL_ID);
+			if (!cell.valid()) {
+				return false;
+			}
+			ScratchReg counter{this};
+			const AsmReg counter_reg = counter.alloc_gp();
+			emit_symbol_load(counter_reg, cell);
+			ASM(ADD32mi, FE_MEM(counter_reg, 0, FE_NOREG,
+				static_cast<int32_t>(offsetof(
+					zend_native_entry_cell, speculation_exits))), 1);
+		}
 		tpde::x64::CCAssignerSysV assigner{false};
 		CallBuilder builder{*this, assigner};
 		{
@@ -555,6 +570,18 @@ class ZendCompilerX64 final
 				default:
 					return false;
 			}
+		}
+		if (plan->speculation_cell != nullptr) {
+			/* The exit counts toward the member's retirement. */
+			const tpde::SymRef cell = image_symbol_slot(
+				ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+				ZEND_NATIVE_SPECULATION_SYMBOL_ID);
+			if (!cell.valid()) {
+				return false;
+			}
+			emit_symbol_load(scratch, cell);
+			ASM(ADD32mi, FE_MEM(scratch, 0, FE_NOREG, static_cast<int32_t>(
+				offsetof(zend_native_entry_cell, speculation_exits))), 1);
 		}
 		this->stack.generated_call = true;
 		if (frame_reg != AsmReg{AsmReg::DI}) {
@@ -4116,6 +4143,7 @@ public:
 		entry_variant_dispatch_pending_ = has_entry_variant();
 		entry_typed_body_dispatch_pending_ = has_entry_typed_body();
 		entry_generic_trampoline_pending_ = has_entry_generic_trampoline();
+		entry_retirement_pending_ = has_entry_retirement();
 		entry_cv_guards_pending_ = has_entry_cv_guards();
 		if (!ir().typed_body() && ir().plan() != nullptr
 				&& ir().plan()->fast_call_eligible) {
@@ -5036,6 +5064,37 @@ public:
 		return !ir().typed_body() && plan != nullptr
 			&& plan->speculation_unsound
 			&& plan->deopt_generic_member_plus_one != 0;
+	}
+	/* A specialized member whose exits reached
+	 * ZEND_NATIVE_SPECULATION_EXIT_LIMIT runs its generic copy. */
+	bool entry_retirement_pending_ = false;
+	bool has_entry_retirement() const {
+		const zend_tpde_plan *plan = ir().plan();
+		return !ir().typed_body() && plan != nullptr
+			&& !plan->speculation_unsound
+			&& plan->deopt_generic_member_plus_one != 0
+			&& plan->speculation_cell != nullptr;
+	}
+	bool emit_entry_retirement() {
+		const tpde::SymRef cell = image_symbol_slot(
+			ZEND_NATIVE_IMAGE_SYMBOL_ENTRY_CELL,
+			ZEND_NATIVE_SPECULATION_SYMBOL_ID);
+		if (!cell.valid()
+				|| register_file.is_used(
+					tpde::x64::AsmReg{tpde::x64::AsmReg::AX})) {
+			return false;
+		}
+		/* Before the first instruction only the prologue has run: RDI and
+		 * RSI still hold the entry's frame and execution context. */
+		emit_symbol_load(AsmReg{AsmReg::AX}, cell);
+		ASM(CMP32mi, FE_MEM(FE_AX, 0, FE_NOREG, static_cast<int32_t>(
+			offsetof(zend_native_entry_cell, speculation_exits))),
+			ZEND_NATIVE_SPECULATION_EXIT_LIMIT);
+		bool tail = false;
+		emit_cold_branch(Jump::jae, text_writer.label_create(), [&] {
+			tail = emit_generic_copy_tail();
+		});
+		return tail;
 	}
 	/*
 	 * A specialized member's assumptions on its frame at entry
@@ -5967,6 +6026,19 @@ public:
 	bool copy_temporary_slot(InstContext &ctx);
 	bool free_temporary_slot(InstContext &ctx);
 	int array_element(InstContext &ctx, ElementAccess access);
+	/* The Z_TYPE() a specialized member assumes for the element a read
+	 * yields (zend_native_compiler_speculate()), or IS_UNDEF. */
+	uint8_t speculated_element_type(const zend_tpde_instruction &mir) {
+		const zend_tpde_plan *plan = ir().plan();
+		const int32_t value = mir.source_result_binding.value_index;
+		if (mir.record.opcode != ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+				|| value < 0
+				|| static_cast<uint32_t>(value) >= plan->value_count
+				|| !plan->values[value].speculated) {
+			return IS_UNDEF;
+		}
+		return plan->values[value].speculated_type;
+	}
 	/* How a literal or runtime key is passed to the element lookups. */
 	enum class LiteralKey { None, Index, String, Register };
 	/* An array element access (array_element()) and its key form. */
@@ -14402,7 +14474,38 @@ int ZendCompilerX64::array_element_result(
 	const Adaptor::InstNode &node = ae.node;
 	const zend_mir_executable_value_ref &operation = ae.operation;
 	const ElementAccess access = ae.access;
-	if (access == ElementAccess::Read && node.has_result
+	const uint8_t speculated = access == ElementAccess::Read
+			&& ae.ctx.mir != nullptr
+		? speculated_element_type(*ae.ctx.mir) : IS_UNDEF;
+	if (speculated != IS_UNDEF && !(node.has_result
+			&& ir().machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_I64)) {
+		/* Another element leaves for the generic copy, before the read. */
+		ASM(CMP8mi, FE_MEM(ae.element_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.v.type))), speculated);
+		generate_raw_jump(Jump::jne, ae.slow);
+	}
+	if (speculated == IS_DOUBLE && node.has_result
+			&& ir().machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_F64) {
+		auto [result_ref, result] = result_ref_single(node.result);
+		if (!EncodeBase::encode_zend_native_load_f64(
+				address(ae.element_reg, 0), result)) {
+			return -1;
+		}
+		ScratchReg bits{this};
+		const AsmReg bits_reg = bits.alloc_gp();
+		ASM(MOV64rm, bits_reg, FE_MEM(ae.element_reg, 0, FE_NOREG, 0));
+		ASM(MOV64mr,
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset)),
+			bits_reg);
+		ASM(MOV32mi,
+			FE_MEM(er.frame_reg, 0, FE_NOREG,
+				static_cast<int32_t>(ae.result_offset
+					+ offsetof(zval, u1.type_info))),
+			IS_DOUBLE);
+	} else if (access == ElementAccess::Read && node.has_result
 			&& ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
 		/* An integer result needs an element whose type is exactly
@@ -15128,6 +15231,13 @@ int ZendCompilerX64::array_element_register(InstContext &ctx) {
 		&& (read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
 			|| read.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
 		&& result_offset <= INT32_MAX - sizeof(zval);
+	if (const uint8_t speculated = speculated_element_type(mir);
+			speculated != IS_UNDEF) {
+		/* Another element leaves for the generic copy, before the read. */
+		ASM(CMP8mi, FE_MEM(element_reg, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zval, u1.v.type))), speculated);
+		generate_raw_jump(Jump::jne, slow);
+	}
 	auto result = result_ref(node.result);
 	if (result_long) {
 		/* The element's type is exactly IS_LONG, tested in memory. */
@@ -26940,9 +27050,9 @@ bool ZendCompilerX64::compile_interrupt_poll(InstContext &ctx) {
 		return false;
 	}
 	if (mir.deopt_exit_resume_plus_one != 0) {
-		/* A specialized main script assumes its globals: a pending
-		 * interrupt, whose handler may change them, leaves for the generic
-		 * copy, which handles it at its next poll. */
+		/* A specialized version's pending interrupt leaves for the
+		 * generic copy, which handles it at its next poll (a specialized
+		 * main script assumes its globals, which the handler may change). */
 		auto exit = text_writer.label_create();
 		{
 			auto [context_ref, context] = val_ref_single(node.operands[1]);
@@ -27511,6 +27621,12 @@ bool ZendCompilerX64::compile_inst(
 	if (entry_generic_trampoline_pending_) {
 		entry_generic_trampoline_pending_ = false;
 		if (!emit_entry_generic_trampoline()) {
+			return false;
+		}
+	}
+	if (entry_retirement_pending_) {
+		entry_retirement_pending_ = false;
+		if (!emit_entry_retirement()) {
 			return false;
 		}
 	}

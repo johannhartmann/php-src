@@ -199,8 +199,11 @@ bool zend_mir_scalar_fact_is_well_formed(const zend_mir_value_fact_ref *fact)
 			&& fact->exact_type != ZEND_MIR_SCALAR_TYPE_F64) {
 		return false;
 	}
+	/* A specialized version assumes a long, or a double it reads from an
+	 * element. */
 	if ((fact->flags & ZEND_MIR_VALUE_FACT_SPECULATED) != 0
-			&& (fact->exact_type != ZEND_MIR_SCALAR_TYPE_I64
+			&& ((fact->exact_type != ZEND_MIR_SCALAR_TYPE_I64
+					&& fact->exact_type != ZEND_MIR_SCALAR_TYPE_F64)
 				|| (fact->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE)
 					!= 0)) {
 		return false;

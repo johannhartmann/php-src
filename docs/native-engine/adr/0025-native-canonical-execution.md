@@ -197,16 +197,34 @@ describes a caller's native-owned locals.
     their slots. Pointers stay with their slots.
   - **Specialized version** (opt-in: `ZEND_NATIVE_SPECULATE=1`, Linux x64).
     It is the function itself; the compiler adds a hidden generic copy with
-    landings at every guarded operation. A guarded operation whose landing
-    exists exits instead of running its cold path: the exit stores the
-    register scalars the continuation carries, calls
+    landings at every guarded operation. The copy keeps no long induction
+    in a register only, so that every landing reloads its frame state from
+    the slots. The specialized version assumes:
+    - ADD, SUB, MUL, compound assignments, `++` and `--` of longs yield
+      longs, exiting where they would overflow;
+    - an element read yields the type the script's own code stores into
+      that array (`zend_native_element_guess()`: stores, two array levels
+      deep, followed through assignments, parameters and return values of
+      the script's functions). The read checks the element's type and exits
+      from its cold block, before the read, for another type, a reference,
+      a missing key or another container;
+    - a main script's globals hold at entry the scalar types they hold
+      while it compiles, behind entry guards, as far as no boundary that
+      may run user code separates a global's definition from a use. A
+      global's register value is published to its slot at the first
+      boundary after its definition and never again: a callee may have
+      changed the global since.
+
+    The types narrowed by these assumptions are inferred again from nothing
+    up (a loop's phi would otherwise keep the type its back edge had before).
+    An exit stores the register scalars the continuation carries, calls
     `zend_native_deopt_transfer()` with the operation's source position and
-    returns the copy's status. The continuation copies the fast result; no
-    merge with a cold result remains. The machine CFG keeps the edge from
-    the exit to the continuation, so TPDE compiles the exit right after the
-    fast path, whose guards branch there with its register state, and the
-    fast path spills what the continuation reads. File main code (which runs
-    once per inclusion) and generators are not specialized.
+    returns the copy's status. An interrupt poll exits too: the copy handles
+    the interrupt at its next poll, and the specialized loop calls no
+    handler. Other guarded operations keep their cold paths. Each exit
+    counts in the function's entry cell; from
+    `ZEND_NATIVE_SPECULATION_EXIT_LIMIT` (16) exits on, its entry runs the
+    copy. Generators are not specialized.
   - **Stress mode.** Debug builds with `ZEND_NATIVE_DEOPT_STRESS=<period>`
     give every non-generator function resume IDs. Every period-th cold path
     of a guarded operation transfers to a new activation of the same
@@ -240,7 +258,8 @@ describes a caller's native-owned locals.
   dependency. Changing the dependency retires the code through the entry-cell
   generations, and active frames deoptimize at their next guard or return.
 - **Repeated deoptimization.** Code that deoptimizes repeatedly stops
-  speculating: it is recompiled without the failed assumption.
+  speculating: a specialized version retires to its generic copy (see
+  above); recompiling it without the failed assumption is not done yet.
 
 ### 5. Inlining with guards
 

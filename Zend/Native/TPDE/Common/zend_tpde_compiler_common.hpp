@@ -370,6 +370,13 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 			const IRValueRef value =
 				node.liveness_operands[
 					node.materialization_operand_index + index];
+			if (this->ir().republished(instruction, index)) {
+				/* A dominating node stored it (a specialized main
+				 * script's global): only its use ends here. */
+				auto consumed = this->val_ref(value);
+				(void) consumed;
+				continue;
+			}
 			if (!store(frame_reg, value, materialization.storage_id,
 					offset)) {
 				return false;

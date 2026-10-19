@@ -1549,7 +1549,14 @@ static bool freeze_value_facts(plan_builder &builder) {
 				static_cast<uint32_t>(ssa_variable)))
 			: -1;
 		if (index >= 0) {
+			const uint32_t type = source_ssa->var_info != nullptr
+				? source_ssa->var_info[ssa_variable].type
+					& (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF)
+				: 0;
 			plan->values[index].speculated = true;
+			plan->values[index].speculated_type =
+				type == MAY_BE_LONG ? IS_LONG
+				: type == MAY_BE_DOUBLE ? IS_DOUBLE : IS_UNDEF;
 		}
 	}
 	std::vector<uint8_t> register_definitions(plan->value_count, 0);

@@ -1424,6 +1424,16 @@ bool freeze_statepoint_materializations(
 	return materializer.freeze();
 }
 
+/* An element read whose type a specialized version assumes; its cold
+ * block, which a read of another element reaches, exits. */
+static bool speculated_element_read(
+		const zend_tpde_plan &plan, const zend_tpde_instruction &instruction) {
+	const int32_t value = instruction.source_result_binding.value_index;
+	return instruction.record.opcode == ZEND_MIR_OPCODE_VALUE_FETCH_DIM_R
+		&& value >= 0 && static_cast<uint32_t>(value) < plan.value_count
+		&& plan.values[value].speculated;
+}
+
 /* An operation that computes a long a specialized version assumes. */
 static bool speculated_long_operation(
 		const zend_tpde_plan &plan, const zend_tpde_instruction &instruction) {
@@ -1441,12 +1451,12 @@ static bool speculated_long_operation(
 /*
  * The deoptimization exits of a specialized member (ADR 0025 section 4).
  * An operation exits where its generic copy lands before the same source
- * operation; the copy's adaptor decides which resume IDs land. A guarded
- * operation exits from its cold block, which then has no edge back to the
- * continuation (the member's machine CFG is frozen afterwards). An
- * operation on a speculated long exits where it would overflow; without a
- * landing the member's narrowed types do not hold, and its entry runs the
- * copy instead.
+ * operation; the copy's adaptor decides which resume IDs land. A speculated
+ * element read exits from its cold block, which then has no edge back to
+ * the continuation (the member's machine CFG is frozen afterwards); other
+ * guarded operations keep their cold paths. An operation on a speculated
+ * long exits where it would overflow; without a landing the member's
+ * narrowed types do not hold, and its entry runs the copy instead.
  */
 void freeze_member_deopt_exits(
 		zend_tpde_plan *plans,
@@ -1486,17 +1496,19 @@ void freeze_member_deopt_exits(
 		const uint32_t position = exit.record.source_position_id;
 		const bool first = position != previous_position;
 		previous_position = position;
-		if (specialized.speculation_cv_guards != nullptr
-				&& exit.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+		if (exit.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
 				&& (exit.record.effects & ZEND_MIR_EFFECT_MASK(
 					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
-			/* A specialized main script's interrupt poll resumes the
-			 * generic copy where the frame continues. */
+			/* An interrupt poll resumes the generic copy where the frame
+			 * continues, which handles it: no handler call (and no spill
+			 * of the loop's values around it) in the specialized loop. A
+			 * specialized main script assumes its globals, which the
+			 * handler may change: it must leave. */
 			const auto found = landed_resumes.find(exit.source_opline_index);
 			if (found != landed_resumes.end()) {
 				exit.deopt_exit_resume_plus_one = found->second + 1;
 				exits = true;
-			} else {
+			} else if (specialized.speculation_cv_guards != nullptr) {
 				specialized.speculation_unsound = true;
 			}
 			continue;
@@ -1504,7 +1516,8 @@ void freeze_member_deopt_exits(
 		const bool speculated = speculated_long_operation(specialized, exit);
 		const bool guarded = first
 			&& (exit.machine_control_flow_flags
-				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0
+			&& speculated_element_read(specialized, exit);
 		if (!speculated && !guarded) {
 			continue;
 		}
@@ -1517,23 +1530,33 @@ void freeze_member_deopt_exits(
 		if (lands) {
 			exit.deopt_exit_resume_plus_one = found->second + 1;
 			exits = true;
-		} else if (speculated) {
+		} else {
 			specialized.speculation_unsound = true;
 		}
 	}
-	/* Every speculated long comes from an operation that can exit. */
+	/* Every speculated value comes from an operation that can exit. */
 	for (uint32_t value = 0; value < specialized.value_count
 			&& !specialized.speculation_unsound; ++value) {
-		const int32_t definition =
+		int32_t definition =
 			specialized.value_definition_instructions == nullptr
 				? -1 : specialized.value_definition_instructions[value];
+		if (definition < 0
+				&& specialized.source_value_definition_instructions
+					!= nullptr) {
+			definition =
+				specialized.source_value_definition_instructions[value];
+		}
 		specialized.speculation_unsound =
 			specialized.values[value].speculated
 			&& (definition < 0
 				|| static_cast<uint32_t>(definition)
 					>= specialized.instruction_count
-				|| !speculated_long_operation(specialized,
-					specialized.instructions[definition]));
+				|| !(speculated_long_operation(specialized,
+						specialized.instructions[definition])
+					|| (speculated_element_read(specialized,
+							specialized.instructions[definition])
+						&& specialized.instructions[definition]
+							.deopt_exit_resume_plus_one != 0)));
 	}
 	if (exits) {
 		require_runtime_helper(&specialized,
