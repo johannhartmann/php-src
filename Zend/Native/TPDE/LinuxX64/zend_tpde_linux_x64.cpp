@@ -3640,7 +3640,8 @@ public:
 	 * typed body can be a leaf even when its Zend entry uses helpers.
 	 */
 	bool cur_func_may_emit_calls() const {
-		return adaptor->cur_func_may_emit_calls() || has_entry_variant();
+		return adaptor->cur_func_may_emit_calls() || has_entry_variant()
+			|| has_entry_typed_body();
 	}
 	tpde::SymRef cur_personality_func() const { return {}; }
 	/*
@@ -3972,6 +3973,7 @@ public:
 		Base::start_func(index);
 		layout_start_function(index);
 		entry_variant_dispatch_pending_ = has_entry_variant();
+		entry_typed_body_dispatch_pending_ = has_entry_typed_body();
 		if (!ir().typed_body() && ir().plan() != nullptr
 				&& ir().plan()->fast_call_eligible) {
 			emit_fast_call_entry(index);
@@ -4939,6 +4941,201 @@ public:
 		RetBuilder return_builder{*this, *cur_cc_assigner()};
 		return_builder.add(std::move(status), tpde::CCAssignment{});
 		return_builder.ret_local_path();
+		label_place(general);
+		return true;
+	}
+	/*
+	 * A Zend entry of a member with a typed body: before the first
+	 * instruction, when the frame holds exactly the declared arguments and
+	 * each has the type the body's ABI takes, run the typed body on them
+	 * and return its value. The body has no effect before it fails, so a
+	 * failure continues with the general entry as if nothing ran.
+	 */
+	bool entry_typed_body_dispatch_pending_ = false;
+	bool has_entry_typed_body() const {
+		const zend_tpde_plan *plan = ir().plan();
+		if (ir().typed_body() || plan == nullptr
+				|| !plan->typed_body_eligible
+				|| plan->typed_body_function_index >= this->func_syms.size()
+				|| plan->argument_count > 6
+				|| (plan->argument_count != 0
+					&& (plan->argument_abi == nullptr
+						|| plan->argument_value_indices == nullptr))) {
+			return false;
+		}
+		switch (plan->typed_body_return_abi.machine_kind) {
+			case ZEND_TPDE_MACHINE_VALUE_I64:
+			case ZEND_TPDE_MACHINE_VALUE_F64:
+			case ZEND_TPDE_MACHINE_VALUE_BOOL:
+			case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
+				break;
+			default:
+				return false;
+		}
+		uint32_t gp_parts = 0;
+		uint32_t fp_parts = 0;
+		for (uint32_t argument = 0; argument < plan->argument_count;
+				++argument) {
+			const zend_tpde_local_abi_type &abi = plan->argument_abi[argument];
+			const uint32_t bit = UINT32_C(1) << argument;
+			if (!abi.valid) {
+				return false;
+			}
+			switch (abi.machine_kind) {
+				case ZEND_TPDE_MACHINE_VALUE_I64:
+					gp_parts++;
+					break;
+				case ZEND_TPDE_MACHINE_VALUE_F64:
+					fp_parts++;
+					break;
+				case ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL:
+					/* An untyped argument, or a number. */
+					if ((plan->checked_boxed_argument_mask & bit) != 0
+							&& (plan->number_argument_mask & bit) == 0) {
+						return false;
+					}
+					gp_parts += 2;
+					break;
+				default:
+					return false;
+			}
+		}
+		return gp_parts <= 6 && fp_parts <= 8;
+	}
+	bool emit_entry_typed_body_dispatch() {
+		const zend_tpde_plan *plan = ir().plan();
+		/* Before the first instruction only the prologue has run: RDI and
+		 * RSI still hold the entry's frame and execution context. */
+		auto general = text_writer.label_create();
+		auto restore = text_writer.label_create();
+		if (plan->deopt_resume_count != 0) {
+			/* A deoptimization entry resumes this activation. */
+			ASM(CMP8mi, FE_MEM(FE_SI, 0, FE_NOREG, static_cast<int32_t>(
+				offsetof(zend_native_execution_context, deopt_resume))), 0);
+			generate_raw_jump(Jump::jne, general);
+		}
+		ASM(CMP32mi, FE_MEM(FE_DI, 0, FE_NOREG, static_cast<int32_t>(
+				offsetof(zend_execute_data, This)
+				+ offsetof(zval, u2.num_args))),
+			static_cast<int32_t>(plan->argument_count));
+		generate_raw_jump(Jump::jne, general);
+		auto slot_offset = [](uint32_t argument, size_t member) {
+			return static_cast<int32_t>(
+				(ZEND_CALL_FRAME_SLOT + argument) * sizeof(zval) + member);
+		};
+		for (uint32_t argument = 0; argument < plan->argument_count;
+				++argument) {
+			const zend_tpde_local_abi_type &abi = plan->argument_abi[argument];
+			const int32_t type_offset =
+				slot_offset(argument, offsetof(zval, u1.type_info));
+			if (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64) {
+				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset), IS_LONG);
+				generate_raw_jump(Jump::jne, general);
+			} else if (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_F64) {
+				ASM(CMP8mi, FE_MEM(FE_DI, 0, FE_NOREG, type_offset),
+					IS_DOUBLE);
+				generate_raw_jump(Jump::jne, general);
+			} else if ((plan->number_argument_mask
+					& (UINT32_C(1) << argument)) != 0) {
+				static_assert(IS_DOUBLE == IS_LONG + 1);
+				ASM(MOVZXr32m8, FE_AX, FE_MEM(FE_DI, 0, FE_NOREG, type_offset));
+				ASM(SUB32ri, FE_AX, IS_LONG);
+				ASM(CMP32ri, FE_AX, 1);
+				generate_raw_jump(Jump::ja, general);
+			}
+		}
+		/* Two pushes keep the stack aligned for the call. */
+		ASM(PUSHr, FE_DI);
+		ASM(PUSHr, FE_SI);
+		/* The System V assignment of the body's argument parts. */
+		static constexpr AsmReg gp_arguments[] = {
+			AsmReg{AsmReg::DI}, AsmReg{AsmReg::SI}, AsmReg{AsmReg::DX},
+			AsmReg{AsmReg::CX}, AsmReg{AsmReg::R8}, AsmReg{AsmReg::R9}};
+		ASM(MOV64rr, FE_R11, FE_DI);
+		uint32_t gp = 0;
+		uint32_t fp = 0;
+		for (uint32_t argument = 0; argument < plan->argument_count;
+				++argument) {
+			const zend_tpde_local_abi_type &abi = plan->argument_abi[argument];
+			const int32_t payload_offset = slot_offset(argument, 0);
+			if (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_F64) {
+				ASM(SSE_MOVSDrm, AsmReg{AsmReg::XMM0 + fp++},
+					FE_MEM(FE_R11, 0, FE_NOREG, payload_offset));
+				continue;
+			}
+			ASM(MOV64rm, gp_arguments[gp++],
+				FE_MEM(FE_R11, 0, FE_NOREG, payload_offset));
+			if (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				ASM(MOV32rm, gp_arguments[gp++],
+					FE_MEM(FE_R11, 0, FE_NOREG, slot_offset(argument,
+						offsetof(zval, u1.type_info))));
+			}
+		}
+		/* A terminal path: the raw call leaves the allocator state of the
+		 * general continuation untouched. */
+		this->stack.generated_call = true;
+		emit_symbol_call(this->func_syms[plan->typed_body_function_index]);
+		const zend_tpde_machine_value_kind kind =
+			plan->typed_body_return_abi.machine_kind;
+		if (plan->typed_body_may_fail) {
+			/* The status: the type part of a boxed value, otherwise the
+			 * first free integer return register. */
+			const AsmReg status{kind == ZEND_TPDE_MACHINE_VALUE_F64
+				? AsmReg::AX : AsmReg::DX};
+			ASM(TEST32rr, status, status);
+			generate_raw_jump(Jump::je, restore);
+		}
+		ASM(POPr, FE_SI);
+		ASM(POPr, FE_R11);
+		ASM(MOV64rm, FE_R11, FE_MEM(FE_R11, 0, FE_NOREG,
+			static_cast<int32_t>(offsetof(zend_execute_data, return_value))));
+		auto stored = text_writer.label_create();
+		ASM(TEST64rr, FE_R11, FE_R11);
+		generate_raw_jump(Jump::je, stored);
+		const int32_t type_info_offset =
+			static_cast<int32_t>(offsetof(zval, u1.type_info));
+		switch (kind) {
+			case ZEND_TPDE_MACHINE_VALUE_I64:
+				ASM(MOV64mr, FE_MEM(FE_R11, 0, FE_NOREG, 0), FE_AX);
+				ASM(MOV32mi, FE_MEM(FE_R11, 0, FE_NOREG, type_info_offset),
+					IS_LONG);
+				break;
+			case ZEND_TPDE_MACHINE_VALUE_F64:
+				ASM(SSE_MOVSDmr, FE_MEM(FE_R11, 0, FE_NOREG, 0), FE_XMM0);
+				ASM(MOV32mi, FE_MEM(FE_R11, 0, FE_NOREG, type_info_offset),
+					IS_DOUBLE);
+				break;
+			case ZEND_TPDE_MACHINE_VALUE_BOOL:
+				static_assert(IS_TRUE == IS_FALSE + 1);
+				ASM(MOVZXr32r8, FE_AX, FE_AX);
+				ASM(ADD32ri, FE_AX, IS_FALSE);
+				ASM(MOV32mr, FE_MEM(FE_R11, 0, FE_NOREG, type_info_offset),
+					FE_AX);
+				break;
+			default:
+				/* The body returns its own reference to a borrowed value. */
+				ASM(MOV64mr, FE_MEM(FE_R11, 0, FE_NOREG, 0), FE_AX);
+				ASM(MOV32mr, FE_MEM(FE_R11, 0, FE_NOREG, type_info_offset),
+					FE_DX);
+				break;
+		}
+		label_place(stored);
+		if (register_file.is_used(AsmReg{AsmReg::AX})) {
+			return false;
+		}
+		{
+			ScratchReg status_scratch{this};
+			ASM(XOR32rr, status_scratch.alloc_specific(AsmReg{AsmReg::AX}),
+				FE_AX);
+			ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+			status.set_value(this, std::move(status_scratch));
+			RetBuilder return_builder{*this, *cur_cc_assigner()};
+			return_builder.add(std::move(status), tpde::CCAssignment{});
+			return_builder.ret_local_path();
+		}
+		label_place(restore);
+		ASM(POPr, FE_SI);
+		ASM(POPr, FE_DI);
 		label_place(general);
 		return true;
 	}
@@ -26930,6 +27127,12 @@ bool ZendCompilerX64::compile_inst_impl(
 
 bool ZendCompilerX64::compile_inst(
 	IRInstRef instruction, InstRange remaining_instructions) {
+	if (entry_typed_body_dispatch_pending_) {
+		entry_typed_body_dispatch_pending_ = false;
+		if (!emit_entry_typed_body_dispatch()) {
+			return false;
+		}
+	}
 	if (entry_variant_dispatch_pending_) {
 		entry_variant_dispatch_pending_ = false;
 		if (!emit_entry_variant_dispatch()) {
