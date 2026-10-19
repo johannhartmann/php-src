@@ -16860,7 +16860,8 @@ int ZendCompilerX64::numeric_framed_binary(LongBinaryContext &lb) {
 	 * a zero or -1 divisor and a shift count outside 0..63 use the
 	 * helper. */
 	nb.integer_op = nb.opcode == ZEND_MOD
-		|| nb.opcode == ZEND_SL || nb.opcode == ZEND_SR;
+		|| nb.opcode == ZEND_SL || nb.opcode == ZEND_SR
+		|| zend_tpde_numeric_bitwise(nb.opcode);
 	/* A proven operation of two numbers cannot fail: integer
 	 * overflow continues in double. A typed body emits it without a
 	 * guarded diamond; in a Zend entry its cold edge is dead. */
@@ -16900,6 +16901,10 @@ int ZendCompilerX64::numeric_framed_binary(LongBinaryContext &lb) {
 			&& node.has_result && node.operands.size() == 2
 			&& register_long_operand(node.operands[0])
 			&& register_long_operand(node.operands[1]));
+	/* Bitwise operations of register longs keep the long form. */
+	if (nb.register_operands && zend_tpde_numeric_bitwise(nb.opcode)) {
+		return -1;
+	}
 	if (nb.register_operands) {
 		const zend_tpde_machine_value_kind kind = node.has_result
 			? ir().machine_kind(node.result)
@@ -17643,6 +17648,18 @@ int ZendCompilerX64::general_numeric_binary(
 				ASM(CQO);
 				ASM(IDIV64r, right_reg);
 				ASM(MOV64rr, left_reg, dx_reg);
+				ASM(MOV32ri, result_type_reg, IS_LONG);
+				break;
+			case ZEND_BW_AND:
+				ASM(AND64rr, left_reg, right_reg);
+				ASM(MOV32ri, result_type_reg, IS_LONG);
+				break;
+			case ZEND_BW_OR:
+				ASM(OR64rr, left_reg, right_reg);
+				ASM(MOV32ri, result_type_reg, IS_LONG);
+				break;
+			case ZEND_BW_XOR:
+				ASM(XOR64rr, left_reg, right_reg);
 				ASM(MOV32ri, result_type_reg, IS_LONG);
 				break;
 			case ZEND_SL:
