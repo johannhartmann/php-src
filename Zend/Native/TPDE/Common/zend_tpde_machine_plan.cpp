@@ -1180,6 +1180,16 @@ static bool typed_body_signature_step(
 			|| record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL) {
 		return typed_body_return(walk, instruction, record);
 	}
+	/* A long the specialized version assumes fails the body where its
+	 * operation would overflow. */
+	if (record.opcode == ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+			|| record.opcode == ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW
+			|| record.opcode == ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW) {
+		const int32_t result = zend_tpde_value_index(plan, record.result_id);
+		if (result >= 0 && plan->values[result].speculated) {
+			*walk.may_fail = true;
+		}
+	}
 	return typed_body_pure_instruction(walk, instruction, record);
 }
 
@@ -3493,11 +3503,11 @@ static bool freeze_machine_cfg(
 					|| (hot != UINT32_MAX
 						&& plan->instructions[index].typed_call_may_fail
 						&& !add_edge(hot, cold))
-					/* A deoptimization exit leaves the function, but keeps
-					 * the edge: TPDE then compiles its block right after the
-					 * fast path, whose guards branch there with the fast
-					 * path's register assignment. */
-					|| !add_edge(cold, continuation)) {
+					/* A deoptimization exit leaves the function. */
+					|| ((typed_body
+							|| plan->instructions[index]
+								.deopt_exit_resume_plus_one == 0)
+						&& !add_edge(cold, continuation))) {
 				goto malformed;
 			}
 		}
@@ -4236,13 +4246,26 @@ bool freeze_component_machine_plan(
 	} while (nested_dropped);
 	propagate_typed_body_may_fail(plans, component_count);
 	number_component_functions(plans, component_count);
+	/* A specialized member's exits need its generic copy's landings, and
+	 * its machine CFG needs its exits: it is frozen last. */
 	for (uint32_t index = 0; index < component_count; ++index) {
 		if (!freeze_member_component_calls(planner, index, diag)
-				|| !freeze_member_machine_plan(&plans[index], diag)) {
+				|| (plans[index].deopt_generic_member_plus_one == 0
+					&& !freeze_member_machine_plan(&plans[index], diag))) {
 			return false;
 		}
 	}
-	return freeze_deopt_exits(plans, component_plans, component_count, diag);
+	for (uint32_t index = 0; index < component_count; ++index) {
+		if (plans[index].deopt_generic_member_plus_one == 0) {
+			continue;
+		}
+		freeze_member_deopt_exits(
+			plans, component_plans, component_count, index);
+		if (!freeze_member_machine_plan(&plans[index], diag)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 } // namespace zend::native::tpde::plan_detail

@@ -336,12 +336,15 @@ void freeze_dynamic_fetch_cv_indices(
 	const zend_mir_view *view,
 	const zend_op_array *source_op_array,
 	zend_native_diagnostic *diag);
-[[nodiscard]] bool freeze_deopt_exits(
+/* The deoptimization exits of the specialized member plans[index]; its
+ * generic copy's machine plan is frozen. */
+void freeze_member_deopt_exits(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
-		zend_native_diagnostic *diag);
-/* Frees the generic copy's landing adaptor freeze_deopt_exits() built. */
+		uint32_t index);
+/* Frees the generic copy's landing adaptor freeze_member_deopt_exits()
+ * built. */
 void destroy_deopt_landing_adaptor(zend_tpde_plan *plan);
 
 /* Plan construction and lookup indices (zend_tpde_plan.cpp). */

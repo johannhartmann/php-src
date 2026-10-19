@@ -4,6 +4,8 @@
 
 #include "Zend/Native/TPDE/Common/zend_tpde_ir_adaptor.hpp"
 
+#include <unordered_map>
+
 namespace zend::native::tpde::plan_detail {
 
 /* Deoptimization stress (debug builds, ZEND_NATIVE_DEOPT_STRESS=<period>):
@@ -1422,33 +1424,45 @@ bool freeze_statepoint_materializations(
 	return materializer.freeze();
 }
 
+/* An operation that computes a long a specialized version assumes. */
+static bool speculated_long_operation(
+		const zend_tpde_plan &plan, const zend_tpde_instruction &instruction) {
+	const zend_mir_opcode opcode = instruction.record.opcode;
+	if (opcode != ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+			&& opcode != ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW
+			&& opcode != ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW) {
+		return false;
+	}
+	const int32_t result = zend_tpde_value_index(
+		&plan, instruction.record.result_id);
+	return result >= 0 && plan.values[result].speculated;
+}
+
 /*
- * The deoptimization exits of the specialized members (ADR 0025 section 4).
- * A guarded operation exits where its generic copy has a landing (both
- * members lower the same MIR; the copy's adaptor decides which resume IDs
- * land, and the component adaptor adopts it). The machine CFG keeps an
- * exit's cold-to-continuation edge, so the specialized member's frozen CFG
- * stays as it is.
+ * The deoptimization exits of a specialized member (ADR 0025 section 4).
+ * An operation exits where its generic copy lands before the same source
+ * operation; the copy's adaptor decides which resume IDs land. A guarded
+ * operation exits from its cold block, which then has no edge back to the
+ * continuation (the member's machine CFG is frozen afterwards). An
+ * operation on a speculated long exits where it would overflow; without a
+ * landing the member's narrowed types do not hold, and its entry runs the
+ * copy instead.
  */
-bool freeze_deopt_exits(
+void freeze_member_deopt_exits(
 		zend_tpde_plan *plans,
 		const zend_tpde_plan *const *component_plans,
 		uint32_t component_count,
-		zend_native_diagnostic *diag) {
-	for (uint32_t index = 0; index < component_count; ++index) {
-		zend_tpde_plan &specialized = plans[index];
-		if (specialized.deopt_generic_member_plus_one == 0
-				|| specialized.deopt_generic_member_plus_one
-					> component_count) {
-			continue;
-		}
-		const zend_tpde_plan &generic =
-			plans[specialized.deopt_generic_member_plus_one - 1];
-		if (generic.deopt_resume_count == 0
-				|| generic.instruction_count != specialized.instruction_count
-				|| generic.value_count != specialized.value_count) {
-			continue;
-		}
+		uint32_t index) {
+	zend_tpde_plan &specialized = plans[index];
+	if (specialized.deopt_generic_member_plus_one == 0
+			|| specialized.deopt_generic_member_plus_one
+				> component_count) {
+		return;
+	}
+	const zend_tpde_plan &generic =
+		plans[specialized.deopt_generic_member_plus_one - 1];
+	std::unordered_map<uint32_t, uint32_t> landed_resumes;
+	if (generic.deopt_resume_count != 0) {
 		if (generic.deopt_landing_adaptor == nullptr) {
 			generic.deopt_landing_adaptor =
 				new zend::native::tpde::ZendIRAdaptor{&generic,
@@ -1457,37 +1471,45 @@ bool freeze_deopt_exits(
 		}
 		const zend::native::tpde::ZendIRAdaptor &landings =
 			*generic.deopt_landing_adaptor;
-		if (!landings.valid()) {
+		for (uint32_t resume = 0; landings.valid()
+				&& resume < generic.deopt_resume_count; ++resume) {
+			if (landings.deopt_resume_landed(resume)) {
+				landed_resumes.emplace(
+					generic.deopt_resume_targets[resume], resume);
+			}
+		}
+	}
+	bool exits = false;
+	uint32_t previous_position = UINT32_MAX;
+	for (uint32_t i = 0; i < specialized.instruction_count; ++i) {
+		zend_tpde_instruction &exit = specialized.instructions[i];
+		const uint32_t position = exit.record.source_position_id;
+		const bool first = position != previous_position;
+		previous_position = position;
+		const bool speculated = speculated_long_operation(specialized, exit);
+		const bool guarded = first
+			&& (exit.machine_control_flow_flags
+				& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) != 0;
+		if (!speculated && !guarded) {
 			continue;
 		}
-		bool exits = false;
-		for (uint32_t resume = 0; resume < generic.deopt_resume_count;
-				++resume) {
-			const uint32_t instruction =
-				generic.deopt_resume_instructions[resume];
-			if (!landings.deopt_resume_landed(resume)
-					|| instruction >= specialized.instruction_count) {
-				continue;
-			}
-			zend_tpde_instruction &exit = specialized.instructions[instruction];
-			if (exit.record.opcode
-						!= generic.instructions[instruction].record.opcode
-					|| exit.record.source_position_id
-						!= generic.deopt_resume_targets[resume]
-					|| (exit.machine_control_flow_flags
-						& ZEND_TPDE_MACHINE_CONTROL_FLOW_GUARDED_COLD) == 0) {
-				continue;
-			}
-			exit.deopt_exit_resume_plus_one = resume + 1;
+		const auto found = landed_resumes.find(position);
+		const bool lands = found != landed_resumes.end()
+			&& (speculated
+				|| generic.instructions[
+						generic.deopt_resume_instructions[found->second]]
+					.record.opcode == exit.record.opcode);
+		if (lands) {
+			exit.deopt_exit_resume_plus_one = found->second + 1;
 			exits = true;
+		} else if (speculated) {
+			specialized.speculation_unsound = true;
 		}
-		if (!exits) {
-			continue;
-		}
+	}
+	if (exits) {
 		require_runtime_helper(&specialized,
 			ZEND_NATIVE_HELPER_DEOPT_TRANSFER);
 	}
-	return true;
 }
 
 void destroy_deopt_landing_adaptor(zend_tpde_plan *plan) {

@@ -67,6 +67,14 @@ bool zend_mir_frontend_fact_payload_for_ssa(
 		? (uint32_t) ssa->vars[ssa_variable_id].definition
 		: (op_array->last == 0 ? ZEND_MIR_ID_INVALID : 0);
 
+	if (ssa->vars[ssa_variable_id].speculated) {
+		/* A long only as the specialized version assumes it. */
+		if (exact_type != ZEND_MIR_SCALAR_TYPE_I64) {
+			return false;
+		}
+		out->flags |= ZEND_MIR_VALUE_FACT_SPECULATED;
+		return true;
+	}
 	if (exact_type == ZEND_MIR_SCALAR_TYPE_I64 && info->has_range
 			&& !info->range.underflow && !info->range.overflow) {
 		if (info->range.min > info->range.max) {

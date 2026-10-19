@@ -440,8 +440,18 @@ void ZendIRAdaptor::freeze_deopt_landing_values(
 		const std::vector<BlockItem<IRInstRef>> &block_instructions,
 		const std::vector<BlockItem<IRValueRef>> &block_phis,
 		uint32_t block_count) {
+	/* A specialized member's operation on a speculated long exits from
+	 * its own node where it would overflow. */
+	auto speculation_exit = [&](const InstNode &current) {
+		return current.kind == InstKind::MIR && !current.synthetic
+			&& current.mir_instruction_index < plan_->instruction_count
+			&& plan_->instructions[current.mir_instruction_index]
+				.deopt_exit_resume_plus_one != 0;
+	};
 	const bool exits = std::ranges::any_of(nodes_,
-		[](const InstNode &current) { return current.deopt_exit; });
+		[&](const InstNode &current) {
+			return current.deopt_exit || speculation_exit(current);
+		});
 	if ((plan_->deopt_resume_count == 0 && !exits) || !valid_
 			|| function_mode_ != FunctionMode::ZendEntry) {
 		return;
@@ -743,6 +753,79 @@ void ZendIRAdaptor::freeze_deopt_landing_values(
 				}
 			}
 			attach_deopt_stores(exit, stores);
+		}
+	}
+	/* A speculation exit inside its block stores the scalars live at its
+	 * node, its operands among them, and available there. */
+	std::vector<uint64_t> live(words);
+	std::vector<uint32_t> defined_at(value_count, UINT32_MAX);
+	for (uint32_t block = 0; block < block_count; ++block) {
+		const std::vector<uint32_t> &nodes_in = block_nodes[block];
+		if (std::ranges::none_of(nodes_in, [&](uint32_t node_index) {
+				return speculation_exit(nodes_[node_index]);
+			})) {
+			continue;
+		}
+		for (uint32_t position = 0; position < nodes_in.size(); ++position) {
+			const InstNode &current = nodes_[nodes_in[position]];
+			if (current.has_result && tracked(current.result)) {
+				defined_at[static_cast<uint32_t>(current.result)] = position;
+			}
+		}
+		std::copy_n(live_out.begin() + uint64_t{block} * words, words,
+			live.begin());
+		for (uint32_t position = static_cast<uint32_t>(nodes_in.size());
+				position-- > 0;) {
+			InstNode &current = nodes_[nodes_in[position]];
+			const bool defines = current.has_result
+				&& tracked(current.result);
+			if (defines) {
+				const uint32_t result = static_cast<uint32_t>(current.result);
+				live[result / 64] &= ~(uint64_t{1} << (result % 64));
+			}
+			/* attach_deopt_stores() appends to the operand table. */
+			const std::vector<IRValueRef> operands{
+				node_operands(current).begin(), node_operands(current).end()};
+			if (speculation_exit(current)) {
+				std::vector<uint64_t> at = live;
+				for (const IRValueRef operand : operands) {
+					if (tracked(operand)) {
+						const uint32_t index = static_cast<uint32_t>(operand);
+						at[index / 64] |= uint64_t{1} << (index % 64);
+					}
+				}
+				std::vector<IRValueRef> stores;
+				for (uint32_t word = 0; word < words; ++word) {
+					for (uint64_t bits = at[word]; bits != 0;
+							bits &= bits - 1) {
+						const uint32_t index = word * 64
+							+ static_cast<uint32_t>(std::countr_zero(bits));
+						if (index >= value_count
+								|| !(defined_at[index] < position
+									|| available_into(block, index))
+								|| !zend_mir_id_is_valid(canonical_storage(
+									IRValueRef{index}))
+								|| !zend_tpde_machine_kind_is_scalar(
+									machine_kind(IRValueRef{index}))) {
+							continue;
+						}
+						stores.push_back(IRValueRef{index});
+					}
+				}
+				attach_deopt_stores(current, stores);
+			}
+			for (const IRValueRef operand : operands) {
+				if (tracked(operand)) {
+					const uint32_t index = static_cast<uint32_t>(operand);
+					live[index / 64] |= uint64_t{1} << (index % 64);
+				}
+			}
+		}
+		for (const uint32_t node_index : nodes_in) {
+			const InstNode &current = nodes_[node_index];
+			if (current.has_result && tracked(current.result)) {
+				defined_at[static_cast<uint32_t>(current.result)] = UINT32_MAX;
+			}
 		}
 	}
 }

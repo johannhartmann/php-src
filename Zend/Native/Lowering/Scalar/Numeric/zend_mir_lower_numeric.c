@@ -40,7 +40,8 @@ static bool zend_mir_numeric_fact_contract_is_valid(
 		ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE
 		| ZEND_MIR_VALUE_FACT_NONZERO
 		| ZEND_MIR_VALUE_FACT_FINITE
-		| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+		| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED
+		| ZEND_MIR_VALUE_FACT_SPECULATED;
 
 	if (fact == NULL || !zend_mir_id_is_valid(fact->value_id)
 			|| !zend_mir_scalar_type_is_exact(fact->exact_type)
@@ -349,7 +350,7 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_operands(
 
 static zend_mir_lowering_status zend_mir_numeric_prepare_arithmetic(
 	uint32_t zend_opcode_number, const zend_mir_value_fact_ref facts[2],
-	zend_mir_numeric_plan *plan, bool typed,
+	zend_mir_numeric_plan *plan, bool typed, bool speculated,
 	zend_mir_lowering_diagnostic_code *diagnostic_out)
 {
 	zend_mir_numeric_range left;
@@ -398,6 +399,24 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_arithmetic(
 		}
 		return ZEND_MIR_LOWERING_SUCCESS;
 	}
+	switch (zend_opcode_number) {
+		case ZEND_MIR_NUMERIC_OPCODE_ADD:
+			plan->opcode = ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW;
+			break;
+		case ZEND_MIR_NUMERIC_OPCODE_SUB:
+			plan->opcode = ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW;
+			break;
+		default:
+			plan->opcode = ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW;
+			break;
+	}
+	plan->representation = ZEND_MIR_REPRESENTATION_I64;
+	/* A specialized version assumes the long its inference narrowed: the
+	 * operation deoptimizes where it would overflow. */
+	if (speculated) {
+		plan->fact_flags |= ZEND_MIR_VALUE_FACT_SPECULATED;
+		return ZEND_MIR_LOWERING_SUCCESS;
+	}
 	if (!zend_mir_numeric_fact_range(&facts[0], &left)
 			|| !zend_mir_numeric_fact_range(&facts[1], &right)) {
 		zend_mir_numeric_set_diagnostic(
@@ -406,17 +425,14 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_arithmetic(
 	}
 	switch (zend_opcode_number) {
 		case ZEND_MIR_NUMERIC_OPCODE_ADD:
-			plan->opcode = ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW;
 			proven = zend_mir_numeric_range_add(
 				left, right, &plan->result_range);
 			break;
 		case ZEND_MIR_NUMERIC_OPCODE_SUB:
-			plan->opcode = ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW;
 			proven = zend_mir_numeric_range_subtract(
 				left, right, &plan->result_range);
 			break;
 		default:
-			plan->opcode = ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW;
 			proven = zend_mir_numeric_range_multiply(
 				left, right, &plan->result_range);
 			break;
@@ -426,7 +442,6 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_arithmetic(
 			diagnostic_out, ZEND_MIRL_MISSING_PROOF);
 		return ZEND_MIR_LOWERING_REJECTED;
 	}
-	plan->representation = ZEND_MIR_REPRESENTATION_I64;
 	plan->fact_flags |= ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE;
 	return ZEND_MIR_LOWERING_SUCCESS;
 }
@@ -446,11 +461,21 @@ static zend_mir_lowering_status zend_mir_numeric_prepare_integer(
 			diagnostic_out, ZEND_MIRL_RUNTIME_EFFECT_DEFERRED);
 		return ZEND_MIR_LOWERING_DEFERRED;
 	}
-	if (!zend_mir_numeric_fact_range(&facts[0], &left)
-			|| !zend_mir_numeric_fact_range(&facts[1], &right)) {
+	if (!zend_mir_numeric_fact_range(&facts[1], &right)) {
 		zend_mir_numeric_set_diagnostic(
 			diagnostic_out, ZEND_MIRL_MISSING_PROOF);
 		return ZEND_MIR_LOWERING_REJECTED;
+	}
+	if (!zend_mir_numeric_fact_range(&facts[0], &left)) {
+		/* A remainder's range follows from the divisor's: a dividend
+		 * without one is any long. */
+		if (zend_opcode_number != ZEND_MIR_NUMERIC_OPCODE_MOD) {
+			zend_mir_numeric_set_diagnostic(
+				diagnostic_out, ZEND_MIRL_MISSING_PROOF);
+			return ZEND_MIR_LOWERING_REJECTED;
+		}
+		left.minimum = INT64_MIN;
+		left.maximum = INT64_MAX;
 	}
 	plan->representation = ZEND_MIR_REPRESENTATION_I64;
 	plan->exact_type = ZEND_MIR_SCALAR_TYPE_I64;
@@ -567,11 +592,20 @@ static zend_mir_lowering_status zend_mir_numeric_build_plan(
 	switch (source_opcode->zend_opcode_number) {
 		case ZEND_MIR_NUMERIC_OPCODE_ADD:
 		case ZEND_MIR_NUMERIC_OPCODE_SUB:
-		case ZEND_MIR_NUMERIC_OPCODE_MUL:
+		case ZEND_MIR_NUMERIC_OPCODE_MUL: {
+			zend_mir_value_fact_ref result_fact;
+
 			status = zend_mir_numeric_prepare_arithmetic(
 				source_opcode->zend_opcode_number, facts, plan,
-				provider_context->typed, diagnostic_out);
+				provider_context->typed,
+				provider_context->value_fact(
+						provider_context->source_context, plan->result_id,
+						&result_fact)
+					&& (result_fact.flags
+						& ZEND_MIR_VALUE_FACT_SPECULATED) != 0,
+				diagnostic_out);
 			break;
+		}
 		case ZEND_MIR_NUMERIC_OPCODE_MOD:
 		case ZEND_MIR_NUMERIC_OPCODE_SL:
 		case ZEND_MIR_NUMERIC_OPCODE_SR:

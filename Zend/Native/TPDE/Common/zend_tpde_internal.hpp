@@ -322,6 +322,9 @@ struct zend_tpde_value {
 	zend_tpde_local_abi_type local_abi;
 	bool register_authoritative;
 	bool canonical_alias_observable;
+	/* A long a specialized version assumes: its definition deoptimizes
+	 * instead of overflowing (ZEND_MIR_VALUE_FACT_SPECULATED). */
+	bool speculated;
 	bool constant;
 	uint64_t constant_bits;
 	bool known_string_literal;
@@ -1094,6 +1097,9 @@ struct zend_tpde_plan {
 	/* See zend_native_component_member.deopt_generic_member_plus_one. */
 	uint32_t deopt_generic_member_plus_one;
 	bool deopt_landings;
+	/* A specialized member with a speculated long whose operation found no
+	 * landing in its generic copy: its entry runs the copy instead. */
+	bool speculation_unsound;
 	/* Tier 2 call counting (zend_native_component_member). */
 	zend_native_entry_cell *call_count_cell;
 	/* Tier-2 argument guards (zend_native_component_member). */

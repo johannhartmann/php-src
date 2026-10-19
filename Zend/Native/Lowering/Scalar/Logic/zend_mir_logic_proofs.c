@@ -36,7 +36,8 @@ static bool zend_mir_logic_fact_valid(
 				ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE
 				| ZEND_MIR_VALUE_FACT_NONZERO
 				| ZEND_MIR_VALUE_FACT_FINITE
-				| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED)) != 0
+				| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED
+				| ZEND_MIR_VALUE_FACT_SPECULATED)) != 0
 			|| fact->provenance < ZEND_MIR_FACT_PROVENANCE_SSA
 			|| fact->provenance >= ZEND_MIR_FACT_PROVENANCE_COUNT) {
 		return false;

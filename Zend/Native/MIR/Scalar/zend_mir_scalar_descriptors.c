@@ -47,7 +47,7 @@ static const zend_mir_scalar_descriptor zend_mir_scalar_descriptors[] = {
 		F64_FINITE_REQ, F64_FINITE_REQ, true, F64_FINITE_REQ,
 		ZEND_MIR_SCALAR_PROOF_NO_OVERFLOW),
 	DESCRIPTOR(ZEND_MIR_OPCODE_I64_MOD_NONZERO, "i64_mod_nonzero", 2,
-		I64_RANGE_REQ,
+		I64_REQ,
 		REQ(ZEND_MIR_REPRESENTATION_I64, ZEND_MIR_SCALAR_TYPE_I64,
 			RANGE_FLAGS | ZEND_MIR_VALUE_FACT_NONZERO),
 		true, I64_RANGE_REQ,
@@ -170,7 +170,8 @@ bool zend_mir_scalar_fact_is_well_formed(const zend_mir_value_fact_ref *fact)
 		ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE
 		| ZEND_MIR_VALUE_FACT_NONZERO
 		| ZEND_MIR_VALUE_FACT_FINITE
-		| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+		| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED
+		| ZEND_MIR_VALUE_FACT_SPECULATED;
 
 	if (fact == NULL || !zend_mir_id_is_valid(fact->value_id)
 			|| !zend_mir_scalar_type_is_exact(fact->exact_type)
@@ -196,6 +197,12 @@ bool zend_mir_scalar_fact_is_well_formed(const zend_mir_value_fact_ref *fact)
 	}
 	if ((fact->flags & ZEND_MIR_VALUE_FACT_FINITE) != 0
 			&& fact->exact_type != ZEND_MIR_SCALAR_TYPE_F64) {
+		return false;
+	}
+	if ((fact->flags & ZEND_MIR_VALUE_FACT_SPECULATED) != 0
+			&& (fact->exact_type != ZEND_MIR_SCALAR_TYPE_I64
+				|| (fact->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE)
+					!= 0)) {
 		return false;
 	}
 	return true;

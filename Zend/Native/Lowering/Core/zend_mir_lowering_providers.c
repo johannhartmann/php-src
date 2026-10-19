@@ -1736,8 +1736,15 @@ static bool zend_mir_typed_arithmetic_operands(
 	}
 	if (result_type != ZEND_MIR_SCALAR_TYPE_I64
 			|| left->exact_type != ZEND_MIR_SCALAR_TYPE_I64
-			|| right->exact_type != ZEND_MIR_SCALAR_TYPE_I64
-			|| (left->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0
+			|| right->exact_type != ZEND_MIR_SCALAR_TYPE_I64) {
+		return false;
+	}
+	/* A specialized version assumes the long: the operation deoptimizes
+	 * where it would overflow. */
+	if (ssa->vars[definition].speculated) {
+		return true;
+	}
+	if ((left->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0
 			|| (right->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0) {
 		return false;
 	}
@@ -1914,6 +1921,37 @@ static bool zend_mir_scalarizable_opcode(
 		case ZEND_MUL:
 			return zend_mir_typed_arithmetic_operands(
 				integration, op_array, ssa, index, &left, &right);
+		case ZEND_BW_AND:
+		case ZEND_BW_OR:
+		case ZEND_BW_XOR:
+			/* Two longs: a long, without failure. */
+			return integration->typed && ssa_op->result_def >= 0
+				&& integration->overlay_inferred_fact_valid[
+					ssa_op->result_def]
+				&& zend_mir_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP1, &left)
+				&& zend_mir_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP2, &right)
+				&& left.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				&& right.exact_type == ZEND_MIR_SCALAR_TYPE_I64;
+		case ZEND_MOD:
+			/* A long remainder of a divisor whose range excludes zero and
+			 * minus one. */
+			return integration->typed && ssa_op->result_def >= 0
+				&& integration->overlay_inferred_fact_valid[
+					ssa_op->result_def]
+				&& zend_mir_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP1, &left)
+				&& zend_mir_opcode_operand_fact(
+					integration, op_array, ssa, index,
+					ZEND_MIR_FRONTEND_OP2, &right)
+				&& left.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				&& right.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				&& (right.flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0
+				&& (right.integer_min > 0 || right.integer_max < -1);
 		case ZEND_IS_IDENTICAL:
 		case ZEND_IS_NOT_IDENTICAL:
 		case ZEND_IS_EQUAL:

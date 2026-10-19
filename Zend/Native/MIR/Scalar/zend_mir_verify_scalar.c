@@ -653,11 +653,16 @@ static bool zend_mir_scalar_result_range_proven(
 				: (uint64_t) (right->integer_max < 0
 					? -right->integer_max : right->integer_max);
 			uint64_t magnitude = a > b ? a : b;
+			/* A dividend without a range is any long. */
+			const bool ranged =
+				(left->flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) != 0;
+			const int64_t dividend_min = ranged ? left->integer_min : INT64_MIN;
+			const int64_t dividend_max = ranged ? left->integer_max : INT64_MAX;
 
 			if (right->integer_min <= 0 && right->integer_max >= 0) {
 				return false;
 			}
-			if (left->integer_min == INT64_MIN
+			if (dividend_min == INT64_MIN
 					&& right->integer_min <= -1
 					&& right->integer_max >= -1) {
 				return false;
@@ -665,10 +670,10 @@ static bool zend_mir_scalar_result_range_proven(
 			maximum = magnitude > (uint64_t) INT64_MAX
 				? INT64_MAX : (int64_t) magnitude - 1;
 			minimum = -maximum;
-			if (left->integer_min >= 0) {
+			if (dividend_min >= 0) {
 				minimum = 0;
 			}
-			if (left->integer_max <= 0) {
+			if (dividend_max <= 0) {
 				maximum = 0;
 			}
 			return zend_mir_scalar_range_contains(result, minimum, maximum);
@@ -768,6 +773,28 @@ static void zend_mir_scalar_verify_instruction(
 			ZEND_MIR_ID_INVALID,
 			"scalar instruction source or frame requirement is violated");
 	}
+	/* A long a specialized version assumes needs no range: its operation
+	 * deoptimizes instead of overflowing. */
+	zend_mir_scalar_value_requirement requirements[
+		ZEND_MIR_SCALAR_MAX_OPERANDS + 1] = {
+		descriptor->operands[0], descriptor->operands[1],
+		descriptor->result};
+	const zend_mir_value_fact_ref *speculated_fact =
+		descriptor->has_result
+			&& (instruction->opcode == ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+				|| instruction->opcode == ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW
+				|| instruction->opcode == ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW)
+		? zend_mir_scalar_find_fact(context, instruction->result_id)
+		: NULL;
+	const bool speculated = speculated_fact != NULL
+		&& (speculated_fact->flags & ZEND_MIR_VALUE_FACT_SPECULATED) != 0;
+	if (speculated) {
+		for (index = 0; index <= ZEND_MIR_SCALAR_MAX_OPERANDS; index++) {
+			requirements[index].required_flags &=
+				~(zend_mir_value_fact_flags)
+					ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE;
+		}
+	}
 	operand_count = context->view->instruction_operand_count(
 		context->view->context, instruction->id);
 	if (operand_count != descriptor->operand_count) {
@@ -798,7 +825,7 @@ static void zend_mir_scalar_verify_instruction(
 				ZEND_MIR_DIAGNOSTIC_INVALID_VALUE_FACT, instruction,
 				operand_id, "scalar operand has no value fact");
 		} else if (!zend_mir_scalar_requirement_matches(
-				&descriptor->operands[index], value, operand_facts[index])) {
+				&requirements[index], value, operand_facts[index])) {
 			zend_mir_scalar_verify_emit(context,
 				value != NULL && value->ownership
 						!= descriptor->operands[index].ownership
@@ -826,7 +853,8 @@ static void zend_mir_scalar_verify_instruction(
 		} else if (instruction->representation
 					!= descriptor->result.representation
 				|| !zend_mir_scalar_requirement_matches(
-					&descriptor->result, result, result_fact)) {
+					&requirements[ZEND_MIR_SCALAR_MAX_OPERANDS], result,
+					result_fact)) {
 			zend_mir_scalar_verify_emit(context,
 				result != NULL && result->ownership
 						!= descriptor->result.ownership
@@ -848,7 +876,7 @@ static void zend_mir_scalar_verify_instruction(
 			ZEND_MIR_DIAGNOSTIC_INVALID_OPCODE, instruction,
 			instruction->result_id, "scalar drop must not define a result");
 	}
-	if (result_valid
+	if (result_valid && !speculated
 			&& (descriptor->proofs
 				& (ZEND_MIR_SCALAR_PROOF_NO_OVERFLOW
 					| ZEND_MIR_SCALAR_PROOF_NONZERO_DIVISOR

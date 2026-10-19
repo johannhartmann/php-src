@@ -118,6 +118,10 @@ typedef struct _zend_ssa_var {
 	 * reached a catch block, where it may hold any value: see
 	 * zend_ssa_unknown_cv(). */
 	bool                   after_exception : 1;
+	/* A version the native engine's specialized code assumes to be a long:
+	 * the operation that defines it leaves for the generic code instead of
+	 * overflowing to a double. */
+	bool                   speculated : 1;
 } zend_ssa_var;
 
 typedef struct _zend_ssa_var_info {

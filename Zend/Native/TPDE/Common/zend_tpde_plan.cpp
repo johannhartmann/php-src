@@ -1535,6 +1535,8 @@ static bool freeze_value_facts(plan_builder &builder) {
 		int32_t index = zend_tpde_value_index(plan, fact.value_id);
 		if (index >= 0 && zend_mir_scalar_type_is_exact(fact.exact_type)) {
 			plan->values[index].exact_type = fact.exact_type;
+			plan->values[index].speculated =
+				(fact.flags & ZEND_MIR_VALUE_FACT_SPECULATED) != 0;
 		}
 	}
 	std::vector<uint8_t> register_definitions(plan->value_count, 0);

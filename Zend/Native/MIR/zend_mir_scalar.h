@@ -38,7 +38,10 @@ enum {
 	ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE = UINT32_C(1) << 0,
 	ZEND_MIR_VALUE_FACT_NONZERO = UINT32_C(1) << 1,
 	ZEND_MIR_VALUE_FACT_FINITE = UINT32_C(1) << 2,
-	ZEND_MIR_VALUE_FACT_NON_REFCOUNTED = UINT32_C(1) << 3
+	ZEND_MIR_VALUE_FACT_NON_REFCOUNTED = UINT32_C(1) << 3,
+	/* A long a specialized version assumes: the operation that defines it
+	 * deoptimizes instead of overflowing, so it needs no range proof. */
+	ZEND_MIR_VALUE_FACT_SPECULATED = UINT32_C(1) << 4
 };
 
 /*

@@ -102,6 +102,9 @@ class ZendCompilerX64 final
 	std::optional<tpde::Label> catch_dispatch_label_;
 	/* The zero-status exit of a typed body that may fail. */
 	std::optional<tpde::Label> typed_failure_label_;
+	/* The return of a specialized member's speculation exits, with the
+	 * generic copy's status in EAX. */
+	std::optional<tpde::Label> speculation_return_label_;
 	uint32_t current_continuation_block_ = UINT32_MAX;
 	bool continuation_edge_emitted_ = false;
 	/* The fast node of a deoptimization exit: TPDE compiles the exit's
@@ -428,6 +431,134 @@ class ZendCompilerX64 final
 		return_builder.add(std::move(status), tpde::CCAssignment{});
 		return_builder.ret();
 		release_spilled_regs(spilled);
+		return true;
+	}
+
+	/*
+	 * A speculation exit of a specialized member, a terminal stub where an
+	 * operation on a speculated long would overflow: store the scalars live
+	 * at the operation (Adaptor attaches them) from where TPDE holds them,
+	 * hand the frame to the generic copy before the operation and return
+	 * its status. Raw stores and calls only: the stub leaves TPDE's state
+	 * as the operation has it.
+	 */
+	bool emit_speculation_exit(IRInstRef instruction) {
+		const Adaptor::InstNode &node = ir().node(instruction);
+		const zend_tpde_plan *plan = ir().plan();
+		const zend_tpde_instruction &mir = ir().mir_instruction(instruction);
+		const uint32_t generic = plan->deopt_generic_member_plus_one;
+		const uint32_t position = mir.record.source_position_id;
+		if (generic == 0 || generic - 1 >= this->func_syms.size()
+				|| position == UINT32_MAX
+				|| mir.deopt_exit_resume_plus_one == 0
+				|| (node.deopt_store_count != 0
+					&& node.deopt_store_operand_index + node.deopt_store_count
+						> node.liveness_operands.size())) {
+			return false;
+		}
+		const auto frame_assignment = val_assignment(
+			adaptor->val_local_idx(IRValueRef{Adaptor::FRAME_VALUE}));
+		if (frame_assignment == nullptr
+				|| !tpde::AssignmentPartRef{frame_assignment, 0}
+					.register_valid()) {
+			return false;
+		}
+		const AsmReg frame_reg{tpde::AssignmentPartRef{frame_assignment, 0}
+			.get_reg()};
+		/* A scratch register no stored value occupies. */
+		uint64_t occupied = uint64_t{1} << frame_reg.id();
+		struct Store {
+			AsmReg reg;
+			int32_t stack_offset;
+			int32_t slot_offset;
+			zend_tpde_machine_value_kind kind;
+		};
+		std::vector<Store> stores;
+		for (uint32_t index = 0; index < node.deopt_store_count; ++index) {
+			const IRValueRef value = node.liveness_operands[
+				node.deopt_store_operand_index + index];
+			auto *assignment = val_assignment(adaptor->val_local_idx(value));
+			const uint64_t slot = frame_slot_offset(
+				ir().canonical_storage(value));
+			if (assignment == nullptr) {
+				continue;
+			}
+			tpde::AssignmentPartRef location{assignment, 0};
+			if (slot > INT32_MAX - sizeof(zval)
+					|| location.variable_ref()
+					|| (!location.register_valid()
+						&& !location.stack_valid())) {
+				return false;
+			}
+			Store store{AsmReg::make_invalid(), 0,
+				static_cast<int32_t>(slot), ir().machine_kind(value)};
+			if (location.register_valid()) {
+				store.reg = AsmReg{location.get_reg()};
+				occupied |= uint64_t{1} << store.reg.id();
+			} else {
+				store.stack_offset = location.frame_off();
+			}
+			stores.push_back(store);
+		}
+		AsmReg scratch = AsmReg::make_invalid();
+		for (const AsmReg candidate : {AsmReg{AsmReg::AX},
+				AsmReg{AsmReg::CX}, AsmReg{AsmReg::DX}, AsmReg{AsmReg::SI},
+				AsmReg{AsmReg::DI}, AsmReg{AsmReg::R8}, AsmReg{AsmReg::R9},
+				AsmReg{AsmReg::R10}, AsmReg{AsmReg::R11}}) {
+			if (((occupied >> candidate.id()) & 1) == 0) {
+				scratch = candidate;
+				break;
+			}
+		}
+		if (!scratch.valid()) {
+			return false;
+		}
+		for (const Store &store : stores) {
+			const auto payload = FE_MEM(frame_reg, 0, FE_NOREG,
+				store.slot_offset);
+			const auto type_info = FE_MEM(frame_reg, 0, FE_NOREG,
+				store.slot_offset
+					+ static_cast<int32_t>(offsetof(zval, u1.type_info)));
+			AsmReg source = store.reg;
+			if (!source.valid()) {
+				ASM(MOV64rm, scratch,
+					FE_MEM(FE_BP, 0, FE_NOREG, store.stack_offset));
+				source = scratch;
+			}
+			switch (store.kind) {
+				case ZEND_TPDE_MACHINE_VALUE_I64:
+					ASM(MOV64mr, payload, source);
+					ASM(MOV32mi, type_info, IS_LONG);
+					break;
+				case ZEND_TPDE_MACHINE_VALUE_F64:
+					if (source.id() >= AsmReg::XMM0) {
+						ASM(SSE_MOVSDmr, payload, source);
+					} else {
+						ASM(MOV64mr, payload, source);
+					}
+					ASM(MOV32mi, type_info, IS_DOUBLE);
+					break;
+				case ZEND_TPDE_MACHINE_VALUE_BOOL:
+					static_assert(IS_TRUE == IS_FALSE + 1);
+					ASM(MOVZXr32r8, scratch, source);
+					ASM(ADD32ri, scratch, IS_FALSE);
+					ASM(MOV32mr, type_info, scratch);
+					break;
+				default:
+					return false;
+			}
+		}
+		this->stack.generated_call = true;
+		if (frame_reg != AsmReg{AsmReg::DI}) {
+			ASM(MOV64rr, FE_DI, frame_reg);
+		}
+		ASM(MOV32ri, FE_SI, static_cast<int32_t>(position));
+		emit_symbol_address(AsmReg{AsmReg::DX}, this->func_syms[generic - 1]);
+		emit_symbol_call(runtime_symbol(ZEND_NATIVE_HELPER_DEOPT_TRANSFER));
+		if (!speculation_return_label_.has_value()) {
+			speculation_return_label_ = text_writer.label_create();
+		}
+		generate_raw_jump(Jump::jmp, *speculation_return_label_);
 		return true;
 	}
 
@@ -3641,7 +3772,7 @@ public:
 	 */
 	bool cur_func_may_emit_calls() const {
 		return adaptor->cur_func_may_emit_calls() || has_entry_variant()
-			|| has_entry_typed_body();
+			|| has_entry_typed_body() || has_entry_generic_trampoline();
 	}
 	tpde::SymRef cur_personality_func() const { return {}; }
 	/*
@@ -3963,6 +4094,7 @@ public:
 		user_opcode_result_reload_labels_.clear();
 		catch_dispatch_label_.reset();
 		typed_failure_label_.reset();
+		speculation_return_label_.reset();
 		/* A typed body returns doubles in XMM0 and XMM1. A value fixed there
 		 * across blocks would block the result registers at a RETURN. */
 		this->fixed_assignment_nonallocatable_mask |=
@@ -3974,6 +4106,7 @@ public:
 		layout_start_function(index);
 		entry_variant_dispatch_pending_ = has_entry_variant();
 		entry_typed_body_dispatch_pending_ = has_entry_typed_body();
+		entry_generic_trampoline_pending_ = has_entry_generic_trampoline();
 		if (!ir().typed_body() && ir().plan() != nullptr
 				&& ir().plan()->fast_call_eligible) {
 			emit_fast_call_entry(index);
@@ -4885,6 +5018,37 @@ public:
 	 * status. The variant runs the whole body; the general entry continues
 	 * only for other argument types.
 	 */
+	/* A specialized member whose speculation found no landing runs its
+	 * generic copy on the same frame. */
+	bool entry_generic_trampoline_pending_ = false;
+	bool has_entry_generic_trampoline() const {
+		const zend_tpde_plan *plan = ir().plan();
+		return !ir().typed_body() && plan != nullptr
+			&& plan->speculation_unsound
+			&& plan->deopt_generic_member_plus_one != 0;
+	}
+	bool emit_entry_generic_trampoline() {
+		const zend_tpde_plan *plan = ir().plan();
+		if (plan->deopt_generic_member_plus_one - 1
+				>= this->func_syms.size()
+				|| register_file.is_used(
+					tpde::x64::AsmReg{tpde::x64::AsmReg::AX})) {
+			return false;
+		}
+		/* Before the first instruction only the prologue has run: RDI and
+		 * RSI still hold the entry's frame and execution context. */
+		this->stack.generated_call = true;
+		emit_symbol_call(
+			this->func_syms[plan->deopt_generic_member_plus_one - 1]);
+		ScratchReg status_scratch{this};
+		status_scratch.alloc_specific(tpde::x64::AsmReg{tpde::x64::AsmReg::AX});
+		ValuePart status{tpde::x64::PlatformConfig::GP_BANK, 4};
+		status.set_value(this, std::move(status_scratch));
+		RetBuilder return_builder{*this, *cur_cc_assigner()};
+		return_builder.add(std::move(status), tpde::CCAssignment{});
+		return_builder.ret_local_path();
+		return true;
+	}
 	bool entry_variant_dispatch_pending_ = false;
 	bool has_entry_variant() const {
 		const zend_tpde_plan *plan = ir().plan();
@@ -5141,8 +5305,13 @@ public:
 	}
 	void finish_func(uint32_t index) {
 		/* Rare exits: in the cold area, so the epilogue follows the hot code. */
-		if (typed_failure_label_.has_value() || catch_dispatch_label_.has_value()) {
+		if (typed_failure_label_.has_value() || catch_dispatch_label_.has_value()
+				|| speculation_return_label_.has_value()) {
 			text_writer.begin_cold_area();
+		}
+		if (speculation_return_label_.has_value()) {
+			label_place(*speculation_return_label_);
+			gen_func_epilog();
 		}
 		if (typed_failure_label_.has_value()) {
 			label_place(*typed_failure_label_);
@@ -5879,7 +6048,8 @@ public:
 	int typed_long_binary(LongBinaryContext &lb, NumericBinary &nb);
 	bool typed_bitwise_binary(const Adaptor::InstNode &node, uint32_t opcode);
 	bool register_long_binary(const Adaptor::InstNode &node, uint32_t opcode,
-		bool overflow_fails);
+		bool overflow_fails, IRInstRef speculation_exit = IRInstRef{UINT32_MAX});
+	bool compile_speculated_long_binary(InstContext &ctx);
 	int known_double_binary(LongBinaryContext &lb, NumericBinary &nb);
 	int general_numeric_binary(LongBinaryContext &lb, NumericBinary &nb);
 	bool register_long_binary(LongBinaryContext &lb);
@@ -16641,7 +16811,10 @@ int ZendCompilerX64::numeric_framed_binary(LongBinaryContext &lb) {
  * otherwise.
  */
 bool ZendCompilerX64::register_long_binary(const Adaptor::InstNode &node,
-		uint32_t opcode, bool overflow_fails) {
+		uint32_t opcode, bool overflow_fails, IRInstRef speculation_exit) {
+	/* An exit stores the operands as they were: the result takes its own
+	 * register. */
+	const bool exits = speculation_exit != IRInstRef{UINT32_MAX};
 	const bool commutative = opcode != ZEND_SUB;
 	auto immediate_of = [](const ValuePart &value, int32_t *immediate) {
 		if (!value.is_const()) {
@@ -16665,7 +16838,8 @@ bool ZendCompilerX64::register_long_binary(const Adaptor::InstNode &node,
 		? AsmReg::make_invalid() : source.load_to_reg();
 	const AsmReg target_reg = target.load_to_reg();
 	auto [result_ref, result] = result_ref_single(node.result);
-	const AsmReg result_reg = result.alloc_try_reuse(target);
+	const AsmReg result_reg =
+		exits ? result.alloc_reg() : result.alloc_try_reuse(target);
 	if (result_reg != target_reg) {
 		mov(result_reg, target_reg, 8);
 	}
@@ -16696,7 +16870,18 @@ bool ZendCompilerX64::register_long_binary(const Adaptor::InstNode &node,
 			break;
 	}
 	if (!zend_tpde_numeric_bitwise(opcode)) {
-		if (overflow_fails) {
+		if (exits) {
+			/* Zend continues an overflowing long in double: the
+			 * specialized version leaves for its generic copy. */
+			auto exit = text_writer.label_create();
+			generate_raw_jump(Jump::jo, exit);
+			cold_begin();
+			label_place(exit);
+			if (!emit_speculation_exit(speculation_exit)) {
+				return false;
+			}
+			cold_end();
+		} else if (overflow_fails) {
 			/* Zend continues an overflowing long in double: the body
 			 * fails and the call runs again through its Zend entry. */
 			generate_raw_jump(Jump::jo, typed_failure_label());
@@ -26718,10 +26903,54 @@ bool ZendCompilerX64::compile_interrupt_poll(InstContext &ctx) {
 	return true;
 }
 
+/*
+ * ADD, SUB or MUL of a long a specialized version assumes (Zend narrowed
+ * it behind the operation's deoptimization exit): where it would overflow,
+ * a typed body fails and a Zend entry leaves for its generic copy.
+ */
+bool ZendCompilerX64::compile_speculated_long_binary(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const uint32_t opcode =
+		ctx.record.opcode == ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW ? ZEND_ADD
+		: ctx.record.opcode == ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW ? ZEND_SUB
+		: ZEND_MUL;
+	if (!node.has_result || node.operands.size() != 2) {
+		return false;
+	}
+	if (ir().typed_body()) {
+		return register_long_binary(node, opcode, true);
+	}
+	if (ctx.mir->deopt_exit_resume_plus_one == 0) {
+		/* Without a landing the member's entry runs its generic copy
+		 * (speculation_unsound): this code is never reached. */
+		return ir().plan()->speculation_unsound
+			&& register_long_binary(node, opcode, false);
+	}
+	if (!register_long_binary(node, opcode, false, ctx.instruction)) {
+		return false;
+	}
+	/* The exit stub stored them: their uses end here. */
+	for (uint32_t index = 0; index < node.deopt_store_count; ++index) {
+		auto consumed = val_ref(node.liveness_operands[
+			node.deopt_store_operand_index + index]);
+		(void) consumed;
+	}
+	return true;
+}
+
 /* The scalar machine operations on integers, booleans and doubles. */
 bool ZendCompilerX64::compile_scalar_operation(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_mir_instruction_record &record = ctx.record;
+	if (record.opcode == ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+			|| record.opcode == ZEND_MIR_OPCODE_I64_SUB_NO_OVERFLOW
+			|| record.opcode == ZEND_MIR_OPCODE_I64_MUL_NO_OVERFLOW) {
+		const int32_t result =
+			zend_tpde_value_index(ir().plan(), record.result_id);
+		if (result >= 0 && ir().plan()->values[result].speculated) {
+			return compile_speculated_long_binary(ctx);
+		}
+	}
 	switch (record.opcode) {
 		case ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW:
 			return encode_binary(ctx, [&](auto &&left, auto &&right, auto &&result) {
@@ -26949,7 +27178,12 @@ bool ZendCompilerX64::compile_inst_impl(
 	} else if (!emit_materializations(instruction)) {
 		return false;
 	}
-	if (!emit_deopt_stores(instruction)) {
+	/* A speculation exit stores from its own out-of-line stub. */
+	if (!(node.kind == Adaptor::InstKind::MIR && !node.synthetic
+				&& !ir().typed_body()
+				&& ir().mir_instruction(instruction).deopt_exit_resume_plus_one
+					!= 0)
+			&& !emit_deopt_stores(instruction)) {
 		return false;
 	}
 	if (node.kind == Adaptor::InstKind::GuardedFast) {
@@ -27141,6 +27375,12 @@ bool ZendCompilerX64::compile_inst(
 	if (entry_variant_dispatch_pending_) {
 		entry_variant_dispatch_pending_ = false;
 		if (!emit_entry_variant_dispatch()) {
+			return false;
+		}
+	}
+	if (entry_generic_trampoline_pending_) {
+		entry_generic_trampoline_pending_ = false;
+		if (!emit_entry_generic_trampoline()) {
 			return false;
 		}
 	}

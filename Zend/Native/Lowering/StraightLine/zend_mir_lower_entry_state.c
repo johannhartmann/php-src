@@ -110,7 +110,8 @@ bool zend_mir_straight_line_value_contract_is_valid(
 		ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE
 		| ZEND_MIR_VALUE_FACT_NONZERO
 		| ZEND_MIR_VALUE_FACT_FINITE
-		| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED;
+		| ZEND_MIR_VALUE_FACT_NON_REFCOUNTED
+		| ZEND_MIR_VALUE_FACT_SPECULATED;
 
 	if (value == NULL || !zend_mir_id_is_valid(value->value_id)
 			|| (value->ownership != ZEND_MIR_OWNERSHIP_STATE_BORROWED
