@@ -105,8 +105,11 @@ typedef struct _zend_native_compiled_function {
 	uint32_t deopt_generic_plus_one;
 	uint32_t deopt_generic_of_plus_one;
 	/* The specialized version's SSA narrows types behind deoptimization
-	 * exits (zend_native_compiler_speculate()): it needs its generic copy. */
+	 * exits (zend_native_compiler_speculate()): it needs its generic copy.
+	 * A main script's also assumes the types of its CVs at entry, a
+	 * zend_native_arg_guard code per CV that its entry checks. */
 	bool speculated;
+	uint8_t *speculation_cv_guards;
 	/*
 	 * Tier 2 (ADR 0025 section 4): a hot function recompiles from a private
 	 * op array copy as its own component; the function's entry cell then
@@ -1166,8 +1169,6 @@ static bool zend_native_compiler_speculates(
 		&& function->variant_plus_one == 0
 		&& function->deopt_generic_plus_one == 0
 		&& op_array->type == ZEND_USER_FUNCTION
-		/* A file's main code runs once per inclusion. */
-		&& op_array->function_name != NULL
 		&& (op_array->fn_flags & ZEND_ACC_GENERATOR) == 0;
 }
 
@@ -1222,6 +1223,12 @@ static uint8_t *zend_native_compiler_landable_oplines(
 	return landable;
 }
 
+static bool zend_native_compiler_speculated_incdec(uint8_t opcode)
+{
+	return opcode == ZEND_PRE_INC || opcode == ZEND_POST_INC
+		|| opcode == ZEND_PRE_DEC || opcode == ZEND_POST_DEC;
+}
+
 /* Whether an operand may be a long or a double, and nothing else. */
 static bool zend_native_compiler_number_operand(
 	const zend_op_array *op_array, const zend_ssa *ssa,
@@ -1249,7 +1256,8 @@ static bool zend_native_compiler_number_operand(
  */
 static void zend_native_compiler_narrow_uses(
 	zend_native_compiler *compiler, zend_native_compiled_function *function,
-	int *worklist, uint8_t *queued, uint32_t pending)
+	const uint8_t *frozen, const zend_op **ssa_opcodes, int *worklist,
+	uint8_t *queued, uint32_t pending)
 {
 	const zend_op_array *op_array = function->op_array;
 	zend_ssa *ssa = &function->ssa;
@@ -1282,19 +1290,24 @@ static void zend_native_compiler_narrow_uses(
 				before[def] = defs[def] >= 0
 					? ssa->var_info[defs[def]].type : 0;
 			}
+			/* Main code's CVs lose the reference bit their entry no longer
+			 * has: ssa_opcodes, the identity, lets Zend's inference change
+			 * it. */
 			for (def = 0; def < 6; def++) {
 				if (defs[def] >= 0) {
-					ssa->var_info[defs[def]].type &= MAY_BE_REF;
+					ssa->var_info[defs[def]].type &=
+						ssa_opcodes != NULL ? 0 : MAY_BE_REF;
 				}
 			}
 			zend_update_type_info(op_array, ssa, compiler->script,
-				&op_array->opcodes[use], ssa_op, NULL,
+				&op_array->opcodes[use], ssa_op, ssa_opcodes,
 				ZEND_OPTIMIZER_PASS_6);
 			for (def = 0; def < 6; def++) {
 				if (defs[def] < 0) {
 					continue;
 				}
-				if (ssa->vars[defs[def]].speculated) {
+				if (ssa->vars[defs[def]].speculated
+						|| (frozen != NULL && frozen[defs[def]])) {
 					ssa->var_info[defs[def]].type = before[def];
 					continue;
 				}
@@ -1329,6 +1342,9 @@ static void zend_native_compiler_narrow_uses(
 			}
 			merged &= ssa->var_info[target].type
 				| ~(uint32_t) (MAY_BE_ANY | MAY_BE_REF);
+			if (frozen != NULL && frozen[target]) {
+				continue;
+			}
 			if (merged != ssa->var_info[target].type) {
 				ssa->var_info[target].type = merged;
 				ssa->var_info[target].has_range = 0;
@@ -1341,20 +1357,566 @@ static void zend_native_compiler_narrow_uses(
 	}
 }
 
+/* The type bits of an operand that decide whether reading it can warn
+ * or run user code. */
+static uint32_t zend_native_compiler_main_operand(const zend_op_array *op_array,
+	const zend_ssa *ssa, const zend_op *opline, uint8_t type, znode_op operand,
+	int use)
+{
+	if (type == IS_UNUSED) {
+		return 0;
+	}
+	if (type == IS_CONST) {
+		return _const_op_type(RT_CONSTANT(opline, operand));
+	}
+	return use >= 0
+		? ssa->var_info[use].type & (MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF)
+		: MAY_BE_ANY | MAY_BE_UNDEF | MAY_BE_REF;
+}
+
+/*
+ * Internal functions that run no user code and emit no diagnostic for
+ * numbers: 1 + whether every argument must be a long, or 0.
+ */
+static uint32_t zend_native_compiler_quiet_function(const zend_string *name)
+{
+	static const char *const numbers[] = {
+		"abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh",
+		"ceil", "cos", "cosh", "deg2rad", "exp", "expm1", "floor", "fmod",
+		"hypot", "is_finite", "is_infinite", "is_nan", "log10", "log1p",
+		"max", "min", "pi", "rad2deg", "round", "sin", "sinh", "sqrt", "tan",
+		"tanh"};
+	static const char *const longs[] = {"intdiv"};
+
+	for (size_t index = 0; index < sizeof(numbers) / sizeof(*numbers);
+			index++) {
+		if (zend_string_equals_cstr(name, numbers[index],
+				strlen(numbers[index]))) {
+			return 1;
+		}
+	}
+	for (size_t index = 0; index < sizeof(longs) / sizeof(*longs); index++) {
+		if (zend_string_equals_cstr(name, longs[index],
+				strlen(longs[index]))) {
+			return 2;
+		}
+	}
+	return 0;
+}
+
+static bool zend_native_compiler_main_quiet(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t index);
+
+/*
+ * A DO_ICALL of main code that runs no user code: a call to a quiet
+ * internal function (zend_native_compiler_quiet_function()) with numbers
+ * sent by value, while no interrupt function can run user code after it.
+ */
+static bool zend_native_compiler_main_quiet_call(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t index)
+{
+	uint32_t depth = 0;
+	uint32_t init = index;
+	uint32_t kind;
+	const zval *name;
+	const zend_function *function;
+
+	if (zend_interrupt_function != NULL) {
+		return false;
+	}
+	while (init-- > 0) {
+		const uint8_t opcode = op_array->opcodes[init].opcode;
+
+		if (opcode == ZEND_DO_FCALL || opcode == ZEND_DO_ICALL
+				|| opcode == ZEND_DO_UCALL || opcode == ZEND_DO_FCALL_BY_NAME
+				|| opcode == ZEND_CALLABLE_CONVERT
+				|| opcode == ZEND_CALLABLE_CONVERT_PARTIAL) {
+			depth++;
+		} else if (opcode == ZEND_INIT_FCALL
+				|| opcode == ZEND_INIT_FCALL_BY_NAME
+				|| opcode == ZEND_INIT_NS_FCALL_BY_NAME
+				|| opcode == ZEND_INIT_DYNAMIC_CALL
+				|| opcode == ZEND_INIT_USER_CALL
+				|| opcode == ZEND_INIT_METHOD_CALL
+				|| opcode == ZEND_INIT_STATIC_METHOD_CALL
+				|| opcode == ZEND_INIT_PARENT_PROPERTY_HOOK_CALL
+				|| opcode == ZEND_NEW) {
+			if (depth == 0) {
+				break;
+			}
+			depth--;
+		}
+	}
+	if (init >= index || op_array->opcodes[init].opcode != ZEND_INIT_FCALL
+			|| op_array->opcodes[init].op2_type != IS_CONST) {
+		return false;
+	}
+	name = RT_CONSTANT(&op_array->opcodes[init], op_array->opcodes[init].op2);
+	function = Z_TYPE_P(name) == IS_STRING
+		? zend_hash_find_ptr(EG(function_table), Z_STR_P(name)) : NULL;
+	kind = function != NULL && function->type == ZEND_INTERNAL_FUNCTION
+		? zend_native_compiler_quiet_function(Z_STR_P(name)) : 0;
+	if (kind == 0) {
+		return false;
+	}
+	for (uint32_t send = init + 1; send < index; send++) {
+		const zend_op *opline = &op_array->opcodes[send];
+		const uint32_t type = zend_native_compiler_main_operand(op_array,
+			ssa, opline, opline->op1_type, opline->op1,
+			ssa->ops[send].op1_use);
+
+		if (opline->opcode != ZEND_SEND_VAL
+				&& opline->opcode != ZEND_SEND_VAR) {
+			/* Only the arguments' own computations lie between. */
+			if (!zend_native_compiler_main_quiet(op_array, ssa, send)) {
+				return false;
+			}
+			continue;
+		}
+		if (opline->op2_type == IS_CONST
+				|| (type & ~(kind == 2 ? (uint32_t) MAY_BE_LONG
+					: (uint32_t) (MAY_BE_LONG | MAY_BE_DOUBLE))) != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
+ * Whether an opline of main code runs no user code and emits no diagnostic
+ * with its operands' current types: no error handler, destructor, output
+ * handler or magic method can change a global there.
+ */
+static bool zend_native_compiler_main_quiet(
+	const zend_op_array *op_array, const zend_ssa *ssa, uint32_t index)
+{
+	const zend_op *opline = &op_array->opcodes[index];
+	const zend_ssa_op *ssa_op = &ssa->ops[index];
+	const uint32_t scalar = MAY_BE_NULL | MAY_BE_FALSE | MAY_BE_TRUE
+		| MAY_BE_LONG | MAY_BE_DOUBLE;
+	const uint32_t number = MAY_BE_LONG | MAY_BE_DOUBLE;
+	const uint32_t t1 = zend_native_compiler_main_operand(op_array, ssa,
+		opline, opline->op1_type, opline->op1, ssa_op->op1_use);
+	const uint32_t t2 = zend_native_compiler_main_operand(op_array, ssa,
+		opline, opline->op2_type, opline->op2, ssa_op->op2_use);
+
+	switch (opline->opcode) {
+		case ZEND_NOP:
+		case ZEND_JMP:
+		case ZEND_ISSET_ISEMPTY_CV:
+		case ZEND_RETURN:
+			return true;
+		case ZEND_ADD:
+		case ZEND_SUB:
+		case ZEND_MUL:
+		case ZEND_DIV:
+			return (t1 & ~number) == 0 && (t2 & ~number) == 0;
+		case ZEND_MOD:
+		case ZEND_BW_AND:
+		case ZEND_BW_OR:
+		case ZEND_BW_XOR:
+		case ZEND_SL:
+		case ZEND_SR:
+			/* A double operand converts with a deprecation. */
+			return (t1 & ~MAY_BE_LONG) == 0 && (t2 & ~MAY_BE_LONG) == 0;
+		case ZEND_IS_EQUAL:
+		case ZEND_IS_NOT_EQUAL:
+		case ZEND_IS_IDENTICAL:
+		case ZEND_IS_NOT_IDENTICAL:
+		case ZEND_IS_SMALLER:
+		case ZEND_IS_SMALLER_OR_EQUAL:
+			return (t1 & ~scalar) == 0 && (t2 & ~scalar) == 0;
+		case ZEND_PRE_INC:
+		case ZEND_POST_INC:
+		case ZEND_PRE_DEC:
+		case ZEND_POST_DEC:
+		case ZEND_CAST:
+			return (t1 & ~number) == 0
+				&& (opline->opcode != ZEND_CAST
+					|| opline->extended_value == IS_LONG
+					|| opline->extended_value == IS_DOUBLE
+					|| opline->extended_value == _IS_BOOL);
+		case ZEND_ASSIGN:
+			/* The old value is released without a destructor. */
+			return opline->op1_type == IS_CV
+				&& (t1 & ~(scalar | MAY_BE_STRING | MAY_BE_UNDEF)) == 0
+				&& (t2 & MAY_BE_UNDEF) == 0;
+		case ZEND_ASSIGN_OP:
+			if (opline->op1_type != IS_CV) {
+				return false;
+			}
+			switch (opline->extended_value) {
+				case ZEND_ADD:
+				case ZEND_SUB:
+				case ZEND_MUL:
+				case ZEND_DIV:
+					return (t1 & ~number) == 0 && (t2 & ~number) == 0;
+				case ZEND_MOD:
+				case ZEND_BW_AND:
+				case ZEND_BW_OR:
+				case ZEND_BW_XOR:
+				case ZEND_SL:
+				case ZEND_SR:
+					return (t1 & ~MAY_BE_LONG) == 0
+						&& (t2 & ~MAY_BE_LONG) == 0;
+				default:
+					return false;
+			}
+		case ZEND_QM_ASSIGN:
+		case ZEND_TYPE_CHECK:
+			return (t1 & MAY_BE_UNDEF) == 0;
+		case ZEND_JMPZ:
+		case ZEND_JMPNZ:
+		case ZEND_JMPZ_EX:
+		case ZEND_JMPNZ_EX:
+		case ZEND_BOOL:
+		case ZEND_BOOL_NOT:
+		case ZEND_FREE:
+			return (t1 & ~(scalar | MAY_BE_STRING)) == 0;
+		case ZEND_INIT_FCALL:
+			/* Its DO_ICALL decides. */
+			return true;
+		case ZEND_SEND_VAL:
+		case ZEND_SEND_VAR:
+			return (t1 & MAY_BE_UNDEF) == 0;
+		case ZEND_DO_ICALL:
+			return zend_native_compiler_main_quiet_call(op_array, ssa, index);
+		default:
+			return false;
+	}
+}
+
+/*
+ * Whether a call, include or other boundary can change the global behind
+ * SSA version variable before one of its uses: one lies on a path from the
+ * definition to a use (to the end of each predecessor whose phi edge reads
+ * it), the boundary defines the version, or a boundary reads it besides
+ * another operand, which user code may change between the two reads.
+ */
+static bool zend_native_compiler_crosses_boundary(
+	const zend_op_array *op_array, const zend_ssa *ssa,
+	const uint8_t *boundary, int variable, uint8_t *live_in,
+	uint32_t *stack_blocks, uint32_t *stack_ends, uint32_t capacity)
+{
+	const zend_cfg *cfg = &ssa->cfg;
+	const zend_ssa_var *var = &ssa->vars[variable];
+	uint32_t pending = 0;
+	int def_block;
+	uint32_t def_start;
+	bool crosses = false;
+
+	if (var->definition >= 0) {
+		if (boundary[var->definition]) {
+			return true;
+		}
+		def_block = cfg->map[var->definition];
+		def_start = (uint32_t) var->definition + 1;
+	} else if (var->definition_phi != NULL) {
+		def_block = var->definition_phi->block;
+		def_start = cfg->blocks[def_block].start;
+	} else {
+		def_block = 0;
+		def_start = 0;
+	}
+	memset(live_in, 0, cfg->blocks_count);
+#define ZN_PUSH(block, end) do { \
+		if (pending < capacity) { \
+			stack_blocks[pending] = (uint32_t) (block); \
+			stack_ends[pending++] = (uint32_t) (end); \
+		} else { \
+			crosses = true; \
+		} \
+	} while (0)
+	for (int use = var->use_chain; use >= 0 && !crosses;
+			use = zend_ssa_next_use(ssa->ops, variable, use)) {
+		const zend_ssa_op *ssa_op = &ssa->ops[use];
+		const bool data = (uint32_t) use + 1 < op_array->last
+			&& op_array->opcodes[use + 1].opcode == ZEND_OP_DATA;
+
+		if (boundary[use] && (data
+				|| (ssa_op->op1_use >= 0 && ssa_op->op2_use >= 0)
+				|| op_array->opcodes[use].opcode == ZEND_OP_DATA)) {
+			crosses = true;
+		}
+		ZN_PUSH(cfg->map[use], use);
+	}
+	for (zend_ssa_phi *phi = var->phi_use_chain; phi != NULL;
+			phi = zend_ssa_next_use_phi(ssa, variable, phi)) {
+		const zend_basic_block *target = &cfg->blocks[phi->block];
+
+		for (int source = 0; source < target->predecessors_count; source++) {
+			const int predecessor =
+				cfg->predecessors[target->predecessor_offset + source];
+
+			if (phi->sources[source] == variable) {
+				ZN_PUSH(predecessor, cfg->blocks[predecessor].start
+					+ cfg->blocks[predecessor].len);
+			}
+		}
+	}
+	while (pending != 0 && !crosses) {
+		const uint32_t block = stack_blocks[--pending];
+		const uint32_t end = stack_ends[pending];
+		const zend_basic_block *current = &cfg->blocks[block];
+		const uint32_t start = (int) block == def_block
+			? def_start : current->start;
+
+		for (uint32_t opline = start; opline < end && !crosses; opline++) {
+			crosses = boundary[opline] != 0;
+		}
+		if ((int) block == def_block || live_in[block]) {
+			continue;
+		}
+		live_in[block] = 1;
+		for (int source = 0; source < current->predecessors_count; source++) {
+			const int predecessor =
+				cfg->predecessors[current->predecessor_offset + source];
+
+			ZN_PUSH(predecessor, cfg->blocks[predecessor].start
+				+ cfg->blocks[predecessor].len);
+		}
+	}
+#undef ZN_PUSH
+	return crosses;
+}
+
+/* The zend_native_arg_guard code and inferred type of a global's value. */
+static uint8_t zend_native_compiler_main_entry_guard(
+	const zval *value, uint32_t *type)
+{
+	if (value == NULL) {
+		*type = MAY_BE_UNDEF;
+		return ZEND_NATIVE_ARG_GUARD_UNDEF;
+	}
+	switch (Z_TYPE_P(value)) {
+		case IS_UNDEF:
+			*type = MAY_BE_UNDEF;
+			return ZEND_NATIVE_ARG_GUARD_UNDEF;
+		case IS_NULL:
+			*type = MAY_BE_NULL;
+			return ZEND_NATIVE_ARG_GUARD_NULL;
+		case IS_FALSE:
+		case IS_TRUE:
+			*type = MAY_BE_BOOL;
+			return ZEND_NATIVE_ARG_GUARD_BOOL;
+		case IS_LONG:
+			*type = MAY_BE_LONG;
+			return ZEND_NATIVE_ARG_GUARD_LONG;
+		case IS_DOUBLE:
+			*type = MAY_BE_DOUBLE;
+			return ZEND_NATIVE_ARG_GUARD_DOUBLE;
+		default:
+			return ZEND_NATIVE_ARG_GUARD_NONE;
+	}
+}
+
+/*
+ * Infers main code's types again from its entry versions, from nothing up
+ * (a loop's phi would otherwise keep the type its back edge had before):
+ * every other version starts empty and grows to a fixpoint. Ranges stay:
+ * Zend inferred them for any entry value.
+ */
+static void zend_native_compiler_main_infer(zend_native_compiler *compiler,
+	zend_native_compiled_function *function, const uint32_t *original,
+	const zend_op **ssa_opcodes)
+{
+	const zend_op_array *op_array = function->op_array;
+	zend_ssa *ssa = &function->ssa;
+	bool changed = true;
+
+	for (int variable = op_array->last_var; variable < ssa->vars_count;
+			variable++) {
+		const zend_ssa_var *var = &ssa->vars[variable];
+
+		ssa->var_info[variable].type =
+			var->definition < 0 && var->definition_phi == NULL
+				? original[variable] : 0;
+	}
+	while (changed) {
+		changed = false;
+		for (int block = 0; block < ssa->cfg.blocks_count; block++) {
+			const zend_basic_block *current = &ssa->cfg.blocks[block];
+
+			if ((current->flags & ZEND_BB_REACHABLE) == 0) {
+				continue;
+			}
+			for (zend_ssa_phi *phi = ssa->blocks[block].phis; phi != NULL;
+					phi = phi->next) {
+				const int target = phi->ssa_var;
+				uint32_t merged = 0;
+
+				if (phi->pi >= 0) {
+					merged = ssa->var_info[phi->sources[0]].type;
+					if (!phi->has_range_constraint) {
+						merged &= phi->constraint.type.type_mask;
+					}
+				} else {
+					for (int source = 0;
+							source < current->predecessors_count; source++) {
+						if (phi->sources[source] >= 0) {
+							merged |=
+								ssa->var_info[phi->sources[source]].type;
+						}
+					}
+				}
+				merged &= original[target];
+				if ((ssa->var_info[target].type | merged)
+						!= ssa->var_info[target].type) {
+					ssa->var_info[target].type |= merged;
+					changed = true;
+				}
+			}
+			for (uint32_t index = current->start;
+					index < current->start + current->len; index++) {
+				const zend_op *opline = &op_array->opcodes[index];
+				zend_ssa_op *ssa_op = &ssa->ops[index];
+				/* An operation with OP_DATA also defines that opline's. */
+				const zend_ssa_op *data_op = index + 1 < op_array->last
+						&& opline[1].opcode == ZEND_OP_DATA
+					? &ssa->ops[index + 1] : NULL;
+				const int defs[6] = {
+					ssa_op->result_def, ssa_op->op1_def, ssa_op->op2_def,
+					data_op ? data_op->result_def : -1,
+					data_op ? data_op->op1_def : -1,
+					data_op ? data_op->op2_def : -1};
+				uint32_t before[6];
+
+				if (opline->opcode == ZEND_OP_DATA) {
+					continue;
+				}
+				for (int def = 0; def < 6; def++) {
+					if (defs[def] >= 0) {
+						before[def] = ssa->var_info[defs[def]].type;
+						ssa->var_info[defs[def]].type = 0;
+					}
+				}
+				zend_update_type_info(op_array, ssa, compiler->script,
+					(zend_op *) opline, ssa_op, ssa_opcodes,
+					ZEND_OPTIMIZER_PASS_6);
+				for (int def = 0; def < 6; def++) {
+					uint32_t type;
+
+					if (defs[def] < 0) {
+						continue;
+					}
+					type = before[def] | (ssa->var_info[defs[def]].type
+						& original[defs[def]]);
+					changed = changed || type != before[def];
+					ssa->var_info[defs[def]].type = type;
+				}
+			}
+		}
+	}
+}
+
+/* Main code whose globals a specialized version may assume: no variable
+ * accessed by name, no try (a catch reads globals a callee in the try may
+ * have changed), no alias. */
+static bool zend_native_compiler_main_speculates(
+	const zend_op_array *op_array, const zend_ssa *ssa)
+{
+	if (op_array->function_name != NULL || op_array->last_var == 0
+			|| op_array->last_try_catch != 0
+			|| (ssa->cfg.flags & ZEND_FUNC_INDIRECT_VAR_ACCESS) != 0) {
+		return false;
+	}
+	for (int variable = 0; variable < ssa->vars_count; variable++) {
+		if (ssa->vars[variable].alias != NO_ALIAS) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
+ * Main code's CVs are the script's globals: Zend's inference leaves them
+ * any type, possibly references. A specialized main assumes at entry the
+ * scalar type each global holds while it compiles, or at least no
+ * reference, for the CVs no boundary separates from a use of any of their
+ * versions (zend_native_compiler_crosses_boundary()). frozen marks the
+ * versions of the other CVs: their entry keeps Zend's type (original),
+ * possibly a reference, so that every version is one as in Zend's
+ * inference. guards receive the zend_native_arg_guard per CV the entry
+ * checks. Returns whether any version narrowed.
+ */
+static bool zend_native_compiler_speculate_main_entry(
+	zend_native_compiler *compiler, zend_native_compiled_function *function,
+	const uint8_t *boundary, const uint32_t *original, uint8_t *frozen,
+	const zend_op **ssa_opcodes, uint8_t *guards)
+{
+	const zend_op_array *op_array = function->op_array;
+	zend_ssa *ssa = &function->ssa;
+	uint8_t *live_in = ecalloc(ssa->cfg.blocks_count + 1, 1);
+	/* Every block once, and each use or phi edge of the version. */
+	const uint32_t capacity = (uint32_t) ssa->cfg.blocks_count * 2
+		+ op_array->last * 3 + 1;
+	uint32_t *stack_blocks = safe_emalloc(capacity, sizeof(uint32_t), 0);
+	uint32_t *stack_ends = safe_emalloc(capacity, sizeof(uint32_t), 0);
+	bool narrowed = false;
+
+	memset(frozen, 0, ssa->vars_count);
+	for (int variable = 0; variable < ssa->vars_count; variable++) {
+		const int cv = ssa->vars[variable].var;
+
+		if (cv < op_array->last_var && !frozen[cv]
+				&& zend_native_compiler_crosses_boundary(op_array, ssa,
+					boundary, variable, live_in, stack_blocks, stack_ends,
+					capacity)) {
+			frozen[cv] = 1;
+		}
+	}
+	for (int variable = op_array->last_var; variable < ssa->vars_count;
+			variable++) {
+		const int cv = ssa->vars[variable].var;
+
+		frozen[variable] = cv < op_array->last_var && frozen[cv];
+	}
+	for (uint32_t cv = 0; cv < (uint32_t) op_array->last_var; cv++) {
+		zval *value;
+		uint32_t type = 0;
+
+		guards[cv] = ZEND_NATIVE_ARG_GUARD_NONE;
+		if (frozen[cv]) {
+			continue;
+		}
+		value = zend_hash_find(&EG(symbol_table), op_array->vars[cv]);
+		if (value != NULL && Z_TYPE_P(value) == IS_INDIRECT) {
+			value = Z_INDIRECT_P(value);
+		}
+		guards[cv] = zend_native_compiler_main_entry_guard(value, &type);
+		if (guards[cv] == ZEND_NATIVE_ARG_GUARD_NONE) {
+			guards[cv] = ZEND_NATIVE_ARG_GUARD_NOT_REFERENCE;
+			type = ssa->var_info[cv].type & ~(uint32_t) MAY_BE_REF;
+		}
+		ssa->var_info[cv].type = type;
+		ssa->var_info[cv].has_range = 0;
+		narrowed = true;
+	}
+	zend_native_compiler_main_infer(
+		compiler, function, original, ssa_opcodes);
+	efree(stack_ends);
+	efree(stack_blocks);
+	efree(live_in);
+	return narrowed;
+}
+
 /*
  * Narrows the inferred types of a specialized version (ADR 0025 section 4)
- * behind deoptimization exits: ADD, SUB and MUL of two longs whose result
- * may overflow into a double yield a long, and the operation leaves for
- * the generic copy where it would overflow; an operation inside a pending
- * call has no landing and stays general. Loop-carried values make the
- * operands of one operation depend on its own result: every candidate is
- * assumed first, the narrowed types flow into the operations and phis
- * that use them, and a candidate whose operands then are not both longs
- * gives up its assumption, until the assumptions hold. Returns whether
- * anything was narrowed.
+ * behind deoptimization exits: ADD, SUB and MUL of two longs and ++ and --
+ * of a long whose result may overflow into a double yield a long, and the
+ * operation leaves for the generic copy where it would overflow; an
+ * operation inside a pending call has no landing and stays general.
+ * Loop-carried values make the operands of one operation depend on its own
+ * result: every candidate is assumed first, the narrowed types flow into
+ * the operations and phis that use them, and a candidate whose operands
+ * then are not both longs gives up its assumption, until the assumptions
+ * hold. frozen versions keep their types. Returns whether anything was
+ * narrowed.
  */
-static bool zend_native_compiler_speculate(
-	zend_native_compiler *compiler, zend_native_compiled_function *function)
+static bool zend_native_compiler_speculate_longs(
+	zend_native_compiler *compiler, zend_native_compiled_function *function,
+	const uint8_t *frozen, const zend_op **ssa_opcodes, int *worklist,
+	uint8_t *queued)
 {
 	const zend_op_array *op_array = function->op_array;
 	zend_ssa *ssa = &function->ssa;
@@ -1362,15 +1924,9 @@ static bool zend_native_compiler_speculate(
 	uint8_t *candidates;
 	uint32_t *original;
 	uint8_t *original_range;
-	int *worklist;
-	uint8_t *queued;
 	bool speculated = false;
 	bool changed = true;
 
-	if (ssa->var_info == NULL || ssa->ops == NULL || ssa->vars_count == 0
-			|| op_array->last == 0) {
-		return false;
-	}
 	landable = zend_native_compiler_landable_oplines(op_array);
 	candidates = ecalloc(op_array->last, 1);
 	for (uint32_t index = 0; index < op_array->last; index++) {
@@ -1378,10 +1934,23 @@ static bool zend_native_compiler_speculate(
 		const zend_ssa_op *ssa_op = &ssa->ops[index];
 		const int result = ssa_op->result_def;
 
+		if (zend_native_compiler_speculated_incdec(opline->opcode)) {
+			/* ++ and -- of a CV define its new version. */
+			candidates[index] = landable[index] && ssa_op->op1_def >= 0
+				&& (frozen == NULL || !frozen[ssa_op->op1_def])
+				&& opline->op1_type == IS_CV
+				&& (ssa->var_info[ssa_op->op1_def].type
+						& (MAY_BE_LONG | MAY_BE_DOUBLE))
+					== (MAY_BE_LONG | MAY_BE_DOUBLE)
+				&& zend_native_compiler_number_operand(op_array, ssa,
+					opline, opline->op1_type, opline->op1, ssa_op->op1_use);
+			continue;
+		}
 		candidates[index] = (opline->opcode == ZEND_ADD
 				|| opline->opcode == ZEND_SUB
 				|| opline->opcode == ZEND_MUL)
 			&& landable[index] && result >= 0
+			&& (frozen == NULL || !frozen[result])
 			&& (ssa->var_info[result].type & (MAY_BE_LONG | MAY_BE_DOUBLE))
 				== (MAY_BE_LONG | MAY_BE_DOUBLE)
 			&& zend_native_compiler_number_operand(op_array, ssa, opline,
@@ -1395,8 +1964,6 @@ static bool zend_native_compiler_speculate(
 		original[variable] = ssa->var_info[variable].type;
 		original_range[variable] = ssa->var_info[variable].has_range;
 	}
-	worklist = safe_emalloc(ssa->vars_count, sizeof(int), 0);
-	queued = ecalloc(ssa->vars_count, 1);
 	while (changed) {
 		uint32_t pending = 0;
 
@@ -1408,22 +1975,37 @@ static bool zend_native_compiler_speculate(
 			ssa->vars[variable].speculated = 0;
 		}
 		for (uint32_t index = 0; index < op_array->last; index++) {
-			const int result = ssa->ops[index].result_def;
+			const zend_ssa_op *ssa_op = &ssa->ops[index];
+			const bool incdec = zend_native_compiler_speculated_incdec(
+				op_array->opcodes[index].opcode);
+			/* A pre-form's result is the new value too. */
+			const int defs[2] = {
+				incdec ? ssa_op->op1_def : ssa_op->result_def,
+				incdec && (op_array->opcodes[index].opcode == ZEND_PRE_INC
+						|| op_array->opcodes[index].opcode == ZEND_PRE_DEC)
+					? ssa_op->result_def : -1};
 
 			if (!candidates[index]) {
 				continue;
 			}
-			ssa->var_info[result].type &= ~(uint32_t) MAY_BE_DOUBLE;
-			ssa->var_info[result].has_range = 0;
-			ssa->vars[result].speculated = 1;
-			speculated = true;
-			if (!queued[result]) {
-				queued[result] = 1;
-				worklist[pending++] = result;
+			for (int def = 0; def < 2; def++) {
+				const int result = defs[def];
+
+				if (result < 0) {
+					continue;
+				}
+				ssa->var_info[result].type &= ~(uint32_t) MAY_BE_DOUBLE;
+				ssa->var_info[result].has_range = 0;
+				ssa->vars[result].speculated = 1;
+				if (!queued[result]) {
+					queued[result] = 1;
+					worklist[pending++] = result;
+				}
 			}
+			speculated = true;
 		}
-		zend_native_compiler_narrow_uses(
-			compiler, function, worklist, queued, pending);
+		zend_native_compiler_narrow_uses(compiler, function, frozen,
+			ssa_opcodes, worklist, queued, pending);
 		for (uint32_t index = 0; index < op_array->last; index++) {
 			const zend_op *opline = &op_array->opcodes[index];
 			const zend_ssa_op *ssa_op = &ssa->ops[index];
@@ -1432,21 +2014,102 @@ static bool zend_native_compiler_speculate(
 					&& (!zend_native_compiler_long_operand(op_array, ssa,
 							opline, opline->op1_type, opline->op1,
 							ssa_op->op1_use)
-						|| !zend_native_compiler_long_operand(op_array, ssa,
-							opline, opline->op2_type, opline->op2,
-							ssa_op->op2_use))) {
+						|| (!zend_native_compiler_speculated_incdec(
+								opline->opcode)
+							&& !zend_native_compiler_long_operand(op_array,
+								ssa, opline, opline->op2_type, opline->op2,
+								ssa_op->op2_use)))) {
 				candidates[index] = 0;
 				changed = true;
 			}
 		}
 	}
-	efree(queued);
-	efree(worklist);
 	efree(original_range);
 	efree(original);
 	efree(candidates);
 	efree(landable);
 	return speculated;
+}
+
+static bool zend_native_compiler_speculate(
+	zend_native_compiler *compiler, zend_native_compiled_function *function)
+{
+	const zend_op_array *op_array = function->op_array;
+	zend_ssa *ssa = &function->ssa;
+	uint8_t *frozen = NULL;
+	uint8_t *boundary = NULL;
+	uint32_t *original = NULL;
+	uint8_t *original_range = NULL;
+	const zend_op **ssa_opcodes = NULL;
+	int *worklist;
+	uint8_t *queued;
+	bool speculated = false;
+	bool main_narrowed = false;
+	bool again = true;
+
+	if (ssa->var_info == NULL || ssa->ops == NULL || ssa->vars_count == 0
+			|| op_array->last == 0) {
+		return false;
+	}
+	worklist = safe_emalloc(ssa->vars_count, sizeof(int), 0);
+	queued = ecalloc(ssa->vars_count, 1);
+	if (zend_native_compiler_main_speculates(op_array, ssa)) {
+		frozen = ecalloc(ssa->vars_count, 1);
+		boundary = ecalloc(op_array->last, 1);
+		original = safe_emalloc(ssa->vars_count, sizeof(uint32_t), 0);
+		original_range = safe_emalloc(ssa->vars_count, 1, 0);
+		for (int variable = 0; variable < ssa->vars_count; variable++) {
+			original[variable] = ssa->var_info[variable].type;
+			original_range[variable] = ssa->var_info[variable].has_range;
+		}
+		ssa_opcodes = safe_emalloc(op_array->last, sizeof(*ssa_opcodes), 0);
+		for (uint32_t index = 0; index < op_array->last; index++) {
+			ssa_opcodes[index] = &op_array->opcodes[index];
+		}
+		function->speculation_cv_guards = zend_native_compiler_alloc(
+			compiler, op_array->last_var, true);
+	}
+	/* Main code: every opline that is not quiet with the narrowed and
+	 * speculated types is a boundary, found by iterating to a fixpoint
+	 * from none. */
+	while (again) {
+		again = false;
+		if (frozen != NULL) {
+			for (int variable = 0; variable < ssa->vars_count; variable++) {
+				ssa->var_info[variable].type = original[variable];
+				ssa->var_info[variable].has_range = original_range[variable];
+				ssa->vars[variable].speculated = 0;
+			}
+			main_narrowed = zend_native_compiler_speculate_main_entry(
+				compiler, function, boundary, original, frozen, ssa_opcodes,
+				function->speculation_cv_guards);
+		}
+		speculated = zend_native_compiler_speculate_longs(
+			compiler, function, frozen, ssa_opcodes, worklist, queued);
+		for (uint32_t index = 0; frozen != NULL && index < op_array->last;
+				index++) {
+			if (!boundary[index]
+					&& !zend_native_compiler_main_quiet(op_array, ssa, index)) {
+				boundary[index] = 1;
+				again = true;
+			}
+		}
+	}
+	for (int variable = 0; frozen != NULL && variable < ssa->vars_count;
+			variable++) {
+		ssa->vars[variable].private_global =
+			ssa->vars[variable].var < op_array->last_var && !frozen[variable];
+	}
+	efree(queued);
+	efree(worklist);
+	if (frozen != NULL) {
+		efree(ssa_opcodes);
+		efree(original_range);
+		efree(original);
+		efree(boundary);
+		efree(frozen);
+	}
+	return speculated || main_narrowed;
 }
 
 /* A function whose specialized version narrows types behind exits: one
@@ -3710,6 +4373,11 @@ static bool zend_native_compiler_prepare_component_member(
 	memcpy(member->backend.tier2_arg_guards, function->tier2_arg_guards,
 		sizeof(function->tier2_arg_guards));
 	member->backend.tier2_fallback_entry = function->tier2_fallback_entry;
+	member->backend.speculation_cv_guards = function->speculated
+		? function->speculation_cv_guards : NULL;
+	member->backend.speculation_cv_guard_count =
+		function->speculated && function->speculation_cv_guards != NULL
+			? (uint32_t) function->op_array->last_var : 0;
 	return true;
 }
 
@@ -6787,6 +7455,8 @@ static void zend_native_compiler_release_function_transients(
 	function->call_target_count = 0;
 	function->call_site_count = 0;
 	function->call_sites_indexed = false;
+	zend_native_compiler_free(compiler, function->speculation_cv_guards);
+	function->speculation_cv_guards = NULL;
 }
 
 void zend_native_compiler_release_ready_transients(

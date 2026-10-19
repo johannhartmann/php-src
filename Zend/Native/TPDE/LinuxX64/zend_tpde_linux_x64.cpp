@@ -434,9 +434,15 @@ class ZendCompilerX64 final
 		return true;
 	}
 
+	static bool interrupt_poll(const zend_tpde_instruction &mir) {
+		return mir.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+			&& (mir.record.effects & ZEND_MIR_EFFECT_MASK(
+				ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0;
+	}
 	/*
 	 * A speculation exit of a specialized member, a terminal stub where an
-	 * operation on a speculated long would overflow: store the scalars live
+	 * operation on a speculated long would overflow (or a main script's
+	 * interrupt is pending): store the scalars live
 	 * at the operation (Adaptor attaches them) from where TPDE holds them,
 	 * hand the frame to the generic copy before the operation and return
 	 * its status. Raw stores and calls only: the stub leaves TPDE's state
@@ -447,7 +453,9 @@ class ZendCompilerX64 final
 		const zend_tpde_plan *plan = ir().plan();
 		const zend_tpde_instruction &mir = ir().mir_instruction(instruction);
 		const uint32_t generic = plan->deopt_generic_member_plus_one;
-		const uint32_t position = mir.record.source_position_id;
+		/* An interrupt poll resumes where its frame continues. */
+		const uint32_t position = interrupt_poll(mir)
+			? mir.source_opline_index : mir.record.source_position_id;
 		if (generic == 0 || generic - 1 >= this->func_syms.size()
 				|| position == UINT32_MAX
 				|| mir.deopt_exit_resume_plus_one == 0
@@ -3772,7 +3780,8 @@ public:
 	 */
 	bool cur_func_may_emit_calls() const {
 		return adaptor->cur_func_may_emit_calls() || has_entry_variant()
-			|| has_entry_typed_body() || has_entry_generic_trampoline();
+			|| has_entry_typed_body() || has_entry_generic_trampoline()
+			|| has_entry_cv_guards();
 	}
 	tpde::SymRef cur_personality_func() const { return {}; }
 	/*
@@ -4107,6 +4116,7 @@ public:
 		entry_variant_dispatch_pending_ = has_entry_variant();
 		entry_typed_body_dispatch_pending_ = has_entry_typed_body();
 		entry_generic_trampoline_pending_ = has_entry_generic_trampoline();
+		entry_cv_guards_pending_ = has_entry_cv_guards();
 		if (!ir().typed_body() && ir().plan() != nullptr
 				&& ir().plan()->fast_call_eligible) {
 			emit_fast_call_entry(index);
@@ -5027,7 +5037,83 @@ public:
 			&& plan->speculation_unsound
 			&& plan->deopt_generic_member_plus_one != 0;
 	}
-	bool emit_entry_generic_trampoline() {
+	/*
+	 * A specialized member's assumptions on its frame at entry
+	 * (speculation_cv_guards): a CV of another type runs the generic copy.
+	 */
+	bool entry_cv_guards_pending_ = false;
+	bool has_entry_cv_guards() const {
+		const zend_tpde_plan *plan = ir().plan();
+		return !ir().typed_body() && plan != nullptr
+			&& !plan->speculation_unsound
+			&& plan->deopt_generic_member_plus_one != 0
+			&& plan->speculation_cv_guards != nullptr
+			&& plan->speculation_cv_guard_count != 0;
+	}
+	bool emit_entry_cv_guards() {
+		const zend_tpde_plan *plan = ir().plan();
+		if (register_file.is_used(tpde::x64::AsmReg{tpde::x64::AsmReg::AX})) {
+			return false;
+		}
+		auto generic = text_writer.label_create();
+		/* Before the first instruction only the prologue has run: RDI and
+		 * RSI still hold the entry's frame and execution context. */
+		for (uint32_t index = 0; index < plan->speculation_cv_guard_count;
+				++index) {
+			const uint8_t guard = plan->speculation_cv_guards[index];
+			const int32_t type_offset = static_cast<int32_t>(
+				(ZEND_CALL_FRAME_SLOT + index) * sizeof(zval)
+					+ offsetof(zval, u1.v.type));
+			const auto type = FE_MEM(FE_DI, 0, FE_NOREG, type_offset);
+			uint8_t exact = 0;
+			switch (guard) {
+				case ZEND_NATIVE_ARG_GUARD_NONE:
+					continue;
+				case ZEND_NATIVE_ARG_GUARD_LONG: exact = IS_LONG; break;
+				case ZEND_NATIVE_ARG_GUARD_DOUBLE: exact = IS_DOUBLE; break;
+				case ZEND_NATIVE_ARG_GUARD_STRING: exact = IS_STRING; break;
+				case ZEND_NATIVE_ARG_GUARD_ARRAY: exact = IS_ARRAY; break;
+				case ZEND_NATIVE_ARG_GUARD_OBJECT: exact = IS_OBJECT; break;
+				case ZEND_NATIVE_ARG_GUARD_NULL: exact = IS_NULL; break;
+				case ZEND_NATIVE_ARG_GUARD_UNDEF: exact = IS_UNDEF; break;
+				case ZEND_NATIVE_ARG_GUARD_NOT_REFERENCE:
+					ASM(CMP8mi, type, IS_REFERENCE);
+					generate_raw_jump(Jump::je, generic);
+					continue;
+				case ZEND_NATIVE_ARG_GUARD_BOOL:
+					static_assert(IS_TRUE == IS_FALSE + 1);
+					ASM(MOVZXr32m8, FE_AX, type);
+					ASM(SUB32ri, FE_AX, IS_FALSE);
+					ASM(CMP32ri, FE_AX, IS_TRUE - IS_FALSE);
+					generate_raw_jump(Jump::ja, generic);
+					continue;
+				default:
+					return false;
+			}
+			ASM(CMP8mi, type, exact);
+			generate_raw_jump(Jump::jne, generic);
+		}
+		auto passed = text_writer.label_create();
+		const bool cold = !text_writer.in_cold_area();
+		if (cold) {
+			cold_begin();
+		} else {
+			generate_raw_jump(Jump::jmp, passed);
+		}
+		label_place(generic);
+		if (!emit_generic_copy_tail()) {
+			return false;
+		}
+		if (cold) {
+			cold_end();
+		}
+		label_place(passed);
+		return true;
+	}
+	/* Run the generic copy on this entry's frame and return its status;
+	 * before the first instruction RDI and RSI still hold the frame and
+	 * execution context. */
+	bool emit_generic_copy_tail() {
 		const zend_tpde_plan *plan = ir().plan();
 		if (plan->deopt_generic_member_plus_one - 1
 				>= this->func_syms.size()
@@ -5035,8 +5121,6 @@ public:
 					tpde::x64::AsmReg{tpde::x64::AsmReg::AX})) {
 			return false;
 		}
-		/* Before the first instruction only the prologue has run: RDI and
-		 * RSI still hold the entry's frame and execution context. */
 		this->stack.generated_call = true;
 		emit_symbol_call(
 			this->func_syms[plan->deopt_generic_member_plus_one - 1]);
@@ -5048,6 +5132,10 @@ public:
 		return_builder.add(std::move(status), tpde::CCAssignment{});
 		return_builder.ret_local_path();
 		return true;
+	}
+	bool emit_entry_generic_trampoline() {
+		/* Before the first instruction only the prologue has run. */
+		return emit_generic_copy_tail();
 	}
 	bool entry_variant_dispatch_pending_ = false;
 	bool has_entry_variant() const {
@@ -26851,6 +26939,48 @@ bool ZendCompilerX64::compile_interrupt_poll(InstContext &ctx) {
 			|| mir.source_opline_index == UINT32_MAX) {
 		return false;
 	}
+	if (mir.deopt_exit_resume_plus_one != 0) {
+		/* A specialized main script assumes its globals: a pending
+		 * interrupt, whose handler may change them, leaves for the generic
+		 * copy, which handles it at its next poll. */
+		auto exit = text_writer.label_create();
+		{
+			auto [context_ref, context] = val_ref_single(node.operands[1]);
+			const AsmReg context_reg = context.load_to_reg();
+			ScratchReg pending{this};
+			auto pending_reg = pending.alloc_gp();
+			ASM(MOV64rm, pending_reg,
+				FE_MEM(context_reg, 0, FE_NOREG,
+					static_cast<int32_t>(offsetof(
+						zend_native_execution_context, vm_interrupt))));
+			ASM(CMP8mi, FE_MEM(pending_reg, 0, FE_NOREG, 0), 0);
+			generate_raw_jump(Jump::jne, exit);
+		}
+		auto passed = text_writer.label_create();
+		const bool cold = !text_writer.in_cold_area();
+		if (cold) {
+			cold_begin();
+		} else {
+			generate_raw_jump(Jump::jmp, passed);
+		}
+		label_place(exit);
+		if (!emit_speculation_exit(instruction)) {
+			return false;
+		}
+		if (cold) {
+			cold_end();
+		}
+		label_place(passed);
+		auto frame = val_ref(node.operands[0]);
+		(void) frame;
+		consume_materializations(instruction);
+		for (uint32_t index = 0; index < node.deopt_store_count; ++index) {
+			auto consumed = val_ref(node.liveness_operands[
+				node.deopt_store_operand_index + index]);
+			(void) consumed;
+		}
+		return true;
+	}
 	/*
 	 * The poll's fast/slow branch is invisible to TPDE's CFG, and
 	 * the slow path's call clobbers caller-saved assignments: live
@@ -27381,6 +27511,12 @@ bool ZendCompilerX64::compile_inst(
 	if (entry_generic_trampoline_pending_) {
 		entry_generic_trampoline_pending_ = false;
 		if (!emit_entry_generic_trampoline()) {
+			return false;
+		}
+	}
+	if (entry_cv_guards_pending_) {
+		entry_cv_guards_pending_ = false;
+		if (!emit_entry_cv_guards()) {
 			return false;
 		}
 	}

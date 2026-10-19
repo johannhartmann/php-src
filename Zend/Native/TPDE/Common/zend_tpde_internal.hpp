@@ -1104,6 +1104,9 @@ struct zend_tpde_plan {
 	zend_native_entry_cell *call_count_cell;
 	/* Tier-2 argument guards (zend_native_component_member). */
 	uint8_t tier2_arg_guards[ZEND_NATIVE_TIER2_ARG_GUARDS];
+	/* zend_native_component_member::speculation_cv_guards, borrowed. */
+	const uint8_t *speculation_cv_guards;
+	uint32_t speculation_cv_guard_count;
 	const void *tier2_fallback_entry;
 	/* The resume IDs are deoptimization stress targets. */
 	bool deopt_stress;

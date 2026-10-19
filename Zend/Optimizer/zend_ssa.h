@@ -122,6 +122,10 @@ typedef struct _zend_ssa_var {
 	 * the operation that defines it leaves for the generic code instead of
 	 * overflowing to a double. */
 	bool                   speculated : 1;
+	/* A CV version of main code that the native engine's specialized code
+	 * keeps to itself: no call, include or other user code runs between
+	 * its definition and its uses. */
+	bool                   private_global : 1;
 } zend_ssa_var;
 
 typedef struct _zend_ssa_var_info {

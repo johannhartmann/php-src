@@ -181,7 +181,11 @@ typedef enum _zend_native_arg_guard {
 	ZEND_NATIVE_ARG_GUARD_BOOL,
 	ZEND_NATIVE_ARG_GUARD_STRING,
 	ZEND_NATIVE_ARG_GUARD_ARRAY,
-	ZEND_NATIVE_ARG_GUARD_OBJECT
+	ZEND_NATIVE_ARG_GUARD_OBJECT,
+	/* Frame assumptions of a specialized member's entry. */
+	ZEND_NATIVE_ARG_GUARD_NULL,
+	ZEND_NATIVE_ARG_GUARD_UNDEF,
+	ZEND_NATIVE_ARG_GUARD_NOT_REFERENCE
 } zend_native_arg_guard;
 
 /*
@@ -220,6 +224,11 @@ typedef struct _zend_native_component_member {
 	 * which runs a frame whose arguments the guards reject. */
 	uint8_t tier2_arg_guards[ZEND_NATIVE_TIER2_ARG_GUARDS];
 	const void *tier2_fallback_entry;
+	/* A specialized member's assumptions on its frame at entry, a
+	 * zend_native_arg_guard code per CV, or NULL: when one fails, the
+	 * Zend entry runs the generic copy instead. */
+	const uint8_t *speculation_cv_guards;
+	uint32_t speculation_cv_guard_count;
 } zend_native_component_member;
 
 /*

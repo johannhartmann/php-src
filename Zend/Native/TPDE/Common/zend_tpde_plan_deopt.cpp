@@ -1486,6 +1486,21 @@ void freeze_member_deopt_exits(
 		const uint32_t position = exit.record.source_position_id;
 		const bool first = position != previous_position;
 		previous_position = position;
+		if (specialized.speculation_cv_guards != nullptr
+				&& exit.record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+				&& (exit.record.effects & ZEND_MIR_EFFECT_MASK(
+					ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)) != 0) {
+			/* A specialized main script's interrupt poll resumes the
+			 * generic copy where the frame continues. */
+			const auto found = landed_resumes.find(exit.source_opline_index);
+			if (found != landed_resumes.end()) {
+				exit.deopt_exit_resume_plus_one = found->second + 1;
+				exits = true;
+			} else {
+				specialized.speculation_unsound = true;
+			}
+			continue;
+		}
 		const bool speculated = speculated_long_operation(specialized, exit);
 		const bool guarded = first
 			&& (exit.machine_control_flow_flags
@@ -1505,6 +1520,20 @@ void freeze_member_deopt_exits(
 		} else if (speculated) {
 			specialized.speculation_unsound = true;
 		}
+	}
+	/* Every speculated long comes from an operation that can exit. */
+	for (uint32_t value = 0; value < specialized.value_count
+			&& !specialized.speculation_unsound; ++value) {
+		const int32_t definition =
+			specialized.value_definition_instructions == nullptr
+				? -1 : specialized.value_definition_instructions[value];
+		specialized.speculation_unsound =
+			specialized.values[value].speculated
+			&& (definition < 0
+				|| static_cast<uint32_t>(definition)
+					>= specialized.instruction_count
+				|| !speculated_long_operation(specialized,
+					specialized.instructions[definition]));
 	}
 	if (exits) {
 		require_runtime_helper(&specialized,

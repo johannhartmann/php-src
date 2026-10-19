@@ -219,6 +219,10 @@ extern "C" zend_result zend_tpde_compile_component(
 		memcpy(plans[initialized].tier2_arg_guards, member.tier2_arg_guards,
 			sizeof(member.tier2_arg_guards));
 		plans[initialized].tier2_fallback_entry = member.tier2_fallback_entry;
+		plans[initialized].speculation_cv_guards =
+			member.speculation_cv_guards;
+		plans[initialized].speculation_cv_guard_count =
+			member.speculation_cv_guard_count;
 		if (!initialize_plan(
 				member.module,
 				member.user_bindings, member.user_binding_count,

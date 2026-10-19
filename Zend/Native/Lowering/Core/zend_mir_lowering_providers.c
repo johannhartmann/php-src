@@ -1277,6 +1277,13 @@ static bool zend_mir_infer_long_induction_slot(
 	bool has_seed = false;
 	bool has_defined_value = false;
 
+	/* A specialized version's speculated steps exit on overflow
+	 * themselves. */
+	for (position = first; position < end; position++) {
+		if (ssa->vars[induction->slot_variables[position]].speculated) {
+			return false;
+		}
+	}
 	for (position = first; position < end; position++) {
 		const zend_ssa_var *variable;
 		const zend_ssa_op *ssa_op;
@@ -1819,8 +1826,15 @@ static bool zend_mir_typed_incdec(
 							!= ZEND_MIR_SCALAR_TYPE_I64))
 			|| !zend_mir_inferred_fact_for_use(
 				integration, ssa_op->op1_use, &use)
-			|| use.exact_type != ZEND_MIR_SCALAR_TYPE_I64
-			|| (use.flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0) {
+			|| use.exact_type != ZEND_MIR_SCALAR_TYPE_I64) {
+		return false;
+	}
+	/* A specialized version assumes the long: the operation deoptimizes
+	 * where it would overflow. */
+	if (ssa->vars[ssa_op->op1_def].speculated) {
+		return true;
+	}
+	if ((use.flags & ZEND_MIR_VALUE_FACT_HAS_INTEGER_RANGE) == 0) {
 		return false;
 	}
 	range.minimum = use.integer_min;
@@ -2839,7 +2853,8 @@ static bool zend_mir_prepare_overlay(
 				|| (ssa->vars[index].var >= 0
 					&& (uint32_t) ssa->vars[index].var < op_array->last_var
 					&& reference_bound[ssa->vars[index].var])
-				|| crosses_boundary[index]) {
+				|| (crosses_boundary[index]
+					&& !ssa->vars[index].private_global)) {
 			integration->overlay_inferred_fact_valid[index] = 0;
 			integration->overlay_fact_modes[index] =
 				ZEND_MIR_FACT_SOURCE_ZVAL;

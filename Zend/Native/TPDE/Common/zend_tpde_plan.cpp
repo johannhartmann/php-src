@@ -1539,6 +1539,19 @@ static bool freeze_value_facts(plan_builder &builder) {
 				(fact.flags & ZEND_MIR_VALUE_FACT_SPECULATED) != 0;
 		}
 	}
+	/* A version the inference narrowed is speculated whatever its fact:
+	 * freeze_member_deopt_exits() requires an exiting definition. */
+	for (int ssa_variable = 0; source_ssa != nullptr
+			&& source_ssa->vars != nullptr
+			&& ssa_variable < source_ssa->vars_count; ++ssa_variable) {
+		const int32_t index = source_ssa->vars[ssa_variable].speculated
+			? zend_tpde_value_index(plan, zend_mir_value_from_original_ssa(
+				static_cast<uint32_t>(ssa_variable)))
+			: -1;
+		if (index >= 0) {
+			plan->values[index].speculated = true;
+		}
+	}
 	std::vector<uint8_t> register_definitions(plan->value_count, 0);
 	for (uint32_t i = 0; i < plan->instruction_count; ++i) {
 		const zend_mir_instruction_record &record =
