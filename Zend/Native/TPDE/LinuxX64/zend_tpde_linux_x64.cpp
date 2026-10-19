@@ -6281,6 +6281,7 @@ public:
 	int general_numeric_binary(LongBinaryContext &lb, NumericBinary &nb);
 	bool register_long_binary(LongBinaryContext &lb);
 	bool long_assign_op(InstContext &ctx);
+	int number_cast(InstContext &ctx);
 	bool long_incdec(InstContext &ctx);
 	bool slot_isset_empty(InstContext &ctx);
 	bool object_property_read(InstContext &ctx);
@@ -18239,6 +18240,106 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 	return true;
 }
 
+/*
+ * (float) and (int) of a long or a double in its slot convert inline like
+ * zval_get_double() and zval_get_long(); a double outside the long range,
+ * NaN and every other operand take the helper, which warns as the VM.
+ * The slow-path call published the operand. 1 when emitted, 0 when the
+ * cast is another one, -1 on failure.
+ */
+int ZendCompilerX64::number_cast(InstContext &ctx) {
+	const Adaptor::InstNode &node = ctx.node;
+	const zend_tpde_instruction &mir = *ctx.mir;
+	if (!mir.has_value_operation || node.has_result
+			|| mir.value_operation.source_opcode != ZEND_CAST) {
+		return 0;
+	}
+	const zend_mir_executable_value_ref &operation = mir.value_operation;
+	const uint32_t target = operation.extended_value;
+	auto slot = [&](const zend_mir_source_operand_ref &operand,
+			zend_mir_storage_id storage, int32_t *out) {
+		if ((operand.kind != ZEND_MIR_SOURCE_OPERAND_SLOT
+					&& operand.kind != ZEND_MIR_SOURCE_OPERAND_SSA)
+				|| !zend_mir_id_is_valid(storage)) {
+			return false;
+		}
+		const uint64_t offset = frame_slot_offset(storage);
+		if (offset > INT32_MAX - sizeof(zval)) {
+			return false;
+		}
+		*out = static_cast<int32_t>(offset);
+		return true;
+	};
+	int32_t operand_offset = 0;
+	int32_t result_offset = 0;
+	if ((target != IS_DOUBLE && target != IS_LONG)
+			|| !slot(operation.op1, operation.op1_storage_id,
+				&operand_offset)
+			|| !slot(operation.result, operation.result_storage_id,
+				&result_offset)
+			|| (operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_TMP
+				&& operation.result.slot_kind != ZEND_MIR_SOURCE_SLOT_VAR)
+			|| operation.op1_storage_id == operation.result_storage_id) {
+		return 0;
+	}
+	const int32_t type_info =
+		static_cast<int32_t>(offsetof(zval, u1.type_info));
+	const auto spilled = spill_before_branch(true);
+	auto slow = text_writer.label_create();
+	auto done = text_writer.label_create();
+	{
+		const AsmReg frame_reg = canonical_frame_register();
+		ScratchReg type{this};
+		ScratchReg value{this};
+		ScratchReg converted{this};
+		auto type_reg = type.alloc_gp();
+		auto value_reg = value.alloc_gp();
+		auto fp_reg = converted.alloc(tpde::x64::PlatformConfig::FP_BANK);
+		auto other = text_writer.label_create();
+		auto store = text_writer.label_create();
+		ASM(MOVZXr32m8, type_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG, operand_offset + type_info));
+		ASM(MOV64rm, value_reg,
+			FE_MEM(frame_reg, 0, FE_NOREG, operand_offset));
+		ASM(CMP32ri, type_reg, target == IS_DOUBLE ? IS_LONG : IS_DOUBLE);
+		generate_raw_jump(Jump::jne, other);
+		if (target == IS_DOUBLE) {
+			ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
+			ASM(SSE_MOVQ_X2Grr, value_reg, fp_reg);
+		} else {
+			/* CVTTSD2SI gives INT64_MIN for NaN and out of range. */
+			ASM(SSE_MOVQ_G2Xrr, fp_reg, value_reg);
+			ASM(SSE_CVTTSD2SI64rr, value_reg, fp_reg);
+			ASM(MOV64ri, type_reg, INT64_MIN);
+			ASM(CMP64rr, value_reg, type_reg);
+			generate_raw_jump(Jump::je, slow);
+		}
+		generate_raw_jump(Jump::jmp, store);
+		/* Already the target type. */
+		label_place(other);
+		ASM(CMP32ri, type_reg, static_cast<int32_t>(target));
+		generate_raw_jump(Jump::jne, slow);
+		label_place(store);
+		ASM(MOV64mr, FE_MEM(frame_reg, 0, FE_NOREG, result_offset),
+			value_reg);
+		ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+			result_offset + type_info), static_cast<int32_t>(target));
+		generate_raw_jump(Jump::jmp, done);
+	}
+	/* The helper, out of the hot code. */
+	cold_begin();
+	label_place(slow);
+	if (!execute_value_operation(ctx)) {
+		cold_end();
+		return -1;
+	}
+	generate_raw_jump(Jump::jmp, done);
+	cold_end();
+	label_place(done);
+	release_spilled_regs(spilled);
+	return 1;
+}
+
 bool ZendCompilerX64::long_incdec(InstContext &ctx) {
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &mir = *ctx.mir;
@@ -19930,6 +20031,11 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 				|| record.opcode == ZEND_MIR_OPCODE_VALUE_ROPE_ADD)
 			&& rope_literal_inline(ctx)) {
 		return true;
+	}
+	if (record.opcode == ZEND_MIR_OPCODE_VALUE_CAST) {
+		if (const int cast = number_cast(ctx); cast != 0) {
+			return cast > 0;
+		}
 	}
 	if (mir.has_value_operation
 			&& mir.value_operation.source_opcode == ZEND_ASSIGN_DIM_OP
