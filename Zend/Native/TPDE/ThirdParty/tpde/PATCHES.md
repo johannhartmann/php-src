@@ -118,6 +118,10 @@ it is compiled in place, so the allocator state stays that of its position:
   written to the cold area by `CompilerBase::compile_block`; they are still
   compiled in layout order, so the allocator state is that of their
   position.
+- A block whose instructions branch nowhere (`block_branched`, set by
+  `generate_branch_to_block`) falls through into the next block in layout
+  order; when that block is not the one placed next (`next_block()`),
+  `compile_block` ends the block with a jump to it.
 
 ## Code before the prologue
 

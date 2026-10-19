@@ -180,6 +180,9 @@ struct CompilerBase {
   /// and therefore must not change any value-related state.
   bool generating_branch = false;
 #endif
+  /// Whether the block being compiled branched to a successor, which
+  /// compile_block() checks for a block that falls through.
+  bool block_branched = false;
 
 private:
   /// Default CCAssigner if the implementation doesn't override cur_cc_assigner.
@@ -1717,6 +1720,7 @@ template <IRAdaptor Adaptor, typename Derived, CompilerConfig Config>
 template <typename Jump>
 void CompilerBase<Adaptor, Derived, Config>::generate_branch_to_block(
     Jump jmp, IRBlockRef target, bool needs_split, bool last_inst) {
+  block_branched = true;
   BlockIndex target_idx = this->analyzer.block_idx(target);
   Label target_label = this->block_labels[u32(target_idx)];
   if (!needs_split) {
@@ -2527,6 +2531,7 @@ bool CompilerBase<Adaptor, Derived, Config>::compile_block(
   }
 
   label_place(block_labels[block_idx]);
+  block_branched = false;
   auto &&val_range = adaptor->block_insts(block);
   auto end = val_range.end();
   for (auto it = val_range.begin(); it != end; ++it) {
@@ -2543,6 +2548,15 @@ bool CompilerBase<Adaptor, Derived, Config>::compile_block(
                    this->adaptor->inst_fmt_ref(inst));
       return false;
     }
+  }
+
+  // A block without a branch falls through into the next block in layout
+  // order; when the areas separate the two, it jumps there.
+  if (!block_branched && !adaptor->block_succs(block).empty()
+      && block_idx + 1 < analyzer.block_layout.size()
+      && static_cast<u32>(next_block()) != block_idx + 1) {
+    derived()->generate_raw_jump(Derived::Jump::jmp,
+                                 block_labels[block_idx + 1]);
   }
 
   if constexpr (WithAsserts) {
