@@ -1794,7 +1794,8 @@ bool zend_tpde_numeric_binary_at(
 		&& instruction.has_value_operation
 		&& operation.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP
 		&& (zend_tpde_numeric_arithmetic(operation.source_opcode)
-			|| zend_tpde_numeric_comparison(operation.source_opcode))
+			|| zend_tpde_numeric_comparison(operation.source_opcode)
+			|| zend_tpde_numeric_bitwise(operation.source_opcode))
 		&& plan->source_opcodes != nullptr
 		&& operation.source_position_id < plan->source_opcode_count
 		&& plan->source_opcodes[operation.source_position_id].opcode
@@ -1825,7 +1826,8 @@ bool zend_tpde_typed_numeric_binary(
 		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV)
 		&& operation.result.ssa_variable_id != ZEND_MIR_ID_INVALID
 		&& operation.result.ssa_variable_id
 			< plan->source_ssa_variable_count;
@@ -1841,7 +1843,8 @@ bool zend_tpde_typed_forward_assign(
 		&& (operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SLOT
 			|| operation.result.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 		&& (operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_TMP
-			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR)
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR
+			|| operation.result.slot_kind == ZEND_MIR_SOURCE_SLOT_CV)
 		&& operation.result.ssa_variable_id != ZEND_MIR_ID_INVALID;
 }
 
@@ -1946,6 +1949,10 @@ zend_tpde_machine_value_kind zend_tpde_typed_numeric_result_kind(
 	if (zend_tpde_numeric_comparison(
 			instruction.value_operation.source_opcode)) {
 		return ZEND_TPDE_MACHINE_VALUE_BOOL;
+	}
+	if (zend_tpde_numeric_bitwise(
+			instruction.value_operation.source_opcode)) {
+		return ZEND_TPDE_MACHINE_VALUE_I64;
 	}
 	const zend_mir_value_id result_ssa =
 		instruction.value_operation.result.ssa_variable_id;

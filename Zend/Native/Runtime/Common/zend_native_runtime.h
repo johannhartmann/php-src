@@ -14,7 +14,7 @@ extern "C" {
  * loaded: bump it whenever the helper ids, the execution context, the
  * persisted image layout or what generated code assumes about them change.
  */
-#define ZEND_NATIVE_RUNTIME_ABI_VERSION 133u
+#define ZEND_NATIVE_RUNTIME_ABI_VERSION 134u
 
 typedef void (*zend_native_source_probe_t)(
 	void *context,
@@ -262,7 +262,10 @@ typedef enum _zend_native_runtime_helper_id {
 	 * left owned and return ZEND_NATIVE_RETRY
 	 * (zend_native_private_frame_retry()). */
 	ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY = 227,
-	ZEND_NATIVE_HELPER_COUNT = 228
+	/* Not a helper: the address of EG(vm_interrupt), which a typed body's
+	 * interrupt poll loads from its relocated slot (NTS only). */
+	ZEND_NATIVE_HELPER_INTERRUPT_FLAG = 228,
+	ZEND_NATIVE_HELPER_COUNT = 229
 } zend_native_runtime_helper_id;
 
 /*

@@ -2945,6 +2945,10 @@ static bool plan_interrupt_statepoint(plan_builder &builder, uint32_t i) {
 	}
 	plan->instructions[i].source_opline_index = frame.opline_index;
 	require_runtime_helper(plan, ZEND_NATIVE_HELPER_INTERRUPT_POLL);
+#ifndef ZTS
+	/* A typed body polls the flag itself. */
+	require_runtime_helper(plan, ZEND_NATIVE_HELPER_INTERRUPT_FLAG);
+#endif
 	return true;
 }
 

@@ -1094,6 +1094,14 @@ static const zend_native_runtime_helper zend_native_runtime_helpers[] = {
 	{ZEND_NATIVE_HELPER_PRIVATE_FRAME_RETRY,
 		ZEND_NATIVE_RUNTIME_EFFECT_DESTRUCT,
 		(const void *) zend_native_private_frame_retry},
+#ifndef ZTS
+	{ZEND_NATIVE_HELPER_INTERRUPT_FLAG, 0,
+		(const void *) &EG(vm_interrupt)},
+#else
+	/* Each thread has its own flag: typed bodies take no interrupt polls. */
+	{ZEND_NATIVE_HELPER_INTERRUPT_FLAG, 0,
+		(const void *) zend_native_interrupt_poll},
+#endif
 };
 
 _Static_assert(sizeof(zend_native_runtime_helpers)

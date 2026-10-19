@@ -755,6 +755,11 @@ static bool typed_body_cond_branch(
 					!= ZEND_MIR_SCALAR_TYPE_I1)) {
 		return false;
 	}
+	/* A constant condition (`while (true)` without the optimizer) has no
+	 * register boolean to test. */
+	if (!source_override && plan->values[condition].constant) {
+		return false;
+	}
 	return true;
 }
 
@@ -763,7 +768,8 @@ static bool typed_body_cond_branch(
 static bool typed_body_numeric_operand(
 		const typed_body_signature_walk &walk,
 		const zend_tpde_source_value_binding &binding,
-		const zend_mir_source_operand_ref &operand) {
+		const zend_mir_source_operand_ref &operand,
+		bool *boxed = nullptr) {
 	const zend_tpde_plan *plan = walk.plan;
 	const std::vector<zend_tpde_local_abi_type> &instruction_result_types =
 		walk.instruction_result_types;
@@ -788,6 +794,9 @@ static bool typed_body_numeric_operand(
 				< register_source_ssa.size()) {
 		abi = register_source_ssa[operand.ssa_variable_id];
 	}
+	if (boxed != nullptr) {
+		*boxed = abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL;
+	}
 	return abi.valid
 		&& (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
 			|| abi.machine_kind
@@ -801,12 +810,20 @@ static bool typed_body_numeric_binary(
 		uint32_t index,
 		const zend_tpde_instruction &instruction) {
 	const zend_tpde_plan *plan = walk.plan;
+	bool left_boxed = false;
+	bool right_boxed = false;
 	if (!typed_body_numeric_operand(walk, instruction.source_op1_binding,
-				instruction.value_operation.op1)
+				instruction.value_operation.op1, &left_boxed)
 			|| !typed_body_numeric_operand(walk,
 				instruction.source_op2_binding,
-				instruction.value_operation.op2)) {
+				instruction.value_operation.op2, &right_boxed)) {
 		return false;
+	}
+	/* A bitwise operation fails the body for a double operand. */
+	if (zend_tpde_numeric_bitwise(
+			instruction.value_operation.source_opcode)
+			&& (left_boxed || right_boxed)) {
+		*walk.may_fail = true;
 	}
 	const zend_tpde_machine_value_kind result_kind =
 		zend_tpde_typed_numeric_result_kind(plan, instruction);
@@ -1066,6 +1083,43 @@ static bool typed_body_signature_step(
 			&& instruction.value_operation.result.ssa_variable_id
 				< walk.register_source_ssa.size()) {
 		return typed_body_forward_assign(walk, index, instruction);
+	}
+#ifndef ZTS
+	/* A pending interrupt leaves the typed body through its failure exit,
+	 * before the body has an effect: the call runs again through its Zend
+	 * entry, which serves the interrupt at the same poll. */
+	if (record.opcode == ZEND_MIR_OPCODE_STATEPOINT
+			&& record.effects == ZEND_MIR_EFFECT_MASK(
+				ZEND_MIR_EFFECT_INTERRUPT_BOUNDARY)
+			&& record.ownership_actions == 0) {
+		*walk.may_fail = true;
+		return true;
+	}
+#endif
+	/* A scalar assignment to a CV ($i = 0) releases the CV's previous
+	 * value in a Zend frame; in a typed body that value is a register
+	 * number or boolean, so the copy is a register copy. */
+	if (record.opcode == ZEND_MIR_OPCODE_COPY
+			&& instruction.operand_count == 1
+			&& (record.effects & ~(UINT32_C(1)
+					<< ZEND_MIR_EFFECT_WRITE_MEMORY)) == 0
+			&& record.reads == 0 && record.barriers == 0
+			&& (record.representation == ZEND_MIR_REPRESENTATION_I64
+				|| record.representation
+					== ZEND_MIR_REPRESENTATION_DOUBLE
+				|| record.representation == ZEND_MIR_REPRESENTATION_I1)) {
+		const int32_t source = zend_tpde_value_index(
+			plan, zend_tpde_operand_at(plan, &instruction, 0));
+		const int32_t result = zend_tpde_value_index(plan, record.result_id);
+		if (source >= 0 && result >= 0
+				&& machine_plan_value_abi(
+					plan, static_cast<uint32_t>(source)).valid
+				&& machine_plan_value_abi(
+					plan, static_cast<uint32_t>(result)).valid
+				&& typed_body_value_has_definition(plan, source)) {
+			return true;
+		}
+		return false;
 	}
 	if (record.effects != 0 || record.reads != 0
 			|| record.writes != 0 || record.barriers != 0

@@ -7768,13 +7768,41 @@ void ZendIRAdaptor::Builder::lower_typed_body_operation(
 		.operand_offset = operand_offset,
 		.operand_count = 2,
 		.has_result = true});
-	set_instruction_result(i, result);
+	/* A long result the plan keeps boxed, such as a CV a phi of numbers
+	 * merges, is boxed in this block. */
+	IRValueRef published = result;
+	const int32_t result_value = zend_tpde_value_index(plan_,
+		zend_mir_value_from_original_ssa(
+			instruction.value_operation.result.ssa_variable_id));
+	if (result_kind == ZEND_TPDE_MACHINE_VALUE_I64 && result_value >= 0
+			&& plan_->values[result_value].machine_kind
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		published = add_derived_value(ZEND_MIR_REPRESENTATION_ZVAL,
+			ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID,
+			false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+			ZEND_MIR_OWNERSHIP_STATE_OWNED,
+			ZEND_MIR_REFCOUNT_IMMORTAL);
+		const uint32_t box_offset =
+			static_cast<uint32_t>(operands_.size());
+		operands_.push_back(result);
+		add_node(block_instructions, block, InstNode{
+			.kind = InstKind::BoxScalar,
+			.mir_instruction_index = i,
+			.argument_index = UINT32_MAX,
+			.result = published,
+			.operand_offset = box_offset,
+			.operand_count = 1,
+			.has_result = true,
+			.storage_id = ZEND_MIR_ID_INVALID,
+			.exact_type = ZEND_MIR_SCALAR_TYPE_I64});
+	}
+	set_instruction_result(i, published);
 	active_source_ssa_overrides()[
 		instruction.value_operation.result.ssa_variable_id] =
-			result;
+			published;
 	override_ssa_value(
 		instruction.value_operation.result.ssa_variable_id,
-		result);
+		published);
 }
 
 void ZendIRAdaptor::Builder::forward_typed_body_assign(

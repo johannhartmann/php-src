@@ -1369,6 +1369,14 @@ static inline bool zend_tpde_numeric_arithmetic(uint32_t opcode)
 	return opcode == ZEND_ADD || opcode == ZEND_SUB || opcode == ZEND_MUL;
 }
 
+/* Bitwise operations of two longs; a double operand needs Zend's
+ * conversion, so a typed body fails for it. */
+static inline bool zend_tpde_numeric_bitwise(uint32_t opcode)
+{
+	return opcode == ZEND_BW_AND || opcode == ZEND_BW_OR
+		|| opcode == ZEND_BW_XOR;
+}
+
 /* The comparisons of two numbers that cannot fail: NaN compares unordered. */
 static inline bool zend_tpde_numeric_comparison(uint32_t opcode)
 {

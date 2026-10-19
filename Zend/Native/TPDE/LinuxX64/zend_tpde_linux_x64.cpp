@@ -5680,6 +5680,7 @@ public:
 	bool register_long_operand(IRValueRef operand);
 	int numeric_framed_binary(LongBinaryContext &lb);
 	int typed_long_binary(LongBinaryContext &lb, NumericBinary &nb);
+	bool typed_bitwise_binary(const Adaptor::InstNode &node, uint32_t opcode);
 	int known_double_binary(LongBinaryContext &lb, NumericBinary &nb);
 	int general_numeric_binary(LongBinaryContext &lb, NumericBinary &nb);
 	bool register_long_binary(LongBinaryContext &lb);
@@ -16230,6 +16231,12 @@ int ZendCompilerX64::numeric_framed_binary(LongBinaryContext &lb) {
 	nb.proven =
 		zend_tpde_numeric_binary_proven(ir().plan(), mir);
 	nb.guarded = node.kind == Adaptor::InstKind::GuardedFast;
+	if (ir().typed_body() && !nb.guarded && nb.proven
+			&& zend_tpde_numeric_bitwise(nb.opcode)
+			&& mir.has_value_operation
+			&& operation.opcode == ZEND_MIR_OPCODE_VALUE_BINARY_OP) {
+		return typed_bitwise_binary(node, nb.opcode) ? 1 : 0;
+	}
 	if ((!nb.arithmetic && !nb.comparison && !nb.integer_op)
 			|| (!nb.guarded && !(nb.proven && ir().typed_body()))
 			|| !mir.has_value_operation
@@ -16423,6 +16430,65 @@ int ZendCompilerX64::numeric_framed_binary(LongBinaryContext &lb) {
 }
 
 /* Two exact longs of a typed body, whose range excludes overflow. */
+/*
+ * A typed body's bitwise operation of two numbers: a long operand takes
+ * part as it is, a double fails the body (Zend converts it, with a
+ * deprecation for a fractional one), and the result is a register long.
+ */
+bool ZendCompilerX64::typed_bitwise_binary(
+		const Adaptor::InstNode &node, uint32_t opcode) {
+	if (!node.has_result || node.operands.size() != 2
+			|| ir().machine_kind(node.result)
+				!= ZEND_TPDE_MACHINE_VALUE_I64) {
+		return false;
+	}
+	ScratchReg left_value{this};
+	ScratchReg right_value{this};
+	auto left_reg = left_value.alloc_gp();
+	auto right_reg = right_value.alloc_gp();
+	auto load_long = [&](IRValueRef operand, AsmReg target) {
+		if (ir().machine_kind(operand)
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+			auto [value_ref, value] = val_ref_single(operand);
+			ASM(MOV64rr, target, value.load_to_reg());
+			return true;
+		}
+		if (ir().machine_kind(operand)
+				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+				|| val_parts(operand).count() != 2) {
+			return false;
+		}
+		auto value = val_ref(operand);
+		auto payload = value.part(0);
+		auto type_info = value.part(1);
+		ASM(CMP32ri, type_info.load_to_reg(), IS_LONG);
+		generate_raw_jump(Jump::jne, typed_failure_label());
+		ASM(MOV64rr, target, payload.load_to_reg());
+		return true;
+	};
+	if (!load_long(node.operands[0], left_reg)
+			|| !load_long(node.operands[1], right_reg)) {
+		return false;
+	}
+	switch (opcode) {
+		case ZEND_BW_AND:
+			ASM(AND64rr, left_reg, right_reg);
+			break;
+		case ZEND_BW_OR:
+			ASM(OR64rr, left_reg, right_reg);
+			break;
+		default:
+			ASM(XOR64rr, left_reg, right_reg);
+			break;
+	}
+	auto [result_ref_value, result] =
+		result_ref_single(node.result);
+	auto result_reg = result.alloc_reg();
+	ASM(MOV64rr, result_reg, left_reg);
+	result.set_modified();
+	return true;
+}
+
 int ZendCompilerX64::typed_long_binary(
 		LongBinaryContext &lb, NumericBinary &nb) {
 	const Adaptor::InstNode &node = lb.node;
@@ -26282,6 +26348,25 @@ bool ZendCompilerX64::compile_interrupt_poll(InstContext &ctx) {
 	const IRInstRef instruction = ctx.instruction;
 	const Adaptor::InstNode &node = ctx.node;
 	const zend_tpde_instruction &mir = *ctx.mir;
+	if (ir().typed_body()) {
+		/* EG(vm_interrupt) through its relocated address: a pending
+		 * interrupt fails the body, whose caller repeats the call through
+		 * the Zend entry. */
+		const tpde::SymRef flag =
+			optional_runtime_symbol(ZEND_NATIVE_HELPER_INTERRUPT_FLAG);
+		if (!flag.valid()) {
+			return false;
+		}
+		ScratchReg address{this};
+		auto address_reg = address.alloc_gp();
+		text_writer.ensure_space(16);
+		ASM(MOV64rm, address_reg, FE_MEM(FE_IP, 0, FE_NOREG, -1));
+		reloc_text(flag, tpde::elf::R_X86_64_GOTPCREL,
+			text_writer.offset() - 4, -4);
+		ASM(CMP8mi, FE_MEM(address_reg, 0, FE_NOREG, 0), 0);
+		generate_raw_jump(Jump::jne, typed_failure_label());
+		return true;
+	}
 	if (node.operands.size() != 2
 			|| mir.source_opline_index == UINT32_MAX) {
 		return false;
