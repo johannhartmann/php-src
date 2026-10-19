@@ -5681,6 +5681,8 @@ public:
 	int numeric_framed_binary(LongBinaryContext &lb);
 	int typed_long_binary(LongBinaryContext &lb, NumericBinary &nb);
 	bool typed_bitwise_binary(const Adaptor::InstNode &node, uint32_t opcode);
+	bool register_long_binary(const Adaptor::InstNode &node, uint32_t opcode,
+		bool overflow_fails);
 	int known_double_binary(LongBinaryContext &lb, NumericBinary &nb);
 	int general_numeric_binary(LongBinaryContext &lb, NumericBinary &nb);
 	bool register_long_binary(LongBinaryContext &lb);
@@ -16435,12 +16437,96 @@ int ZendCompilerX64::numeric_framed_binary(LongBinaryContext &lb) {
  * part as it is, a double fails the body (Zend converts it, with a
  * deprecation for a fractional one), and the result is a register long.
  */
+/*
+ * ADD, SUB, MUL or a bitwise operation of two register longs, computed in
+ * the result register with a constant operand as immediate. An overflow
+ * fails the typed body where the plan speculated on it and is excluded
+ * otherwise.
+ */
+bool ZendCompilerX64::register_long_binary(const Adaptor::InstNode &node,
+		uint32_t opcode, bool overflow_fails) {
+	const bool commutative = opcode != ZEND_SUB;
+	auto immediate_of = [](const ValuePart &value, int32_t *immediate) {
+		if (!value.is_const()) {
+			return false;
+		}
+		const int64_t constant =
+			static_cast<int64_t>(value.const_data()[0]);
+		*immediate = static_cast<int32_t>(constant);
+		return constant == *immediate;
+	};
+	auto [left_ref, left] = val_ref_single(node.operands[0]);
+	auto [right_ref, right] = val_ref_single(node.operands[1]);
+	int32_t immediate = 0;
+	const bool swapped = commutative && !immediate_of(right, &immediate)
+		&& immediate_of(left, &immediate);
+	auto &target = swapped ? right : left;
+	auto &source = swapped ? left : right;
+	const bool use_immediate =
+		swapped || immediate_of(source, &immediate);
+	const AsmReg source_reg = use_immediate
+		? AsmReg::make_invalid() : source.load_to_reg();
+	const AsmReg target_reg = target.load_to_reg();
+	auto [result_ref, result] = result_ref_single(node.result);
+	const AsmReg result_reg = result.alloc_try_reuse(target);
+	if (result_reg != target_reg) {
+		mov(result_reg, target_reg, 8);
+	}
+	switch (opcode) {
+		case ZEND_ADD:
+			use_immediate ? ASM(ADD64ri, result_reg, immediate)
+				: ASM(ADD64rr, result_reg, source_reg);
+			break;
+		case ZEND_SUB:
+			use_immediate ? ASM(SUB64ri, result_reg, immediate)
+				: ASM(SUB64rr, result_reg, source_reg);
+			break;
+		case ZEND_MUL:
+			use_immediate ? ASM(IMUL64rri, result_reg, result_reg, immediate)
+				: ASM(IMUL64rr, result_reg, source_reg);
+			break;
+		case ZEND_BW_AND:
+			use_immediate ? ASM(AND64ri, result_reg, immediate)
+				: ASM(AND64rr, result_reg, source_reg);
+			break;
+		case ZEND_BW_OR:
+			use_immediate ? ASM(OR64ri, result_reg, immediate)
+				: ASM(OR64rr, result_reg, source_reg);
+			break;
+		default:
+			use_immediate ? ASM(XOR64ri, result_reg, immediate)
+				: ASM(XOR64rr, result_reg, source_reg);
+			break;
+	}
+	if (!zend_tpde_numeric_bitwise(opcode)) {
+		if (overflow_fails) {
+			/* Zend continues an overflowing long in double: the body
+			 * fails and the call runs again through its Zend entry. */
+			generate_raw_jump(Jump::jo, typed_failure_label());
+		} else {
+#if ZEND_DEBUG
+			auto no_overflow = text_writer.label_create();
+			generate_raw_jump(Jump::jno, no_overflow);
+			ASM(UD2);
+			label_place(no_overflow);
+#endif
+		}
+	}
+	result.set_modified();
+	return true;
+}
+
 bool ZendCompilerX64::typed_bitwise_binary(
 		const Adaptor::InstNode &node, uint32_t opcode) {
 	if (!node.has_result || node.operands.size() != 2
 			|| ir().machine_kind(node.result)
 				!= ZEND_TPDE_MACHINE_VALUE_I64) {
 		return false;
+	}
+	if (ir().machine_kind(node.operands[0]) == ZEND_TPDE_MACHINE_VALUE_I64
+			&& ir().machine_kind(node.operands[1])
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+		return register_long_binary(node, opcode, false);
 	}
 	ScratchReg left_value{this};
 	ScratchReg right_value{this};
@@ -16492,6 +16578,12 @@ bool ZendCompilerX64::typed_bitwise_binary(
 int ZendCompilerX64::typed_long_binary(
 		LongBinaryContext &lb, NumericBinary &nb) {
 	const Adaptor::InstNode &node = lb.node;
+	if (ir().machine_kind(node.operands[0]) == ZEND_TPDE_MACHINE_VALUE_I64
+			&& ir().machine_kind(node.operands[1])
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+		return register_long_binary(node, nb.opcode,
+			lb.mir.typed_overflow_speculated) ? 1 : 0;
+	}
 	ScratchReg left_value{this};
 	ScratchReg right_value{this};
 	auto left_reg = left_value.alloc_gp();
@@ -16527,12 +16619,18 @@ int ZendCompilerX64::typed_long_binary(
 			ASM(IMUL64rr, left_reg, right_reg);
 			break;
 	}
+	if (lb.mir.typed_overflow_speculated) {
+		/* Zend continues an overflowing long in double: the body fails
+		 * and the call runs again through its Zend entry. */
+		generate_raw_jump(Jump::jo, typed_failure_label());
+	} else {
 #if ZEND_DEBUG
-	auto no_overflow = text_writer.label_create();
-	generate_raw_jump(Jump::jno, no_overflow);
-	ASM(UD2);
-	label_place(no_overflow);
+		auto no_overflow = text_writer.label_create();
+		generate_raw_jump(Jump::jno, no_overflow);
+		ASM(UD2);
+		label_place(no_overflow);
 #endif
+	}
 	auto [result_ref_value, result] =
 		result_ref_single(node.result);
 	auto result_reg = result.alloc_reg();

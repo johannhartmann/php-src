@@ -348,6 +348,8 @@ struct typed_body_signature_scratch {
 	std::vector<zend_tpde_local_abi_type> call_result_types;
 	std::vector<zend_tpde_local_abi_type> instruction_result_types;
 	std::vector<zend_tpde_local_abi_type> register_source_ssa;
+	/* The member's typed_body_long_values while the walk decides them. */
+	std::vector<uint8_t> long_values;
 };
 
 /* A variadic receive constructs a packed array from a dynamic number of
@@ -443,9 +445,26 @@ struct typed_body_signature_walk {
 	std::vector<zend_tpde_local_abi_type> &instruction_result_types;
 	std::vector<zend_tpde_local_abi_type> &register_source_ssa;
 	bool *may_fail;
+	/* typed_body_long_values assumed for this walk. */
+	const std::vector<uint8_t> &long_values;
 	zend_tpde_local_abi_type result_type{};
 	bool saw_return = false;
 };
+
+static zend_tpde_local_abi_type typed_body_long_abi() {
+	return machine_plan_abi(ZEND_MIR_REPRESENTATION_I64,
+		ZEND_MIR_SCALAR_TYPE_I64, ZEND_TPDE_MACHINE_VALUE_I64,
+		ZEND_TPDE_LOCAL_ABI_TRANSFER_NONE);
+}
+
+/* The value's local ABI in the typed body, which keeps its long values in
+ * registers. */
+static zend_tpde_local_abi_type typed_body_value_abi(
+		const typed_body_signature_walk &walk, uint32_t value) {
+	return walk.long_values[value] != 0
+		? typed_body_long_abi()
+		: machine_plan_value_abi(walk.plan, value);
+}
 
 /* A typed call's argument can be supplied from the caller's typed body. */
 static bool typed_body_call_argument_supplied(
@@ -608,7 +627,8 @@ static bool typed_body_number_value(
 			&& static_cast<uint32_t>(value_index) < plan->value_count) {
 		const zend_tpde_value &value = plan->values[value_index];
 		if (value.exact_type == ZEND_MIR_SCALAR_TYPE_I64
-				|| value.exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
+				|| value.exact_type == ZEND_MIR_SCALAR_TYPE_F64
+				|| walk.long_values[value_index] != 0) {
 			return true;
 		}
 		if (producer < 0
@@ -680,8 +700,8 @@ static bool typed_body_verify_return_type(
 	if (!verified_type.valid && verified >= 0
 			&& static_cast<uint32_t>(verified)
 				< plan->value_count) {
-		verified_type = machine_plan_value_abi(
-			plan, static_cast<uint32_t>(verified));
+		verified_type = typed_body_value_abi(
+			walk, static_cast<uint32_t>(verified));
 	}
 	/* A number returned as int or float is checked at the return. */
 	if (zend_tpde_machine_kind_is_number(plan->return_abi.machine_kind)
@@ -779,7 +799,7 @@ static bool typed_body_numeric_operand(
 	if (binding.value_index >= 0
 			&& static_cast<uint32_t>(binding.value_index)
 				< plan->value_count) {
-		abi = machine_plan_value_abi(plan,
+		abi = typed_body_value_abi(walk,
 			static_cast<uint32_t>(binding.value_index));
 	}
 	if (!abi.valid && binding.definition_instruction_index >= 0
@@ -824,6 +844,36 @@ static bool typed_body_numeric_binary(
 			instruction.value_operation.source_opcode)
 			&& (left_boxed || right_boxed)) {
 		*walk.may_fail = true;
+	}
+	/* Arithmetic of two register longs stays a long and fails the body on
+	 * overflow: the call runs again through its Zend entry, which computes
+	 * the double. The plan instruction carries the decision to the
+	 * adaptor and the backend. Only the Linux x64 backend reports a typed
+	 * body's failure. */
+	{
+		const zend_mir_value_id result_ssa =
+			instruction.value_operation.result.ssa_variable_id;
+		const int32_t result_value =
+			instruction.source_result_binding.value_index >= 0
+				? instruction.source_result_binding.value_index
+			: result_ssa != ZEND_MIR_ID_INVALID
+				? zend_tpde_value_index(plan,
+					zend_mir_value_from_original_ssa(result_ssa))
+				: -1;
+		const bool speculated =
+			ZEND_NATIVE_HOST_TARGET == ZEND_NATIVE_TARGET_LINUX_AMD64
+			&& zend_tpde_numeric_arithmetic(
+				instruction.value_operation.source_opcode)
+			&& !left_boxed && !right_boxed
+			&& !(result_value >= 0
+				&& static_cast<uint32_t>(result_value) < plan->value_count
+				&& plan->values[result_value].exact_type
+					== ZEND_MIR_SCALAR_TYPE_I64);
+		const_cast<zend_tpde_instruction &>(instruction)
+			.typed_overflow_speculated = speculated;
+		if (speculated) {
+			*walk.may_fail = true;
+		}
 	}
 	const zend_tpde_machine_value_kind result_kind =
 		zend_tpde_typed_numeric_result_kind(plan, instruction);
@@ -894,8 +944,8 @@ static bool typed_body_forward_assign(
 	if (!source.valid && literal < 0 && binding.value_index >= 0
 			&& static_cast<uint32_t>(binding.value_index)
 				< plan->value_count) {
-		const zend_tpde_local_abi_type abi = machine_plan_value_abi(
-			plan, static_cast<uint32_t>(binding.value_index));
+		const zend_tpde_local_abi_type abi = typed_body_value_abi(
+			walk, static_cast<uint32_t>(binding.value_index));
 		if (abi.valid
 				&& (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
 					|| abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_F64)) {
@@ -1009,8 +1059,8 @@ static bool typed_body_return(
 	zend_tpde_local_abi_type current_return =
 		returned_source_type.valid
 			? returned_source_type
-			: machine_plan_value_abi(
-				plan, static_cast<uint32_t>(returned));
+			: typed_body_value_abi(
+				walk, static_cast<uint32_t>(returned));
 	if (returned >= 0 && !current_return.valid) {
 		current_return =
 			walk.call_result_types[static_cast<uint32_t>(returned)];
@@ -1133,6 +1183,147 @@ static bool typed_body_signature_step(
 	return typed_body_pure_instruction(walk, instruction, record);
 }
 
+/* A use the typed body serves from a register long: an operand of a typed
+ * numeric operation or forwarding assignment, a returned or return-checked
+ * value, or the input of a phi it keeps long too. */
+static bool typed_body_long_use(
+		const zend_tpde_plan *plan, const std::vector<uint8_t> &long_values,
+		const zend_tpde_machine_use &use) {
+	const zend_tpde_instruction &consumer =
+		plan->instructions[use.instruction_index];
+	const zend_mir_instruction_record record =
+		zend_tpde_instruction_record_at(plan, &consumer);
+	if (use.kind == ZEND_TPDE_MACHINE_USE_PHI_EDGE) {
+		const int32_t phi = zend_tpde_value_index(plan, record.result_id);
+		return phi >= 0 && long_values[static_cast<uint32_t>(phi)] != 0;
+	}
+	return use.kind == ZEND_TPDE_MACHINE_USE_SOURCE_OPERAND
+		&& (zend_tpde_typed_numeric_binary(plan, consumer)
+			|| zend_tpde_typed_forward_assign(consumer)
+			|| record.opcode == ZEND_MIR_OPCODE_RETURN_SOURCE_ZVAL
+			|| record.opcode == ZEND_MIR_OPCODE_VERIFY_RETURN_TYPE);
+}
+
+/* Drops the long values with a use that needs the boxed value, and the
+ * phis with an input that is no long. True when one was dropped. */
+static bool prune_typed_body_long_values(
+		const zend_tpde_plan *plan, std::vector<uint8_t> &long_values) {
+	bool dropped = false;
+	bool changed;
+	do {
+		changed = false;
+		for (uint32_t value = 0; value < plan->value_count; ++value) {
+			if (long_values[value] == 0) {
+				continue;
+			}
+			bool keep = true;
+			for (uint32_t use = plan->value_consumer_offsets[value];
+					keep && use < plan->value_consumer_offsets[value + 1];
+					++use) {
+				keep = typed_body_long_use(
+					plan, long_values, plan->value_consumers[use]);
+			}
+			const int32_t definition =
+				plan->value_definition_instructions[value];
+			if (keep && definition >= 0) {
+				const zend_tpde_instruction &phi =
+					plan->instructions[definition];
+				if (zend_tpde_instruction_record_at(plan, &phi).opcode
+						== ZEND_MIR_OPCODE_PHI) {
+					for (uint32_t operand = 0;
+							keep && operand < phi.operand_count; ++operand) {
+						const int32_t input = zend_tpde_value_index(plan,
+							zend_tpde_operand_at(plan, &phi, operand));
+						keep = input >= 0
+							&& (long_values[static_cast<uint32_t>(input)]
+									!= 0
+								|| machine_plan_value_abi(plan,
+									static_cast<uint32_t>(input))
+										.machine_kind
+									== ZEND_TPDE_MACHINE_VALUE_I64);
+					}
+				}
+			}
+			if (!keep) {
+				long_values[value] = 0;
+				changed = true;
+				dropped = true;
+			}
+		}
+	} while (changed);
+	return dropped;
+}
+
+/*
+ * The values the typed body may keep long although the plan boxes them:
+ * phis, results of typed numeric operations and forwarding assignments.
+ * The walk then proves the results long; arithmetic of two longs is a long
+ * there because an overflow fails the body.
+ */
+static void seed_typed_body_long_values(
+		const zend_tpde_plan *plan, std::vector<uint8_t> &long_values) {
+	long_values.assign(plan->value_count, 0);
+	/* Only the Linux x64 backend computes register longs in typed
+	 * bodies. */
+	if (ZEND_NATIVE_HOST_TARGET != ZEND_NATIVE_TARGET_LINUX_AMD64
+			|| plan->value_consumer_offsets == nullptr
+			|| plan->value_definition_instructions == nullptr
+			|| plan->source_value_definition_instructions == nullptr) {
+		return;
+	}
+	for (uint32_t value = 0; value < plan->value_count; ++value) {
+		if (plan->values[value].machine_kind
+				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+			continue;
+		}
+		const int32_t definition =
+			plan->value_definition_instructions[value];
+		const int32_t producer =
+			plan->source_value_definition_instructions[value];
+		if (definition >= 0) {
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(
+					plan, &plan->instructions[definition]);
+			long_values[value] = record.opcode == ZEND_MIR_OPCODE_PHI
+				&& record.representation == ZEND_MIR_REPRESENTATION_ZVAL;
+		} else if (producer >= 0) {
+			long_values[value] = zend_tpde_typed_numeric_binary(
+					plan, plan->instructions[producer])
+				|| zend_tpde_typed_forward_assign(
+					plan->instructions[producer]);
+		}
+	}
+	prune_typed_body_long_values(plan, long_values);
+}
+
+/* Drops the long values the walk did not prove long. True when one was
+ * dropped. */
+static bool drop_unproven_long_values(
+		const typed_body_signature_walk &walk,
+		std::vector<uint8_t> &long_values) {
+	const zend_tpde_plan *plan = walk.plan;
+	bool dropped = false;
+	for (uint32_t value = 0; value < plan->value_count; ++value) {
+		const int32_t definition =
+			plan->value_definition_instructions[value];
+		const int32_t producer =
+			plan->source_value_definition_instructions[value];
+		if (long_values[value] == 0 || producer < 0
+				|| (definition >= 0
+					&& zend_tpde_instruction_record_at(plan,
+						&plan->instructions[definition]).opcode
+						== ZEND_MIR_OPCODE_PHI)
+				|| (walk.instruction_result_types[producer].valid
+					&& walk.instruction_result_types[producer].machine_kind
+						== ZEND_TPDE_MACHINE_VALUE_I64)) {
+			continue;
+		}
+		long_values[value] = 0;
+		dropped = true;
+	}
+	return prune_typed_body_long_values(plan, long_values) || dropped;
+}
+
 /* The caller rejects members that receive variadic arguments
  * (plan_receives_variadic). */
 [[nodiscard]]
@@ -1157,32 +1348,57 @@ static bool try_freeze_typed_body_signature(
 		return false;
 	}
 
-	typed_body_signature_walk walk{plan, component_plans, component_count,
-		typed_body_candidates, scratch.call_result_types,
-		scratch.instruction_result_types, scratch.register_source_ssa,
-		may_fail};
-	walk.call_result_types.assign(plan->value_count, {});
-	walk.instruction_result_types.assign(plan->instruction_count, {});
-	walk.register_source_ssa.assign(plan->source_ssa_variable_count, {});
-	for (uint32_t index = 0; index < plan->instruction_count; ++index) {
-		const zend_tpde_instruction &instruction =
-			plan->instructions[index];
-		const zend_mir_instruction_record record =
-			zend_tpde_instruction_record_at(plan, &instruction);
-		if (instruction.local_abi_transport) {
+	/* The walk without long values decides whether the member has a typed
+	 * body. Walks with the long values it may keep follow until one proves
+	 * all it assumed; one that rejects the member retries without them. */
+	std::vector<uint8_t> &long_values = scratch.long_values;
+	long_values.assign(plan->value_count, 0);
+	bool seeded = false;
+	for (;;) {
+		*may_fail = false;
+		typed_body_signature_walk walk{plan, component_plans,
+			component_count, typed_body_candidates,
+			scratch.call_result_types, scratch.instruction_result_types,
+			scratch.register_source_ssa, may_fail, long_values};
+		walk.call_result_types.assign(plan->value_count, {});
+		walk.instruction_result_types.assign(plan->instruction_count, {});
+		walk.register_source_ssa.assign(
+			plan->source_ssa_variable_count, {});
+		bool accepted = true;
+		for (uint32_t index = 0;
+				accepted && index < plan->instruction_count; ++index) {
+			const zend_tpde_instruction &instruction =
+				plan->instructions[index];
+			const zend_mir_instruction_record record =
+				zend_tpde_instruction_record_at(plan, &instruction);
+			accepted = instruction.local_abi_transport
+				|| typed_body_signature_step(
+					walk, index, instruction, record);
+		}
+		accepted = accepted && walk.saw_return
+			&& machine_plan_abi_same_shape(
+				walk.result_type, plan->return_abi);
+		if (!accepted) {
+			if (!seeded) {
+				return false;
+			}
+			std::ranges::fill(long_values, uint8_t{0});
 			continue;
 		}
-		if (!typed_body_signature_step(walk, index, instruction, record)) {
-			return false;
+		if (!seeded) {
+			seeded = true;
+			seed_typed_body_long_values(plan, long_values);
+			if (std::ranges::find(long_values, uint8_t{1})
+					!= long_values.end()) {
+				continue;
+			}
 		}
+		if (drop_unproven_long_values(walk, long_values)) {
+			continue;
+		}
+		*return_type = walk.result_type;
+		return true;
 	}
-	if (!walk.saw_return
-			|| !machine_plan_abi_same_shape(
-				walk.result_type, plan->return_abi)) {
-		return false;
-	}
-	*return_type = walk.result_type;
-	return true;
 }
 
 /*
@@ -3730,6 +3946,19 @@ static void unfreeze_component_calls(
 	freeze.frozen = false;
 }
 
+static void store_typed_body_long_values(
+		zend_tpde_plan *plan, const std::vector<uint8_t> &long_values) {
+	plan->typed_body_long_values.reset();
+	if (std::ranges::find(long_values, uint8_t{1}) == long_values.end()) {
+		return;
+	}
+	plan->typed_body_long_values.reset(static_cast<uint8_t *>(
+		std::malloc(plan->value_count)));
+	if (plan->typed_body_long_values != nullptr) {
+		std::ranges::copy(long_values, plan->typed_body_long_values.get());
+	}
+}
+
 /* Drops the candidates whose typed-body signature fails until none does,
  * and records the typed-body facts of the remaining ones. */
 static void freeze_typed_body_signatures(
@@ -3761,6 +3990,10 @@ static void freeze_typed_body_signatures(
 			}
 			planner.return_types[index] = return_type;
 			planner.may_fail[index] = member_may_fail ? 1 : 0;
+			store_typed_body_long_values(&plans[index],
+				candidates[index] != 0
+					? planner.signature_scratch.long_values
+					: std::vector<uint8_t>{});
 		}
 	} while (changed);
 	for (uint32_t index = 0; index < component_count; ++index) {

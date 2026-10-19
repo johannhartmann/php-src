@@ -481,6 +481,9 @@ struct zend_tpde_instruction {
 	/* Both operands of this binary operation are numbers: known from type
 	 * inference or results of component members that return numbers. */
 	bool numeric_operands_proven;
+	/* A typed body computes this arithmetic of two register longs as a long
+	 * and fails on overflow, which Zend's inference does not exclude. */
+	bool typed_overflow_speculated;
 	/* A direct call whose target has a numeric variant: 1 + the variant's
 	 * component index, the general target and the checked arguments. The
 	 * component decides the target once it knows which arguments are
@@ -1194,6 +1197,10 @@ struct zend_tpde_plan {
 	zend_tpde_owned<zend_tpde_machine_use> value_consumers;
 	zend_tpde_owned<uint8_t> entry_value_required;
 	zend_tpde_owned<uint8_t> typed_body_value_required;
+	/* Per value, null for none: 1 when the typed body keeps the value a
+	 * register long although the plan boxes it, a loop phi whose inputs
+	 * are all longs in the body and the long results it merges. */
+	zend_tpde_owned<uint8_t> typed_body_long_values;
 	zend_tpde_owned<zend_tpde_id_index_entry> call_site_instruction_index;
 	uint32_t call_site_instruction_index_capacity;
 	uint32_t call_site_count;

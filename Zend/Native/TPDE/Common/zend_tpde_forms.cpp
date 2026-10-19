@@ -1951,7 +1951,8 @@ zend_tpde_machine_value_kind zend_tpde_typed_numeric_result_kind(
 		return ZEND_TPDE_MACHINE_VALUE_BOOL;
 	}
 	if (zend_tpde_numeric_bitwise(
-			instruction.value_operation.source_opcode)) {
+			instruction.value_operation.source_opcode)
+			|| instruction.typed_overflow_speculated) {
 		return ZEND_TPDE_MACHINE_VALUE_I64;
 	}
 	const zend_mir_value_id result_ssa =

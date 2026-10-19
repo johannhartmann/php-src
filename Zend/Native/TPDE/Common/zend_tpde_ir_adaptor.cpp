@@ -1918,8 +1918,14 @@ private:
 	std::vector<IRValueRef> mutation_results;
 	std::vector<zend_mir_storage_id> lazy_mutation_storages;
 	std::vector<zend_mir_storage_id> frame_authoritative_phi_storages;
-	std::vector<std::pair<uint32_t, zend_mir_value_id>>
-		deferred_typed_phi_inputs;
+	/* A typed body's phi input defined later in plan order: its
+	 * phi_inputs_ entry, the value, and whether the phi is long. */
+	struct DeferredTypedPhiInput {
+		uint32_t input;
+		zend_mir_value_id value;
+		bool long_phi;
+	};
+	std::vector<DeferredTypedPhiInput> deferred_typed_phi_inputs;
 	std::vector<IRValueRef> boxed_phi_input_overrides;
 	std::vector<IRValueRef> boxed_phi_cold_input_overrides;
 	std::vector<PendingPhiInput> pending_phi_inputs;
@@ -2111,6 +2117,14 @@ private:
 	IRValueRef typed_body_operand(
 		const zend_tpde_source_value_binding &binding,
 		const zend_mir_source_operand_ref &source);
+	/* The typed body keeps the value a register long although the plan
+	 * boxes it (typed_body_long_values). */
+	bool typed_body_long_value(int32_t value_index) const {
+		return function_mode_ == FunctionMode::TypedBody
+			&& plan_->typed_body_long_values != nullptr
+			&& value_index >= 0
+			&& plan_->typed_body_long_values[value_index] != 0;
+	}
 	void lower_typed_body_operation(
 			uint32_t i, const zend_tpde_instruction &instruction,
 			uint32_t block);
@@ -7776,7 +7790,8 @@ void ZendIRAdaptor::Builder::lower_typed_body_operation(
 			instruction.value_operation.result.ssa_variable_id));
 	if (result_kind == ZEND_TPDE_MACHINE_VALUE_I64 && result_value >= 0
 			&& plan_->values[result_value].machine_kind
-				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& !typed_body_long_value(result_value)) {
 		published = add_derived_value(ZEND_MIR_REPRESENTATION_ZVAL,
 			ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID,
 			false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
@@ -7828,7 +7843,8 @@ void ZendIRAdaptor::Builder::forward_typed_body_assign(
 			&& plan_->values[result_value].machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
 			&& machine_kind(source)
-				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+				!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+			&& !typed_body_long_value(result_value)) {
 		const zend_mir_scalar_type_mask source_type =
 			exact_type(source);
 		const bool scalar =
@@ -7944,10 +7960,13 @@ void ZendIRAdaptor::Builder::lower_phi(InstContext &ctx) {
 			zend_tpde_machine_kind_is_pointer(result_kind);
 		/* A typed body's phi of numbers: its forwarded or computed
 		 * inputs are defined later in plan order, so resolve them
-		 * once the pass has defined them. */
+		 * once the pass has defined them. A phi of longs stays a
+		 * register long. */
+		const bool long_phi = typed_body_long_value(
+			zend_tpde_value_index(plan_, ctx.record.result_id));
 		bool typed_number_phi = function_mode_
 				== FunctionMode::TypedBody
-			&& boxed_result;
+			&& boxed_result && !long_phi;
 		for (uint32_t n = 0; typed_number_phi
 				&& n < predecessors; ++n) {
 			const int32_t input_index = zend_tpde_value_index(
@@ -7967,15 +7986,22 @@ void ZendIRAdaptor::Builder::lower_phi(InstContext &ctx) {
 					|| zend_tpde_typed_numeric_binary(plan_,
 						plan_->instructions[producer]));
 		}
-		if (typed_number_phi) {
-			/* The phi is a register zval of its own. */
+		if (typed_number_phi || long_phi) {
+			/* The phi is a register zval or long of its own. */
 			const IRValueRef canonical_phi = ctx.result;
-			ctx.result = add_derived_value(
-				ZEND_MIR_REPRESENTATION_ZVAL,
-				ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID,
-				false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
-				ZEND_MIR_OWNERSHIP_STATE_OWNED,
-				ZEND_MIR_REFCOUNT_IMMORTAL);
+			ctx.result = long_phi
+				? add_derived_value(
+					ZEND_MIR_REPRESENTATION_I64,
+					ZEND_MIR_SCALAR_TYPE_I64, ZEND_MIR_ID_INVALID,
+					false, 0, ZEND_TPDE_MACHINE_VALUE_I64,
+					ZEND_MIR_OWNERSHIP_STATE_OWNED,
+					ZEND_MIR_REFCOUNT_IMMORTAL)
+				: add_derived_value(
+					ZEND_MIR_REPRESENTATION_ZVAL,
+					ZEND_MIR_SCALAR_TYPE_NONE, ZEND_MIR_ID_INVALID,
+					false, 0, ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL,
+					ZEND_MIR_OWNERSHIP_STATE_OWNED,
+					ZEND_MIR_REFCOUNT_IMMORTAL);
 			active_value_overrides()[
 				static_cast<uint32_t>(canonical_phi)
 					- MIR_VALUE_BASE] = ctx.result;
@@ -7999,7 +8025,8 @@ void ZendIRAdaptor::Builder::lower_phi(InstContext &ctx) {
 						predecessor_begin + n]];
 				deferred_typed_phi_inputs.push_back({
 					static_cast<uint32_t>(phi_inputs_.size()),
-					zend_tpde_operand_at(plan_, &ctx.instruction, n)});
+					zend_tpde_operand_at(plan_, &ctx.instruction, n),
+					long_phi});
 				phi_inputs_.push_back({INVALID_VALUE_REF,
 					IRBlockRef{predecessor_index}});
 				++input_slice.count;
@@ -10502,11 +10529,22 @@ void ZendIRAdaptor::Builder::prune_unused_argument_loads() {
 }
 
 void ZendIRAdaptor::Builder::resolve_deferred_typed_phi_inputs() {
-	for (const auto &[input, value_id] : deferred_typed_phi_inputs) {
-		const IRValueRef value = value_ref(value_id);
+	for (const auto &[input, value_id, long_phi] : deferred_typed_phi_inputs) {
+		IRValueRef value = value_ref(value_id);
+		/* A long constant, such as $i = 0, is materialized on its
+		 * edge. */
+		const int32_t value_index = zend_tpde_value_index(plan_, value_id);
+		if (long_phi && value != INVALID_VALUE_REF && value_index >= 0
+				&& !machine_value_has_register_definition(value)) {
+			value = resolve_materializable_scalar(
+				static_cast<uint32_t>(value_index),
+				static_cast<uint32_t>(phi_inputs_[input].block),
+				UINT32_MAX, 0);
+		}
 		if (value == INVALID_VALUE_REF
 				|| machine_kind(value)
-					!= ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
+					!= (long_phi ? ZEND_TPDE_MACHINE_VALUE_I64
+						: ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL)
 				|| !machine_value_has_register_definition(value)) {
 			valid_ = false;
 			continue;

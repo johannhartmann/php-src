@@ -1331,7 +1331,12 @@ struct ZendCompilerCommon : ::tpde::CompilerBase<Adaptor, Derived, Config> {
 				&& this->ir().machine_value_is_register_authoritative(value))
 			|| (this->adaptor->val_is_phi(value)
 				&& kind == ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-				&& this->ir().machine_value_is_register_authoritative(value));
+				&& this->ir().machine_value_is_register_authoritative(value))
+			/* A typed body's loop counters and accumulators. */
+			|| (this->ir().typed_body()
+				&& this->adaptor->val_is_phi(value)
+				&& (kind == ZEND_TPDE_MACHINE_VALUE_I64
+					|| kind == ZEND_TPDE_MACHINE_VALUE_F64));
 	}
 	ValueParts val_parts(IRValueRef value) const {
 		const zend_tpde_machine_value_kind kind =
