@@ -8369,6 +8369,14 @@ void ZendIRAdaptor::Builder::append_data_operands(InstContext &ctx) {
 	for (uint32_t n = 0; n < ctx.data_operand_count; ++n) {
 		IRValueRef operand = value_ref(zend_tpde_operand_at(
 			plan_, &ctx.instruction, n));
+		/* A machine copy of a zval reads the input lower_boxed_copy()
+		 * chose, such as the register result selected for a PHI that
+		 * comes later in plan order (a Pi copy in a loop body). */
+		if (n == 0 && ctx.record.opcode == ZEND_MIR_OPCODE_COPY
+				&& ctx.copy_input != INVALID_VALUE_REF
+				&& entry_register_definitions[ctx.i] != 0) {
+			operand = ctx.copy_input;
+		}
 		const uint32_t transport_index =
 			ctx.instruction.operand_offset + n;
 		const zend_tpde_operand_transport *transport =
