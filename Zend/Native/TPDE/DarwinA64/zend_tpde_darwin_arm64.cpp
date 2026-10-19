@@ -14470,7 +14470,20 @@ bool ZendCompilerA64::compile_inst_impl(
 	InstContext context{instruction, remaining_instructions, node};
 	const ContextScope<InstContext> context_scope{
 		inst_context_, &context};
-	if (!emit_materializations(instruction)) {
+	if (node.synthetic) {
+		/* A synthetic node, such as the register branch that replaces a
+		 * value branch's helper, observes no frame: the materializations
+		 * of the operation it replaces only end their uses here. */
+		if (node.materialization_operand_index != UINT32_MAX) {
+			for (uint32_t index = 0; index < node.materialization_count
+					&& node.materialization_operand_index + index
+						< node.liveness_operands.size(); ++index) {
+				auto consumed = val_ref(node.liveness_operands[
+					node.materialization_operand_index + index]);
+				(void) consumed;
+			}
+		}
+	} else if (!emit_materializations(instruction)) {
 		return false;
 	}
 	if (node.kind != Adaptor::InstKind::GeneratorResume

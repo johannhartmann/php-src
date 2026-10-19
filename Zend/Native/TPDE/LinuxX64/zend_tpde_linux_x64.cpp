@@ -26941,6 +26941,11 @@ bool ZendCompilerX64::compile_inst_impl(
 		/* The guard, this block's only predecessor, stored the same
 		 * materializations: only their uses end here. */
 		consume_materializations(instruction);
+	} else if (node.synthetic) {
+		/* A synthetic node, such as the register branch that replaces a
+		 * value branch's helper, observes no frame: the materializations
+		 * of the operation it replaces only end their uses here. */
+		consume_materializations(instruction);
 	} else if (!emit_materializations(instruction)) {
 		return false;
 	}

@@ -2200,6 +2200,7 @@ private:
 	IRValueRef resolve_copy_input(
 			zend_mir_value_id value_id, uint32_t use_block,
 			uint32_t use_instruction);
+	bool later_scalar_copy_definition(uint32_t value_index, uint32_t depth);
 	IRValueRef phi_edge_value_ref(
 			zend_mir_value_id value_id, uint32_t predecessor_block);
 	void emit_generator_resume(uint32_t block, uint32_t source_position,
@@ -4669,11 +4670,55 @@ IRValueRef ZendIRAdaptor::Builder::resolve_copy_input(
 	const IRValueRef resolved = resolve_materializable_scalar(
 		static_cast<uint32_t>(value_index), use_block,
 		use_instruction, 0);
+	const IRValueRef source = value_ref(value_id);
 	if (resolved == INVALID_VALUE_REF
-			&& entry_register_definition(value_ref(value_id))) {
-		return value_ref(value_id);
+			&& (entry_register_definition(source)
+				|| later_scalar_copy_definition(
+					static_cast<uint32_t>(value_index), 0))) {
+		return source;
 	}
 	return resolved;
+}
+
+/*
+ * A scalar defined later in instruction order than a copy that reads it: a
+ * Pi copy in a loop an unoptimized leading JMP lays out first reads the
+ * boxed COPY of a scalar operation's result, which the plan refined to the
+ * scalar (zend_tpde_refine_boxed_scalar_copies()) and which lowers as a
+ * machine copy of that result once the adaptor reaches it.
+ */
+bool ZendIRAdaptor::Builder::later_scalar_copy_definition(
+		uint32_t value_index, uint32_t depth) {
+	const zend_tpde_value &value = plan_->values[value_index];
+	const int32_t definition = plan_->value_definition_instructions == nullptr
+		? -1 : plan_->value_definition_instructions[value_index];
+	if (depth > 8 || definition < 0
+			|| static_cast<uint32_t>(definition) >= plan_->instruction_count
+			|| !value.register_authoritative
+			|| value.representation == ZEND_MIR_REPRESENTATION_ZVAL
+			|| !zend_mir_scalar_type_is_exact(value.exact_type)
+			|| value.exact_type == ZEND_MIR_SCALAR_TYPE_NULL) {
+		return false;
+	}
+	const zend_tpde_instruction &instruction =
+		plan_->instructions[static_cast<uint32_t>(definition)];
+	const zend_mir_instruction_record record =
+		instruction_record_at(static_cast<uint32_t>(definition));
+	if (record.opcode >= ZEND_MIR_OPCODE_I64_ADD_NO_OVERFLOW
+			&& record.opcode < ZEND_MIR_OPCODE_SCALAR_DROP) {
+		return !instruction.fused_into_branch;
+	}
+	if (record.opcode != ZEND_MIR_OPCODE_COPY
+			|| instruction.operand_count != 1) {
+		return false;
+	}
+	const int32_t input = zend_tpde_value_index(
+		plan_, zend_tpde_operand_at(plan_, &instruction, 0));
+	return input >= 0 && static_cast<uint32_t>(input) != value_index
+		&& plan_->values[input].representation == value.representation
+		&& (entry_register_definition(value_ref(plan_->values[input].id))
+			|| later_scalar_copy_definition(
+				static_cast<uint32_t>(input), depth + 1));
 }
 
 IRValueRef ZendIRAdaptor::Builder::phi_edge_value_ref(
@@ -6610,12 +6655,21 @@ bool ZendIRAdaptor::Builder::lower_boxed_copy(InstContext &ctx) {
 			&& ctx.record.representation
 				== ZEND_MIR_REPRESENTATION_ZVAL) {
 		uint64_t copy_constant_bits;
+		const int32_t copy_input_index =
+			ctx.copy_input == INVALID_VALUE_REF
+				|| !is_mir_value(static_cast<uint32_t>(ctx.copy_input))
+			? -1
+			: static_cast<int32_t>(
+				static_cast<uint32_t>(ctx.copy_input) - MIR_VALUE_BASE);
 		if (ctx.machine_result
 				&& ctx.copy_input != INVALID_VALUE_REF
 					&& ((machine_value_is_register_authoritative(
 							ctx.copy_input)
 						&& machine_value_has_register_definition(
 							ctx.copy_input))
+						|| (copy_input_index >= 0
+							&& later_scalar_copy_definition(
+								static_cast<uint32_t>(copy_input_index), 0))
 						|| entry_argument_has_register_definition(
 							ctx.copy_input)
 						|| entry_register_definition(ctx.copy_input)
