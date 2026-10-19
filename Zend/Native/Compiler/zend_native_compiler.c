@@ -541,6 +541,9 @@ static zend_native_compiler *zend_native_compiler_request_companion(
 	config.frame_probe = compiler->frame_probe;
 	config.frame_probe_context = compiler->frame_probe_context;
 	config.source_probe = compiler->source_probe;
+	/* Indexing all borrowed declarations would make every dynamic include
+	 * of the request O(all declarations), as for request generations. */
+	config.lazy_source_index = true;
 	config.borrows_request_tables = true;
 	session->request_compiler =
 		zend_native_compiler_create(&config, diagnostic);
