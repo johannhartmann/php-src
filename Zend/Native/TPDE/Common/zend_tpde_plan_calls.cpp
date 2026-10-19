@@ -2104,6 +2104,36 @@ static bool plan_direct_internal_call(plan_builder &builder, uint32_t i,
 }
 
 /*
+ * INIT_STATIC_METHOD_CALL of a static internal method under the literal
+ * name of the class that declares it (Fiber::suspend(), Closure::bind()):
+ * internal classes are never redeclared, so the called scope is the
+ * declaring class the binding cell records.
+ */
+static bool internal_static_scope_fixed(const plan_builder &builder,
+	const zend_mir_call_site_ref &site, const zend_op *init) {
+	const zend_tpde_plan *const plan = builder.plan;
+	if (init->op1_type != IS_CONST) {
+		return false;
+	}
+	const int32_t binding_index = id_index_find(
+		plan->internal_binding_index,
+		plan->internal_binding_index_capacity, site.target_id);
+	if (binding_index < 0) {
+		return false;
+	}
+	const zend_native_internal_call_cell *cell =
+		builder.internal_bindings[binding_index].call_cell;
+	const zend_function *function = cell->function;
+	const zval *name = RT_CONSTANT(init, init->op1);
+	return cell->receiver_kind == ZEND_NATIVE_INTERNAL_RECEIVER_CALLED_SCOPE
+		&& function->common.scope != nullptr
+		&& (function->common.fn_flags & ZEND_ACC_STATIC) != 0
+		&& cell->called_scope == function->common.scope
+		&& Z_TYPE_P(name) == IS_STRING
+		&& zend_string_equals_ci(Z_STR_P(name), function->common.scope->name);
+}
+
+/*
  * A direct user or internal call: its call site, whether it keeps its
  * source INIT/SEND/DO fragments, and its descriptor.
  */
@@ -2187,13 +2217,16 @@ bool plan_call_site(plan_builder &builder, uint32_t i) {
 			site.source_init_opline_index].opcode == ZEND_NEW;
 	/* The binding cell records the declaring scope, but
 	 * INIT_STATIC_METHOD_CALL may name a derived called scope: keep
-	 * the source INIT for late static binding. */
+	 * the source INIT for late static binding unless the call names the
+	 * declaring class. */
 	const bool internal_static_method_call =
 		record.opcode == ZEND_MIR_OPCODE_CALL_DIRECT_INTERNAL
 		&& site.source_init_opline_index < source_op_array->last
 		&& source_op_array->opcodes[
 			site.source_init_opline_index].opcode
-			== ZEND_INIT_STATIC_METHOD_CALL;
+			== ZEND_INIT_STATIC_METHOD_CALL
+		&& !internal_static_scope_fixed(builder, site,
+			&source_op_array->opcodes[site.source_init_opline_index]);
 	/* An internal handler may validate before its parameter parser
 	 * reports too few arguments, so an under-arity call keeps its
 	 * INIT/SEND/DO and reaches the handler with the frame state of

@@ -10645,17 +10645,29 @@ zend_execute_data *zend_native_call_reserve_dynamic_frame(
 	return call;
 }
 
-static zend_native_entry_cell zend_native_call_fragment_seed(
-	zend_function *function)
+/* A ready entry cell in *seed for an internal target, built in place by
+ * the fragments that read it. */
+static zend_native_entry_cell *zend_native_call_fragment_seed(
+	zend_native_entry_cell *seed, zend_function *function)
 {
-	zend_native_entry_cell cell;
-
-	memset(&cell, 0, sizeof(cell));
-	cell.state = ZEND_NATIVE_ENTRY_READY;
-	cell.function = function != NULL
+	memset(seed, 0, sizeof(*seed));
+	seed->state = ZEND_NATIVE_ENTRY_READY;
+	seed->function = function != NULL
 		? function : (zend_function *) &zend_pass_function;
-	cell.code = (const zend_native_code *) (uintptr_t) 1;
-	return cell;
+	seed->code = (const zend_native_code *) (uintptr_t) 1;
+	return seed;
+}
+
+/* The fragment's entry cell: the user target's, or a seed. */
+static zend_always_inline zend_native_entry_cell *
+zend_native_call_fragment_cell(
+	const zend_native_entry_cell *entry_cell,
+	const zend_native_internal_call_cell *internal_cell,
+	zend_native_entry_cell *seed)
+{
+	return entry_cell != NULL
+		? (zend_native_entry_cell *) entry_cell
+		: zend_native_call_fragment_seed(seed, internal_cell->function);
 }
 
 static zend_native_status zend_native_call_fragment_cleanup(
@@ -10698,13 +10710,9 @@ zend_native_direct_call_result zend_native_call_fragment(
 			|| (entry_cell == NULL) == (internal_cell == NULL)) {
 		return result;
 	}
-	if (entry_cell != NULL) {
-		cell = (zend_native_entry_cell *) entry_cell;
-	} else {
-		seed = zend_native_call_fragment_seed(internal_cell->function);
-		cell = &seed;
-	}
 	if (source_position == descriptor->init_source_position) {
+		cell = zend_native_call_fragment_cell(
+			entry_cell, internal_cell, &seed);
 		zend_native_call_begin(caller, cell, descriptor);
 		if (EG(exception) != NULL) {
 			result.status = zend_native_call_fragment_cleanup(caller, cell);
@@ -10723,6 +10731,8 @@ zend_native_direct_call_result zend_native_call_fragment(
 				zend_throw_error(NULL,
 					"Invalid native call-fragment argument");
 			}
+			cell = zend_native_call_fragment_cell(
+				entry_cell, internal_cell, &seed);
 			result.status = zend_native_call_fragment_cleanup(caller, cell);
 			/* The cleanup retired this call frame: resume Zend's
 			 * unfinished-call walk at its INIT, since from the failing SEND
@@ -10742,6 +10752,7 @@ zend_native_direct_call_result zend_native_call_fragment(
 	if (source_position != descriptor->do_source_position) {
 		return result;
 	}
+	cell = zend_native_call_fragment_cell(entry_cell, internal_cell, &seed);
 	result.status = zend_native_call_invoke_finish_source(
 		caller, cell, descriptor);
 	if (result.status == ZEND_NATIVE_RETURNED
@@ -10920,8 +10931,7 @@ zend_native_status zend_native_call_fragment_explicit(
 {
 	zend_native_user_call_descriptor descriptor;
 	zend_native_direct_internal_call_argument argument;
-	zend_native_entry_cell seed =
-		zend_native_call_fragment_seed((zend_function *) &zend_pass_function);
+	zend_native_entry_cell seed;
 	bool init = false;
 	bool send = false;
 	bool check_func_arg = false;
@@ -10995,7 +11005,8 @@ zend_native_status zend_native_call_fragment_explicit(
 		descriptor.init_op1_payload = op1_payload;
 		descriptor.init_op2_payload = op2_payload;
 		descriptor.init_result_payload = result_payload;
-		zend_native_call_begin(caller, &seed, &descriptor);
+		zend_native_call_begin(caller,
+			zend_native_call_fragment_seed(&seed, (zend_function *) &zend_pass_function), &descriptor);
 		if (EG(exception) != NULL) {
 			return zend_native_call_fragment_cleanup(caller, &seed);
 		}
@@ -11023,7 +11034,8 @@ zend_native_status zend_native_call_fragment_explicit(
 		if (EG(exception) == NULL) {
 			zend_throw_error(NULL, "Invalid native SEND fragment");
 		}
-		return zend_native_call_fragment_cleanup(caller, &seed);
+		return zend_native_call_fragment_cleanup(caller,
+			zend_native_call_fragment_seed(&seed, (zend_function *) &zend_pass_function));
 	}
 	descriptor.do_source_position = source_position;
 	descriptor.do_opcode = source_opcode;
@@ -11031,8 +11043,8 @@ zend_native_status zend_native_call_fragment_explicit(
 	descriptor.do_extended_value = extended_value;
 	descriptor.do_op2 = descriptor.init_op2;
 	descriptor.do_result = descriptor.init_result;
-	return zend_native_call_invoke_finish_source(
-		caller, &seed, &descriptor);
+	return zend_native_call_invoke_finish_source(caller,
+		zend_native_call_fragment_seed(&seed, (zend_function *) &zend_pass_function), &descriptor);
 }
 
 /*
