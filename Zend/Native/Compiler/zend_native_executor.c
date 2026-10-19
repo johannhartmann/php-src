@@ -3512,6 +3512,51 @@ void zend_native_executor_execute_ex(zend_execute_data *execute_data)
 			return;
 		}
 	}
+	/*
+	 * zend_generator_resume() of a generator whose frame runs the code
+	 * that created it: the frame continues at once, as the general
+	 * activation would run it.
+	 */
+	if (EXPECTED((ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0
+			&& zend_native_executor_request_state.execution_depth != 0
+			&& zend_native_executor_request_state.active
+			&& !zend_native_executor_preload_capture_state.active
+			&& !ZEND_OBSERVER_ENABLED
+#ifdef HAVE_DTRACE
+			&& !zend_dtrace_enabled
+#endif
+			)) {
+		zend_generator *generator =
+			(zend_generator *) execute_data->return_value;
+		zend_native_entry_cell *cell = generator->native_entry_cell;
+		const zend_native_code *code;
+		zend_native_frame_entry_t entry;
+
+		if (cell != NULL
+				&& generator->native_entry_generation == cell->generation
+				&& cell->function == execute_data->func
+				&& cell->frame_probe == NULL
+				&& (code = zend_native_entry_cell_load(cell)) != NULL
+				&& (entry = zend_native_code_executable_entry(code))
+					!= NULL) {
+			zend_execute_data *previous = execute_data->prev_execute_data;
+			zend_native_status status;
+
+			zend_native_entry_cell_retain_active(cell);
+			EG(current_execute_data) = execute_data;
+			status = zend_native_execute_generator_resumed(
+				entry, execute_data, cell);
+			EG(current_execute_data) = previous;
+			zend_native_entry_cell_release_active(cell);
+			if (status == ZEND_NATIVE_BAILOUT) {
+				zend_bailout();
+			}
+			if (status == ZEND_NATIVE_EXCEPTION && EG(exception) == NULL) {
+				zend_throw_error(NULL, "Native userland execution failed");
+			}
+			return;
+		}
+	}
 	zend_native_executor_execute_ex_general(execute_data);
 }
 

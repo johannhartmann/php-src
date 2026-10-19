@@ -38,5 +38,12 @@ typedef struct _zend_native_execution_state {
 zend_native_status zend_native_execute_frame_entered(
 	zend_native_frame_entry_t entry, zend_execute_data *execute_data,
 	zend_native_entry_cell *cell);
+/*
+ * execute_ex's direct resume of a suspended generator with no observer or
+ * DTrace probe whose cell it retained, unwound the same way.
+ */
+zend_native_status zend_native_execute_generator_resumed(
+	zend_native_frame_entry_t entry, zend_execute_data *execute_data,
+	zend_native_entry_cell *cell);
 
 #endif /* ZEND_NATIVE_EXECUTE_H */

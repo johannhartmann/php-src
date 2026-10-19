@@ -900,6 +900,69 @@ zend_native_status zend_native_execute_frame_entered(
 	return status;
 }
 
+/*
+ * execute_ex's resume of a suspended generator with no observer or DTrace
+ * probe, whose cell it retained: the frame received its arguments before
+ * GENERATOR_CREATE copied it and zend_generator owns it, so the entry runs
+ * at once. A bailout record stands in for zend_try: when a bailout passes
+ * the frame, it abandons the frame's direct calls as
+ * zend_native_execute_frame_state()'s catch does, restores the caller and
+ * releases the cell; the bailout then continues.
+ */
+typedef struct _zend_native_resumed_generator {
+	zend_native_bailout_record record;
+	zend_execute_data *execute_data;
+	zend_execute_data *previous;
+	zend_native_entry_cell *cell;
+} zend_native_resumed_generator;
+
+static void zend_native_execute_generator_resumed_unwind(
+	zend_native_bailout_record *record)
+{
+	zend_native_resumed_generator *frame =
+		(zend_native_resumed_generator *) record;
+
+	zend_native_call_direct_abandon(frame->execute_data);
+	EG(current_execute_data) = frame->previous;
+	zend_native_entry_cell_release_active(frame->cell);
+}
+
+zend_native_status zend_native_execute_generator_resumed(
+	zend_native_frame_entry_t entry, zend_execute_data *execute_data,
+	zend_native_entry_cell *cell)
+{
+	zend_native_resumed_generator frame;
+	zend_native_execution_context *context =
+		(zend_native_execution_context *)
+			zend_native_execution_context_shared();
+	zend_native_status status;
+#if ZEND_DEBUG
+	/* Generated code only reads its context. */
+	zend_native_execution_context shared_before;
+
+	memcpy(&shared_before, context, sizeof(shared_before));
+#endif
+
+	ZEND_ASSERT((ZEND_CALL_INFO(execute_data) & ZEND_CALL_GENERATOR) != 0);
+	frame.execute_data = execute_data;
+	frame.previous = execute_data->prev_execute_data;
+	frame.cell = cell;
+	ZEND_NATIVE_BAILOUT_RECORD_LINK(
+		&frame.record, zend_native_execute_generator_resumed_unwind);
+	status = entry(execute_data, context);
+	ZEND_NATIVE_BAILOUT_RECORD_UNLINK(&frame.record);
+	if (status == ZEND_NATIVE_EXCEPTION) {
+		zend_native_generator_uncaught_exception(execute_data);
+	} else if (status == ZEND_NATIVE_BAILOUT) {
+		zend_native_call_direct_abandon(execute_data);
+	}
+#if ZEND_DEBUG
+	ZEND_ASSERT(memcmp(&shared_before, context,
+		sizeof(shared_before)) == 0);
+#endif
+	return status;
+}
+
 zend_native_status zend_native_execute_observed_frame(
 	const zend_native_code *code,
 	zend_execute_data *execute_data,
