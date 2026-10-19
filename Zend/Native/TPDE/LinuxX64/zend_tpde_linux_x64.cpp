@@ -5789,6 +5789,73 @@ public:
 		ASM(SSE_CVTSI2SD64rr, fp_reg, value_reg);
 		label_place(converted);
 	}
+	/*
+	 * The magic number and shift of a signed division by a constant
+	 * divisor of at least 3 that is no power of two (Hacker's Delight,
+	 * figure 10-1, for 64 bits).
+	 */
+	static void division_magic(int64_t divisor, int64_t *multiplier,
+			uint32_t *shift) {
+		const uint64_t two63 = UINT64_C(1) << 63;
+		const uint64_t ad = static_cast<uint64_t>(divisor);
+		const uint64_t t = two63;
+		const uint64_t anc = t - 1 - t % ad;
+		uint32_t p = 63;
+		uint64_t q1 = two63 / anc;
+		uint64_t r1 = two63 - q1 * anc;
+		uint64_t q2 = two63 / ad;
+		uint64_t r2 = two63 - q2 * ad;
+		uint64_t delta;
+		ZEND_ASSERT(divisor >= 3 && (divisor & (divisor - 1)) != 0);
+		do {
+			p++;
+			q1 *= 2;
+			r1 *= 2;
+			if (r1 >= anc) {
+				q1++;
+				r1 -= anc;
+			}
+			q2 *= 2;
+			r2 *= 2;
+			if (r2 >= ad) {
+				q2++;
+				r2 -= ad;
+			}
+			delta = ad - r2;
+		} while (q1 < delta || (q1 == delta && r1 == 0));
+		*multiplier = static_cast<int64_t>(q2 + 1);
+		*shift = p - 64;
+	}
+	/* The truncated quotient of value_reg (neither rax nor rdx) by such a
+	 * divisor into dx_reg, through ax_reg. */
+	void emit_constant_quotient(AsmReg value_reg, int64_t divisor,
+			AsmReg ax_reg, AsmReg dx_reg) {
+		int64_t multiplier;
+		uint32_t shift;
+		division_magic(divisor, &multiplier, &shift);
+		ASM(MOV64ri, ax_reg, multiplier);
+		ASM(IMUL64r, value_reg);
+		if (multiplier < 0) {
+			ASM(ADD64rr, dx_reg, value_reg);
+		}
+		if (shift != 0) {
+			ASM(SAR64ri, dx_reg, shift);
+		}
+		/* Round a negative quotient toward zero. */
+		ASM(MOV64rr, ax_reg, dx_reg);
+		ASM(SHR64ri, ax_reg, 63);
+		ASM(ADD64rr, dx_reg, ax_reg);
+	}
+	/* The quotient in dx_reg times the divisor, into ax_reg. */
+	void emit_constant_product(int64_t divisor, AsmReg ax_reg,
+			AsmReg dx_reg) {
+		if (divisor <= INT32_MAX) {
+			ASM(IMUL64rri, ax_reg, dx_reg, static_cast<int32_t>(divisor));
+		} else {
+			ASM(MOV64ri, ax_reg, divisor);
+			ASM(IMUL64rr, ax_reg, dx_reg);
+		}
+	}
 	/* ZEND_ADD, ZEND_SUB or else ZEND_MUL of two doubles, into left_fp. */
 	void emit_double_arith(uint32_t opcode, AsmReg left_fp, AsmReg right_fp) {
 		switch (opcode) {
@@ -17376,14 +17443,43 @@ int ZendCompilerX64::general_numeric_binary(
 		tpde::x64::PlatformConfig::FP_BANK);
 	auto right_fp = right_double.alloc(
 		tpde::x64::PlatformConfig::FP_BANK);
+	/* A long literal divisor other than 0 and -1 is an immediate that
+	 * needs neither check; a power of two divides by shifts. */
+	int64_t divisor = 0;
+	if ((nb.opcode == ZEND_DIV || nb.opcode == ZEND_MOD)
+			&& !nb.right.reg && nb.right.literal) {
+		const zend_tpde_plan *plan = ir().plan();
+		const uint32_t index =
+			static_cast<uint32_t>(nb.right.offset) / sizeof(zval);
+		if (plan->source_literals != nullptr
+				&& index < plan->source_literal_count
+				&& Z_TYPE(plan->source_literals[index]) == IS_LONG
+				&& Z_LVAL(plan->source_literals[index]) != 0
+				&& Z_LVAL(plan->source_literals[index]) != -1) {
+			divisor = Z_LVAL(plan->source_literals[index]);
+		}
+	}
+	/* Its mask is a sign-extended 32-bit immediate. */
+	const bool power_divisor = divisor > 0
+		&& divisor <= (int64_t{1} << 31) && (divisor & (divisor - 1)) == 0;
+	const bool magic_divisor = divisor >= 3 && (divisor & (divisor - 1)) != 0;
+	const uint32_t divisor_shift = power_divisor
+		? static_cast<uint32_t>(__builtin_ctzll(
+			static_cast<uint64_t>(divisor)))
+		: 0;
 	AsmReg literals_reg = frame_reg;
-	if (nb.left.literal || nb.right.literal) {
+	if (nb.left.literal || (nb.right.literal && divisor == 0)) {
 		literals_reg = literals.alloc_gp();
 		emit_literal_base(literals_reg, frame_reg);
 	}
 	auto load = [&](const FramedOperand &operand, AsmReg type_reg,
 			AsmReg value_reg, uint8_t known,
 			zend_mir_storage_id storage) {
+		if (&operand == &nb.right && divisor != 0) {
+			ASM(MOV64ri, value_reg, divisor);
+			ASM(MOV32ri, type_reg, IS_LONG);
+			return;
+		}
 		if (operand.reg) {
 			const IRValueRef source = node.operands[operand.index];
 			if (ir().machine_kind(source)
@@ -17472,10 +17568,36 @@ int ZendCompilerX64::general_numeric_binary(
 			case ZEND_DIV:
 				/* An exact quotient stays a long; otherwise divide both
 				 * operands in double precision below. */
-				ASM(TEST64rr, right_reg, right_reg);
-				generate_raw_jump(Jump::je, slow);
-				ASM(CMP64ri, right_reg, -1);
-				generate_raw_jump(Jump::je, slow);
+				if (power_divisor) {
+					/* Exact when the low bits are clear; the arithmetic
+					 * shift of a multiple is its quotient. */
+					if (divisor_shift != 0) {
+						ASM(TEST64ri, left_reg,
+							static_cast<int32_t>(divisor - 1));
+						generate_raw_jump(Jump::jne, mixed);
+						ASM(SAR64ri, left_reg, divisor_shift);
+					}
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				}
+				if (magic_divisor) {
+					/* Exact when the quotient times the divisor gives
+					 * the dividend back. */
+					emit_constant_quotient(left_reg, divisor, ax_reg,
+						dx_reg);
+					emit_constant_product(divisor, ax_reg, dx_reg);
+					ASM(CMP64rr, ax_reg, left_reg);
+					generate_raw_jump(Jump::jne, mixed);
+					ASM(MOV64rr, left_reg, dx_reg);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				}
+				if (divisor == 0) {
+					ASM(TEST64rr, right_reg, right_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(CMP64ri, right_reg, -1);
+					generate_raw_jump(Jump::je, slow);
+				}
 				ASM(MOV64rr, ax_reg, left_reg);
 				ASM(CQO);
 				ASM(IDIV64r, right_reg);
@@ -17485,10 +17607,37 @@ int ZendCompilerX64::general_numeric_binary(
 				ASM(MOV32ri, result_type_reg, IS_LONG);
 				break;
 			case ZEND_MOD:
-				ASM(TEST64rr, right_reg, right_reg);
-				generate_raw_jump(Jump::je, slow);
-				ASM(CMP64ri, right_reg, -1);
-				generate_raw_jump(Jump::je, slow);
+				if (power_divisor) {
+					/* The remainder takes the dividend's sign: bias a
+					 * negative dividend by divisor - 1, mask, unbias. */
+					if (divisor_shift == 0) {
+						ASM(XOR32rr, left_reg, left_reg);
+					} else {
+						ASM(MOV64rr, ax_reg, left_reg);
+						ASM(SAR64ri, ax_reg, 63);
+						ASM(SHR64ri, ax_reg, 64 - divisor_shift);
+						ASM(ADD64rr, left_reg, ax_reg);
+						ASM(AND64ri, left_reg,
+							static_cast<int32_t>(divisor - 1));
+						ASM(SUB64rr, left_reg, ax_reg);
+					}
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				}
+				if (magic_divisor) {
+					emit_constant_quotient(left_reg, divisor, ax_reg,
+						dx_reg);
+					emit_constant_product(divisor, ax_reg, dx_reg);
+					ASM(SUB64rr, left_reg, ax_reg);
+					ASM(MOV32ri, result_type_reg, IS_LONG);
+					break;
+				}
+				if (divisor == 0) {
+					ASM(TEST64rr, right_reg, right_reg);
+					generate_raw_jump(Jump::je, slow);
+					ASM(CMP64ri, right_reg, -1);
+					generate_raw_jump(Jump::je, slow);
+				}
 				ASM(MOV64rr, ax_reg, left_reg);
 				ASM(CQO);
 				ASM(IDIV64r, right_reg);
@@ -27610,6 +27759,32 @@ bool ZendCompilerX64::compile_scalar_operation(InstContext &ctx) {
 			return true;
 		}
 		case ZEND_MIR_OPCODE_I64_MOD_NONZERO: {
+			/* A constant divisor of at least 3 that is no power of two
+			 * multiplies by its magic number instead of dividing. */
+			uint64_t constant_bits = 0;
+			if (node.operands.size() == 2
+					&& ir().constant(node.operands[1], &constant_bits)
+					&& static_cast<int64_t>(constant_bits) >= 3
+					&& (constant_bits & (constant_bits - 1)) != 0) {
+				const int64_t constant =
+					static_cast<int64_t>(constant_bits);
+				ScratchReg rax{this};
+				ScratchReg rdx{this};
+				ScratchReg dividend{this};
+				auto ax = rax.alloc_specific(tpde::x64::AsmReg::AX);
+				auto dx = rdx.alloc_specific(tpde::x64::AsmReg::DX);
+				auto value_reg = dividend.alloc_gp();
+				{
+					auto [left_ref, left] = val_ref_single(node.operands[0]);
+					mov(value_reg, left.load_to_reg(), 8);
+				}
+				emit_constant_quotient(value_reg, constant, ax, dx);
+				emit_constant_product(constant, ax, dx);
+				ASM(SUB64rr, value_reg, ax);
+				auto [result_ref, result] = result_ref_single(node.result);
+				result.set_value(std::move(dividend));
+				return true;
+			}
 			ScratchReg rax{this};
 			ScratchReg rdx{this};
 			ScratchReg divisor{this};
