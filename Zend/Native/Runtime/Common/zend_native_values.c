@@ -3185,6 +3185,50 @@ static zend_always_inline zend_native_status zend_native_value_concat_string_val
  * operation, releasing temporary operands. Returns false, with nothing
  * changed, when an operand is no string.
  */
+/*
+ * A string and a long, dereferenced: concat_function() converts the long
+ * as zend_long_to_str() does, which cannot fail, into a string of its
+ * own; write its digits straight into the one result string instead.
+ */
+static zend_never_inline zend_native_status zend_native_value_concat_long(
+	zval *fast_left, zval *left_value, bool left_tmp,
+	zval *fast_right, zval *right_value, bool right_tmp,
+	zval *fast_result)
+{
+	char buffer[32];
+	char *end = buffer + sizeof(buffer) - 1;
+	const bool long_right = Z_TYPE_P(right_value) == IS_LONG;
+	zend_string *string = Z_STR_P(long_right ? left_value : right_value);
+	const char *digits = zend_print_long_to_buf(end,
+		Z_LVAL_P(long_right ? right_value : left_value));
+	const size_t digit_length = (size_t) (end - digits);
+	const size_t string_length = ZSTR_LEN(string);
+	zend_string *result =
+		zend_string_alloc(string_length + digit_length, 0);
+
+	if (long_right) {
+		memcpy(ZSTR_VAL(result), ZSTR_VAL(string), string_length);
+		memcpy(ZSTR_VAL(result) + string_length, digits, digit_length);
+	} else {
+		memcpy(ZSTR_VAL(result), digits, digit_length);
+		memcpy(ZSTR_VAL(result) + digit_length, ZSTR_VAL(string),
+			string_length);
+	}
+	ZSTR_VAL(result)[string_length + digit_length] = '\0';
+	/* Digits are valid UTF-8. */
+	GC_ADD_FLAGS(result, ZSTR_GET_COPYABLE_CONCAT_PROPERTIES(string));
+	ZVAL_NEW_STR(fast_result, result);
+	if (left_tmp) {
+		zval_ptr_dtor_nogc(fast_left);
+		ZVAL_UNDEF(fast_left);
+	}
+	if (right_tmp) {
+		zval_ptr_dtor_nogc(fast_right);
+		ZVAL_UNDEF(fast_right);
+	}
+	return ZEND_NATIVE_RETURNED;
+}
+
 static zend_always_inline bool zend_native_value_concat_strings(
 	zend_execute_data *execute_data,
 	zval *fast_left, bool left_tmp, zval *fast_right, bool right_tmp,
@@ -3202,6 +3246,17 @@ static zend_always_inline bool zend_native_value_concat_strings(
 	}
 	if (Z_TYPE_P(left_value) != IS_STRING
 			|| Z_TYPE_P(right_value) != IS_STRING) {
+		if ((Z_TYPE_P(left_value) == IS_STRING
+					&& Z_TYPE_P(right_value) == IS_LONG
+					&& ZSTR_LEN(Z_STR_P(left_value)) < ZSTR_MAX_LEN - 32)
+				|| (Z_TYPE_P(left_value) == IS_LONG
+					&& Z_TYPE_P(right_value) == IS_STRING
+					&& ZSTR_LEN(Z_STR_P(right_value))
+						< ZSTR_MAX_LEN - 32)) {
+			*out = zend_native_value_concat_long(fast_left, left_value,
+				left_tmp, fast_right, right_value, right_tmp, fast_result);
+			return true;
+		}
 		return false;
 	}
 	*out = zend_native_value_concat_string_values(execute_data,
