@@ -571,9 +571,12 @@ static zend_never_inline zend_native_status zend_native_execute_frame_state(
 		/*
 		 * RECV initialization and argument type verification are observable:
 		 * as in the VM, the fcall observer has begun even when a type error
-		 * or a default value keeps the machine entry from running.
+		 * or a default value keeps the machine entry from running. A
+		 * generator's frame received its arguments before
+		 * GENERATOR_CREATE copied it; a resume continues at its opline.
 		 */
-		if (zend_native_frame_prepare(execute_data) == FAILURE) {
+		if (!generator_frame
+				&& zend_native_frame_prepare(execute_data) == FAILURE) {
 			state->status = EG(exception) != NULL
 				? ZEND_NATIVE_EXCEPTION : ZEND_NATIVE_BAILOUT;
 		} else {
