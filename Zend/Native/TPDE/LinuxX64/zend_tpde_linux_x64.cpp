@@ -17806,93 +17806,115 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 	/* ASSIGN_OP is always guarded (see freeze_machine_control_flow()),
 	 * also in typed bodies. */
 	ZEND_ASSERT(node.kind == Adaptor::InstKind::GuardedFast);
+	/*
+	 * $x += $y and $x -= $y on a double, or a long and a double, compute
+	 * the double out of line like the VM's numeric fast paths, unless a
+	 * result needs an integer register.
+	 */
+	const bool number_path =
+		(layout.source_opcode == ZEND_ADD
+			|| layout.source_opcode == ZEND_SUB)
+		&& !layout.has_result
+		&& (!node.mutation_result
+			|| ir().machine_kind(node.result)
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL);
 	const auto guarded_successors = adaptor->guarded_successors_of(node);
 	auto slow = text_writer.label_create();
 	auto done = text_writer.label_create();
+	auto number = text_writer.label_create();
+	auto joined = text_writer.label_create();
+	const tpde::Label not_long = number_path ? number : slow;
 	auto [frame_ref, frame] =
 		val_ref_single(IRValueRef{Adaptor::FRAME_VALUE});
 	auto frame_scratch = frame_register(std::move(frame));
 	auto frame_reg = frame_scratch.cur_reg();
-	ScratchReg type{this};
+	ScratchReg left_type{this};
+	ScratchReg right_type{this};
 	ScratchReg left{this};
 	ScratchReg right{this};
 	ScratchReg decision{this};
-	auto type_reg = type.alloc_gp();
+	ScratchReg result_type{this};
+	auto left_type_reg = left_type.alloc_gp();
+	auto right_type_reg = right_type.alloc_gp();
 	auto left_reg = left.alloc_gp();
 	auto right_reg = right.alloc_gp();
 	decision.alloc_gp();
+	AsmReg result_type_reg{};
+	if (number_path) {
+		result_type_reg = result_type.alloc_gp();
+	}
 	/* A lazy mutation leaves its result in the register only when it
 	 * read the previous value from the register too: a value read
 	 * from the slot is the slot's, which the result must update. */
 	bool left_from_register = false;
+	/* Both operands are loaded before either is checked, so that the
+	 * number path finds them. */
+	bool left_long = false;
+	bool right_long = false;
 
-		if (node.assign_op_left_operand_index < node.operands.size()
-				&& ir().representation(
-					node.operands[node.assign_op_left_operand_index])
-					== ZEND_MIR_REPRESENTATION_I64
-				&& ir().exact_type(
-					node.operands[node.assign_op_left_operand_index])
-					== ZEND_MIR_SCALAR_TYPE_I64
-				&& ir().machine_kind(
-					node.operands[node.assign_op_left_operand_index])
-					== ZEND_TPDE_MACHINE_VALUE_I64) {
-			auto [left_ref, left_value] =
-				val_ref_single(
-					node.operands[node.assign_op_left_operand_index]);
-			ASM(MOV64rr, left_reg, left_value.load_to_reg());
-			left_from_register = true;
-		} else if (node.assign_op_left_operand_index < node.operands.size()
-				&& ir().machine_kind(
-					node.operands[node.assign_op_left_operand_index])
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			auto left_value = val_ref(
+	if (node.assign_op_left_operand_index < node.operands.size()
+			&& ir().representation(
+				node.operands[node.assign_op_left_operand_index])
+				== ZEND_MIR_REPRESENTATION_I64
+			&& ir().exact_type(
+				node.operands[node.assign_op_left_operand_index])
+				== ZEND_MIR_SCALAR_TYPE_I64
+			&& ir().machine_kind(
+				node.operands[node.assign_op_left_operand_index])
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+		auto [left_ref, left_value] =
+			val_ref_single(
 				node.operands[node.assign_op_left_operand_index]);
+		ASM(MOV64rr, left_reg, left_value.load_to_reg());
+		left_from_register = true;
+		left_long = true;
+	} else if (node.assign_op_left_operand_index < node.operands.size()
+			&& ir().machine_kind(
+				node.operands[node.assign_op_left_operand_index])
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		auto left_value = val_ref(
+			node.operands[node.assign_op_left_operand_index]);
 		auto payload = left_value.part(0);
 		auto type_info = left_value.part(1);
 		ASM(MOV64rr, left_reg, payload.load_to_reg());
-		ASM(CMP8ri, type_info.load_to_reg(), IS_LONG);
-		generate_raw_jump(Jump::jne, slow);
+		ASM(MOVZXr32r8, left_type_reg, type_info.load_to_reg());
 		left_from_register = true;
 	} else {
-		ASM(MOVZXr32m8, type_reg,
+		ASM(MOVZXr32m8, left_type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					layout.left_offset
 						+ offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, type_reg, IS_LONG);
-		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, left_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.left_offset)));
 	}
 
-		if (node.assign_op_right_operand_index < node.operands.size()
-				&& ir().representation(
-					node.operands[node.assign_op_right_operand_index])
-					== ZEND_MIR_REPRESENTATION_I64
-				&& ir().exact_type(
-					node.operands[node.assign_op_right_operand_index])
-					== ZEND_MIR_SCALAR_TYPE_I64
-				&& ir().machine_kind(
-					node.operands[node.assign_op_right_operand_index])
-					== ZEND_TPDE_MACHINE_VALUE_I64) {
-			auto [right_ref, right_value] =
-				val_ref_single(
-					node.operands[node.assign_op_right_operand_index]);
-			ASM(MOV64rr, right_reg, right_value.load_to_reg());
-		} else if (node.assign_op_right_operand_index < node.operands.size()
-				&& ir().machine_kind(
-					node.operands[node.assign_op_right_operand_index])
-					== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
-			auto right_value = val_ref(
+	if (node.assign_op_right_operand_index < node.operands.size()
+			&& ir().representation(
+				node.operands[node.assign_op_right_operand_index])
+				== ZEND_MIR_REPRESENTATION_I64
+			&& ir().exact_type(
+				node.operands[node.assign_op_right_operand_index])
+				== ZEND_MIR_SCALAR_TYPE_I64
+			&& ir().machine_kind(
+				node.operands[node.assign_op_right_operand_index])
+				== ZEND_TPDE_MACHINE_VALUE_I64) {
+		auto [right_ref, right_value] =
+			val_ref_single(
 				node.operands[node.assign_op_right_operand_index]);
+		ASM(MOV64rr, right_reg, right_value.load_to_reg());
+		right_long = true;
+	} else if (node.assign_op_right_operand_index < node.operands.size()
+			&& ir().machine_kind(
+				node.operands[node.assign_op_right_operand_index])
+				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL) {
+		auto right_value = val_ref(
+			node.operands[node.assign_op_right_operand_index]);
 		auto payload = right_value.part(0);
 		auto type_info = right_value.part(1);
-		auto payload_reg = payload.load_to_reg();
-		auto type_info_reg = type_info.load_to_reg();
-		ASM(MOV64rr, right_reg, payload_reg);
-		ASM(CMP8ri, type_info_reg, IS_LONG);
-		generate_raw_jump(Jump::jne, slow);
+		ASM(MOV64rr, right_reg, payload.load_to_reg());
+		ASM(MOVZXr32r8, right_type_reg, type_info.load_to_reg());
 	} else if (layout.right.literal) {
 		if (node.machine_reference_operand_index
 					>= node.operands.size()) {
@@ -17901,25 +17923,29 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 		auto [literal_ref, literal] = val_ref_single(
 			node.operands[node.machine_reference_operand_index]);
 		auto literal_reg = literal.load_to_reg();
-		ASM(MOVZXr32m8, type_reg,
+		ASM(MOVZXr32m8, right_type_reg,
 			FE_MEM(literal_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, type_reg, IS_LONG);
-		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, right_reg,
 			FE_MEM(literal_reg, 0, FE_NOREG, 0));
 	} else {
-		ASM(MOVZXr32m8, type_reg,
+		ASM(MOVZXr32m8, right_type_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(
 					layout.right.offset
 						+ offsetof(zval, u1.type_info))));
-		ASM(CMP32ri, type_reg, IS_LONG);
-		generate_raw_jump(Jump::jne, slow);
 		ASM(MOV64rm, right_reg,
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.right.offset)));
+	}
+	if (!left_long) {
+		ASM(CMP32ri, left_type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, not_long);
+	}
+	if (!right_long) {
+		ASM(CMP32ri, right_type_reg, IS_LONG);
+		generate_raw_jump(Jump::jne, not_long);
 	}
 
 	if (layout.has_result) {
@@ -17953,6 +17979,35 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 		default:
 			return false;
 	}
+	if (number_path) {
+		ScratchReg left_double{this};
+		ScratchReg right_double{this};
+		auto left_fp = left_double.alloc(
+			tpde::x64::PlatformConfig::FP_BANK);
+		auto right_fp = right_double.alloc(
+			tpde::x64::PlatformConfig::FP_BANK);
+		ASM(MOV32ri, result_type_reg, IS_LONG);
+		cold_begin();
+		label_place(number);
+		if (left_long) {
+			ASM(SSE_CVTSI2SD64rr, left_fp, left_reg);
+		} else {
+			emit_number_to_double(left_type_reg, left_reg, left_fp, slow,
+				true);
+		}
+		if (right_long) {
+			ASM(SSE_CVTSI2SD64rr, right_fp, right_reg);
+		} else {
+			emit_number_to_double(right_type_reg, right_reg, right_fp,
+				slow, true);
+		}
+		emit_double_arith(layout.source_opcode, left_fp, right_fp);
+		ASM(SSE_MOVQ_X2Grr, left_reg, left_fp);
+		ASM(MOV32ri, result_type_reg, IS_DOUBLE);
+		generate_raw_jump(Jump::jmp, joined);
+		cold_end();
+		label_place(joined);
+	}
 	if (node.mutation_result) {
 		if (ir().machine_kind(node.result)
 				== ZEND_TPDE_MACHINE_VALUE_I64) {
@@ -17974,7 +18029,11 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 					ASM(MOV64rr, value_reg, left_reg);
 				} else if (role
 						== ZEND_TPDE_MACHINE_PART_TYPE_INFO) {
-					ASM(MOV32ri, value_reg, IS_LONG);
+					if (number_path) {
+						ASM(MOV32rr, value_reg, result_type_reg);
+					} else {
+						ASM(MOV32ri, value_reg, IS_LONG);
+					}
 				} else {
 					return false;
 				}
@@ -17990,11 +18049,21 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 			FE_MEM(frame_reg, 0, FE_NOREG,
 				static_cast<int32_t>(layout.left_offset)),
 			left_reg);
-		ASM(MOV32mi,
-			FE_MEM(frame_reg, 0, FE_NOREG,
-				static_cast<int32_t>(
-					layout.left_offset + offsetof(zval, u1.type_info))),
-			IS_LONG);
+		if (number_path) {
+			ASM(MOV32mr,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.left_offset
+							+ offsetof(zval, u1.type_info))),
+				result_type_reg);
+		} else {
+			ASM(MOV32mi,
+				FE_MEM(frame_reg, 0, FE_NOREG,
+					static_cast<int32_t>(
+						layout.left_offset
+							+ offsetof(zval, u1.type_info))),
+				IS_LONG);
+		}
 	}
 	if (layout.has_result) {
 		auto [result_ref, result] =
@@ -18011,9 +18080,11 @@ bool ZendCompilerX64::long_assign_op(InstContext &ctx) {
 					+ offsetof(zval, u1.type_info))),
 			IS_UNDEF);
 	}
-	type.reset();
+	left_type.reset();
+	right_type.reset();
 	left.reset();
 	right.reset();
+	result_type.reset();
 	finish_guarded(slow, done, std::move(decision), frame_scratch,
 		guarded_successors);
 	return true;
