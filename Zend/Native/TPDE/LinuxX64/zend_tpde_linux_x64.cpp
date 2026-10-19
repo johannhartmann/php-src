@@ -19720,15 +19720,16 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 				mir.value_operation.result_storage_id)) {
 		/*
 		 * $a[$k] op= $v on an existing number of an owned packed array
-		 * updates the element inline like the VM's numeric fast paths.
-		 * Every other container, key, element or value keeps the
-		 * helper.
+		 * updates the element inline like the VM's numeric fast paths,
+		 * also when a write fetch's VAR addresses the array
+		 * ($a[$i][$k] op= $v). Every other container, key, element or
+		 * value keeps the helper.
 		 */
 		const zend_mir_executable_value_ref &operation =
 			mir.value_operation;
 		auto slot_offset = [&](const zend_mir_source_operand_ref &operand,
 				zend_mir_storage_id storage, bool allow_literal,
-				bool *literal, int32_t *out) {
+				bool *literal, int32_t *out, bool allow_var = false) {
 			uint64_t offset;
 			if (operand.kind == ZEND_MIR_SOURCE_OPERAND_LITERAL) {
 				if (!allow_literal) {
@@ -19740,7 +19741,9 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 						|| operand.kind == ZEND_MIR_SOURCE_OPERAND_SSA)
 					&& (operand.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
 						|| operand.slot_kind
-							== ZEND_MIR_SOURCE_SLOT_TMP)
+							== ZEND_MIR_SOURCE_SLOT_TMP
+						|| (allow_var && operand.slot_kind
+							== ZEND_MIR_SOURCE_SLOT_VAR))
 					&& zend_mir_id_is_valid(storage)) {
 				*literal = false;
 				offset = frame_slot_offset(storage);
@@ -19756,9 +19759,12 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 		bool container_literal = false, key_literal = false,
 			value_literal = false;
 		int32_t container_offset = 0, key_offset = 0, value_offset = 0;
-		if (operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+		const bool indirect_container =
+			operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_VAR;
+		if ((operation.op1.slot_kind == ZEND_MIR_SOURCE_SLOT_CV
+					|| indirect_container)
 				&& slot_offset(operation.op1, operation.op1_storage_id,
-					false, &container_literal, &container_offset)
+					false, &container_literal, &container_offset, true)
 				&& slot_offset(operation.op2, operation.op2_storage_id,
 					true, &key_literal, &key_offset)
 				&& slot_offset(operation.auxiliary,
@@ -19825,8 +19831,19 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 				}
 				/* Owned packed array, possibly behind a reference. */
 				auto container_ready = text_writer.label_create();
-				ASM(LEA64rm, element_reg,
-					FE_MEM(frame_reg, 0, FE_NOREG, container_offset));
+				if (indirect_container) {
+					/* The VAR addresses the array's zval, as
+					 * ZEND_FETCH_DIM_RW left it; the helper handles any
+					 * other VAR. */
+					ASM(CMP8mi, FE_MEM(frame_reg, 0, FE_NOREG,
+						container_offset + type_info), IS_INDIRECT);
+					generate_raw_jump(Jump::jne, slow);
+					ASM(MOV64rm, element_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG, container_offset));
+				} else {
+					ASM(LEA64rm, element_reg,
+						FE_MEM(frame_reg, 0, FE_NOREG, container_offset));
+				}
 				ASM(CMP8mi, FE_MEM(element_reg, 0, FE_NOREG, type_info),
 					IS_REFERENCE);
 				emit_cold_branch(Jump::je, container_ready, [&] {
@@ -20027,6 +20044,11 @@ bool ZendCompilerX64::compile_slow_path_call(InstContext &ctx) {
 					left_reg);
 				ASM(MOV32mr, FE_MEM(element_reg, 0, FE_NOREG, type_info),
 					right_type_reg);
+				if (indirect_container) {
+					/* The consumed VAR, as the helper leaves it. */
+					ASM(MOV32mi, FE_MEM(frame_reg, 0, FE_NOREG,
+						container_offset + type_info), IS_UNDEF);
+				}
 				generate_raw_jump(Jump::jmp, done);
 			}
 			/* The helper, out of the hot code. */
