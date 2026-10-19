@@ -585,6 +585,69 @@ static bool typed_body_direct_user_call(
 	return true;
 }
 
+/*
+ * In a typed body, the value is a number: what machine_plan_binding_is_number()
+ * proves, an exact long or double (a register value of the body), or a
+ * forwarding assignment or phi of such values.
+ */
+static bool typed_body_number_value(
+		const typed_body_signature_walk &walk,
+		int32_t value_index, int32_t producer, uint32_t depth) {
+	const zend_tpde_plan *plan = walk.plan;
+	if (depth > 8) {
+		return false;
+	}
+	zend_tpde_source_value_binding binding{};
+	binding.value_index = value_index;
+	binding.definition_instruction_index = producer;
+	if (machine_plan_binding_is_number(plan, walk.component_plans,
+			walk.component_count, binding)) {
+		return true;
+	}
+	if (value_index >= 0
+			&& static_cast<uint32_t>(value_index) < plan->value_count) {
+		const zend_tpde_value &value = plan->values[value_index];
+		if (value.exact_type == ZEND_MIR_SCALAR_TYPE_I64
+				|| value.exact_type == ZEND_MIR_SCALAR_TYPE_F64) {
+			return true;
+		}
+		if (producer < 0
+				&& plan->source_value_definition_instructions != nullptr) {
+			producer = plan->source_value_definition_instructions[
+				value_index];
+		}
+		if (producer < 0 && plan->value_definition_instructions != nullptr) {
+			producer = plan->value_definition_instructions[value_index];
+		}
+	}
+	if (producer < 0
+			|| static_cast<uint32_t>(producer) >= plan->instruction_count) {
+		return false;
+	}
+	const zend_tpde_instruction &instruction = plan->instructions[producer];
+	if (zend_tpde_typed_forward_assign(instruction)
+			&& instruction.value_operation.op1.kind
+				!= ZEND_MIR_SOURCE_OPERAND_LITERAL) {
+		return typed_body_number_value(walk,
+			instruction.source_op1_binding.value_index,
+			instruction.source_op1_binding.definition_instruction_index,
+			depth + 1);
+	}
+	if (instruction.record.opcode == ZEND_MIR_OPCODE_PHI) {
+		for (uint32_t operand = 0; operand < instruction.operand_count;
+				++operand) {
+			if (!typed_body_number_value(walk,
+					zend_tpde_value_index(plan,
+						zend_tpde_operand_at(plan, &instruction, operand)),
+					-1, depth + 1)) {
+				return false;
+			}
+		}
+		return instruction.operand_count != 0;
+	}
+	return false;
+}
+
 /* A return type check the typed body's return ABI proves. */
 static bool typed_body_verify_return_type(
 		const typed_body_signature_walk &walk,
@@ -622,8 +685,10 @@ static bool typed_body_verify_return_type(
 	}
 	/* A number returned as int or float is checked at the return. */
 	if (zend_tpde_machine_kind_is_number(plan->return_abi.machine_kind)
-			&& machine_plan_binding_is_number(plan, walk.component_plans,
-				walk.component_count, instruction.source_op1_binding)) {
+			&& typed_body_number_value(walk,
+				instruction.source_op1_binding.value_index,
+				instruction.source_op1_binding.definition_instruction_index,
+				0)) {
 		return true;
 	}
 	/* A boxed zval proves no declared type; keep the check. */
@@ -807,6 +872,19 @@ static bool typed_body_forward_assign(
 				static_cast<uint32_t>(producer)]
 			: zend_tpde_local_abi_type{};
 	}
+	/* A register long or double (`$n < 2 ? $n : ...` with $n received as
+	 * a long) forwards in its register. */
+	if (!source.valid && literal < 0 && binding.value_index >= 0
+			&& static_cast<uint32_t>(binding.value_index)
+				< plan->value_count) {
+		const zend_tpde_local_abi_type abi = machine_plan_value_abi(
+			plan, static_cast<uint32_t>(binding.value_index));
+		if (abi.valid
+				&& (abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_I64
+					|| abi.machine_kind == ZEND_TPDE_MACHINE_VALUE_F64)) {
+			source = abi;
+		}
+	}
 	if (!source.valid) {
 		return false;
 	}
@@ -929,8 +1007,10 @@ static bool typed_body_return(
 			&& current_return.valid
 			&& current_return.machine_kind
 				== ZEND_TPDE_MACHINE_VALUE_BOXED_ZVAL
-			&& machine_plan_binding_is_number(plan, walk.component_plans,
-				walk.component_count, instruction.source_op1_binding)) {
+			&& typed_body_number_value(walk,
+				instruction.source_op1_binding.value_index,
+				instruction.source_op1_binding.definition_instruction_index,
+				0)) {
 		*walk.may_fail = *walk.may_fail || plan->return_abi.machine_kind
 			== ZEND_TPDE_MACHINE_VALUE_I64;
 		current_return = plan->return_abi;

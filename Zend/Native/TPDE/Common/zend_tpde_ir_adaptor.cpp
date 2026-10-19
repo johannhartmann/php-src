@@ -2108,6 +2108,9 @@ private:
 			const zend_mir_source_operand_ref &source,
 			zend_mir_storage_id storage,
 			uint32_t definition_ssa_variable_id_plus_one);
+	IRValueRef typed_body_operand(
+		const zend_tpde_source_value_binding &binding,
+		const zend_mir_source_operand_ref &source);
 	void lower_typed_body_operation(
 			uint32_t i, const zend_tpde_instruction &instruction,
 			uint32_t block);
@@ -7677,48 +7680,51 @@ void ZendIRAdaptor::Builder::mark_selected_operation(InstContext &ctx) {
 	}
 }
 
+/* A typed body's register operand: the binding's value, or the source
+ * operand's, through the pi COPYs that carry it unchanged. */
+IRValueRef ZendIRAdaptor::Builder::typed_body_operand(
+		const zend_tpde_source_value_binding &binding,
+		const zend_mir_source_operand_ref &source) {
+	IRValueRef value = source_binding_value_ref(binding);
+	if (value == INVALID_VALUE_REF) {
+		value = source_operand_value_ref(source);
+	}
+	for (uint32_t depth = 0; value != INVALID_VALUE_REF
+			&& depth < plan_->value_count; ++depth) {
+		const uint32_t raw = static_cast<uint32_t>(value);
+		if (!is_mir_value(raw)) {
+			break;
+		}
+		const int32_t definition =
+			plan_->value_definition_instructions[
+				raw - MIR_VALUE_BASE];
+		if (definition < 0
+				|| instruction_record_at(
+					static_cast<uint32_t>(definition)).opcode
+					!= ZEND_MIR_OPCODE_COPY
+				|| plan_->instructions[definition]
+					.operand_count != 1) {
+			break;
+		}
+		const IRValueRef input = value_ref(zend_tpde_operand_at(
+			plan_, &plan_->instructions[definition], 0));
+		if (input == INVALID_VALUE_REF
+				|| representation(input)
+					!= representation(value)
+				|| machine_kind(input) != machine_kind(value)) {
+			break;
+		}
+		value = input;
+	}
+	return value;
+}
+
 void ZendIRAdaptor::Builder::lower_typed_body_operation(
 		uint32_t i, const zend_tpde_instruction &instruction, uint32_t block) {
-	auto operand = [&](const zend_tpde_source_value_binding &binding,
-			const zend_mir_source_operand_ref &source) {
-		IRValueRef value = source_binding_value_ref(binding);
-		if (value == INVALID_VALUE_REF) {
-			value = source_operand_value_ref(source);
-		}
-		/* A pi COPY carries its input unchanged. */
-		for (uint32_t depth = 0; value != INVALID_VALUE_REF
-				&& depth < plan_->value_count; ++depth) {
-			const uint32_t raw = static_cast<uint32_t>(value);
-			if (!is_mir_value(raw)) {
-				break;
-			}
-			const int32_t definition =
-				plan_->value_definition_instructions[
-					raw - MIR_VALUE_BASE];
-			if (definition < 0
-					|| instruction_record_at(
-						static_cast<uint32_t>(definition)).opcode
-						!= ZEND_MIR_OPCODE_COPY
-					|| plan_->instructions[definition]
-						.operand_count != 1) {
-				break;
-			}
-			const IRValueRef input = value_ref(zend_tpde_operand_at(
-				plan_, &plan_->instructions[definition], 0));
-			if (input == INVALID_VALUE_REF
-					|| representation(input)
-						!= representation(value)
-					|| machine_kind(input) != machine_kind(value)) {
-				break;
-			}
-			value = input;
-		}
-		return value;
-	};
-	const IRValueRef left = operand(
+	const IRValueRef left = typed_body_operand(
 		instruction.source_op1_binding,
 		instruction.value_operation.op1);
-	const IRValueRef right = operand(
+	const IRValueRef right = typed_body_operand(
 		instruction.source_op2_binding,
 		instruction.value_operation.op2);
 	const zend_tpde_machine_value_kind result_kind =
@@ -7778,8 +7784,9 @@ void ZendIRAdaptor::Builder::forward_typed_body_assign(
 				== ZEND_MIR_SOURCE_OPERAND_LITERAL
 			? source_operand_value_ref(
 				instruction.value_operation.op1)
-			: source_binding_value_ref(
-				instruction.source_op1_binding);
+			: typed_body_operand(
+				instruction.source_op1_binding,
+				instruction.value_operation.op1);
 	if (source == INVALID_VALUE_REF) {
 		valid_ = false;
 		return;
